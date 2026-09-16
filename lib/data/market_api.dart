@@ -223,6 +223,55 @@ class MarketService {
   }
 
   /// 股票 / ETF：交易所行情
+  /// 批量拉「行情指标」（指数 / ETF / 股票）的实时行情
+  ///
+  /// 走 push2 的批量接口 —— 和持仓行情同一个域名、同一种解析（UTF-8 JSON），
+  /// 是已经在这台设备上验证可用的通道。键是规范化后的代码（如 `sh510300`）。
+  Future<Map<String, Quote>> fetchIndexQuotes(List<String> codes) async {
+    final secidByCode = <String, String>{};
+    for (final raw in codes) {
+      final c = normalizeIndexCode(raw);
+      final m = RegExp(r'^(sh|sz|bj)(\d{6})$').firstMatch(c);
+      if (m == null) continue;
+      secidByCode[c] = (m.group(1) == 'sh' ? '1.' : '0.') + m.group(2)!;
+    }
+    if (secidByCode.isEmpty) return const {};
+
+    final url = 'https://push2.eastmoney.com/api/qt/ulist.np/get'
+        '?fltt=2&invt=2&ut=$_ut&fields=f2,f3,f12,f14,f18'
+        '&secids=${secidByCode.values.join(',')}';
+    final body = await _get(url);
+    final dynamic json = jsonDecode(body);
+    if (json is! Map) return const {};
+    final data = json['data'];
+    if (data is! Map) return const {};
+    final diff = data['diff'];
+    final items = diff is List
+        ? diff.whereType<Map>()
+        : (diff is Map ? [diff] : const <Map>[]);
+
+    final out = <String, Quote>{};
+    for (final it in items) {
+      final code6 = _str(it['f12']);
+      final price = _num(it['f2']);
+      if (code6.isEmpty || price <= 0) continue;
+      for (final e in secidByCode.entries) {
+        if (!e.value.endsWith('.$code6')) continue;
+        out[e.key] = Quote(
+          code: code6,
+          kind: AssetKind.etf,
+          name: _str(it['f14']),
+          price: price,
+          prevClose: _num(it['f18']),
+          changePct: _num(it['f3']),
+          priceType: 'price',
+          updatedAt: DateTime.now(),
+        );
+      }
+    }
+    return out;
+  }
+
   /// 按代码查一条行情，用来给「行情指标」查名字
   ///
   /// 支持指数与 ETF/股票：

@@ -197,7 +197,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       mainAxisSize: MainAxisSize.min,
       children: [
         Flexible(child: _accountSelector(context, state)),
-        if (q != null) ...[
+        ...[
           const SizedBox(width: 10),
           Flexible(
             // 账户名 + 指数一起挤在 400dp 宽的标题栏里，缩一点也不能压到右边图标上
@@ -211,12 +211,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                       style: TextStyle(
                           fontSize: 12, color: Theme.of(context).hintColor)),
                   const SizedBox(width: 5),
-                  Text(q.price.toStringAsFixed(2),
+                  Text(q == null ? '--' : q.price.toStringAsFixed(2),
                       style: const TextStyle(
                           fontSize: 14, fontWeight: FontWeight.w700)),
                   const SizedBox(width: 5),
                   Text(
-                    '${q.changePct >= 0 ? '+' : ''}${q.changePct.toStringAsFixed(2)}%',
+                    q == null
+                        ? '--'
+                        : '${q.changePct >= 0 ? '+' : ''}${q.changePct.toStringAsFixed(2)}%',
                     style: TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w700, color: color),
                   ),

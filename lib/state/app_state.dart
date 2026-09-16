@@ -885,111 +885,50 @@ class AppState extends ChangeNotifier {
   // 行情指标：拉取（新浪 + 东财双源，失败不清空）
   // ============================================================
 
+  /// 拉「行情指标」的实时行情（整段重写版：一条通道、失败留痕、绝不写坏缓存）
   Future<void> refreshIndexQuotes() async {
-    indexQuoteDiag = '取数中…';
+    final wanted = <String>{
+      MarketIndex.shanghaiCode,
+      for (final e in activeIndexEntries) e.code,
+    }.toList();
     try {
-      final entries = activeIndexEntries;
-      final wanted = <String>{
-        MarketIndex.shanghaiCode,
-        ...entries.map((e) => e.code),
-      }.toList();
-
-      var sinaGot = 0;
-      var pushGot = 0;
-      final qs = <IndexQuote>[];
-
-      // 指数这一路走新浪（历史上一直可用），ETF/股票也在这里试一试
-      final idxCodes = wanted;
-      if (idxCodes.isNotEmpty) {
-        try {
-          final got = await navSource.indexQuotes(idxCodes);
-          sinaGot = got.length;
-          qs.addAll(got);
-        } catch (_) {
-          // 新浪挂了还有东财
-        }
-      }
-
-      // 东财 push2 兜底并覆盖价格（ETF / 股票一定走这条）
-      {
-        final assets = [
-          for (final c in wanted)
-            Asset(
-              code: c.replaceFirst(RegExp(r'^[a-z]{2}'), ''),
-              name: _indexLabelOf(c),
-              kind: AssetKind.etf,
-              market: c.startsWith('sh')
-                  ? 'SH'
-                  : (c.startsWith('bj') ? 'BJ' : 'SZ'),
-            ),
-        ];
-        var got = <String, Quote>{};
-        try {
-          got = await market.fetchExchangeQuotes(assets);
-        } catch (_) {
-          // 东财挂了就只显示新浪那一路
-        }
-        for (final c in wanted) {
-          final q = got[c.replaceFirst(RegExp(r'^[a-z]{2}'), '')];
-          if (q == null) continue;
-          pushGot++;
-          qs.add(IndexQuote(
+      final got = await market.fetchIndexQuotes(wanted);
+      final prev = {for (final q in indexQuotes) q.code: q};
+      final out = <IndexQuote>[];
+      for (final c in wanted) {
+        final q = got[c];
+        if (q != null) {
+          out.add(IndexQuote(
             code: c,
-            name: _indexLabelOf(c),
+            name: c == MarketIndex.shanghaiCode ? '上证指数' : _indexLabelOf(c),
             price: q.price,
             change: 0,
             changePct: q.changePct,
             priceDigits: priceDigitsForKind(_kindOf(c)),
           ));
+          continue;
         }
+        final was = prev[c];
+        if (was != null) out.add(was); // 这一次没取到就沿用上一次的
       }
-
-      // 去重（同一个代码两个源都可能给）+ 缺失项沿用上一次的值：
-      // 一次拉取失败绝不能让状态栏的上证和整条跑马灯一起空掉
-      final byCode = <String, IndexQuote>{};
-      for (final q in qs) {
-        byCode[q.code] = q;
+      if (out.isNotEmpty) indexQuotes = out;
+      final now = DateTime.now();
+      indexQuoteDiag = '取到 ${got.length}/${wanted.length}'
+          '（${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}）';
+      if (got.isNotEmpty) {
+        await db.setSetting(
+          'indexQuotesCache',
+          jsonEncode([
+            for (final q in indexQuotes)
+              {'c': q.code, 'n': q.name, 'p': q.price, 'd': q.changePct},
+          ]),
+        );
       }
-      final prev = {for (final q in indexQuotes) q.code: q};
-      final merged = <IndexQuote>[];
-      for (final c in wanted) {
-        final q = byCode[c] ?? prev[c];
-        if (q != null) merged.add(q);
-      }
-      indexQuoteDiag = '新浪 $sinaGot 条 / 东财 $pushGot 条 / 写入 ${merged.length} 条'
-          '（共 ${wanted.length} 只）';
-      if (merged.isEmpty) {
-        notifyListeners();
-        return;
-      }
-      indexQuotes = [
-        for (final q in merged)
-          IndexQuote(
-            code: q.code,
-            name: q.code == MarketIndex.shanghaiCode
-                ? '上证指数'
-                : _indexLabelOf(q.code),
-            price: q.price,
-            change: q.change,
-            changePct: q.changePct,
-            priceDigits: q.priceDigits,
-          ),
-      ];
-      await db.setSetting(
-        'indexQuotesCache',
-        jsonEncode([
-          for (final q in indexQuotes)
-            {'c': q.code, 'n': q.name, 'p': q.price, 'd': q.changePct},
-        ]),
-      );
-      notifyListeners();
     } catch (e) {
-      // 取数失败也要留痕：设置页「行情指标」里会显示，方便定位
-      indexQuoteDiag = '取数失败：${e}';
-      notifyListeners();
+      indexQuoteDiag = '取数失败：$e';
     }
+    notifyListeners();
   }
-
   /// 参考基准指数的历史净值（沪深300 等）
   Map<String, List<NavPoint>> indexNavs = {};
   List<NavPoint> get benchmarkNavs =>
