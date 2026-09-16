@@ -885,47 +885,86 @@ class AppState extends ChangeNotifier {
   // 行情指标：拉取（新浪 + 东财双源，失败不清空）
   // ============================================================
 
-  /// 拉「行情指标」的实时行情（整段重写版：一条通道、失败留痕、绝不写坏缓存）
+  /// 拉行情：**指数走大盘指数通道（新浪，状态栏的上证就走它）**，
+  /// 没拿到的再用东财补（ETF / 股票），最后仍缺的沿用上一次的值。
   Future<void> refreshIndexQuotes() async {
     final wanted = <String>{
       MarketIndex.shanghaiCode,
       for (final e in activeIndexEntries) e.code,
     }.toList();
+    final out = <IndexQuote>[];
+    final seen = <String>{};
+    final problems = <String>[];
+
+    String label(String c) =>
+        c == MarketIndex.shanghaiCode ? '上证指数' : _indexLabelOf(c);
+
+    // 1) 大盘指数通道（新浪精简行情）：一次拿全，上证就在这里
     try {
-      final got = await market.fetchIndexQuotes(wanted);
-      final prev = {for (final q in indexQuotes) q.code: q};
-      final out = <IndexQuote>[];
-      for (final c in wanted) {
-        final q = got[c];
-        if (q != null) {
+      final sina = await navSource.indexQuotes(wanted);
+      for (final q in sina) {
+        out.add(IndexQuote(
+          code: q.code,
+          name: label(q.code),
+          price: q.price,
+          change: q.change,
+          changePct: q.changePct,
+          priceDigits: priceDigitsForKind(_kindOf(q.code)),
+        ));
+        seen.add(q.code);
+      }
+    } catch (e) {
+      problems.add('新浪 $e');
+    }
+
+    // 2) 东财补新浪没给的（ETF / 股票）
+    final missing = [for (final c in wanted) if (!seen.contains(c)) c];
+    if (missing.isNotEmpty) {
+      try {
+        final got = await market.fetchIndexQuotes(missing);
+        for (final c in missing) {
+          final q = got[c];
+          if (q == null) continue;
           out.add(IndexQuote(
             code: c,
-            name: c == MarketIndex.shanghaiCode ? '上证指数' : _indexLabelOf(c),
+            name: label(c),
             price: q.price,
             change: 0,
             changePct: q.changePct,
             priceDigits: priceDigitsForKind(_kindOf(c)),
           ));
-          continue;
+          seen.add(c);
         }
-        final was = prev[c];
-        if (was != null) out.add(was); // 这一次没取到就沿用上一次的
+      } catch (e) {
+        problems.add('东财 $e');
       }
-      if (out.isNotEmpty) indexQuotes = out;
-      final now = DateTime.now();
-      indexQuoteDiag = '取到 ${got.length}/${wanted.length}'
-          '（${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}）';
-      if (got.isNotEmpty) {
-        await db.setSetting(
-          'indexQuotesCache',
-          jsonEncode([
-            for (final q in indexQuotes)
-              {'c': q.code, 'n': q.name, 'p': q.price, 'd': q.changePct},
-          ]),
-        );
-      }
-    } catch (e) {
-      indexQuoteDiag = '取数失败：$e';
+    }
+
+    // 3) 仍缺的沿用上一次的值
+    final prev = {for (final q in indexQuotes) q.code: q};
+    for (final c in wanted) {
+      if (seen.contains(c)) continue;
+      final was = prev[c];
+      if (was != null) out.add(was);
+    }
+
+    if (out.isNotEmpty) indexQuotes = out;
+    final now = DateTime.now();
+    final stamp = '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}';
+    indexQuoteDiag = out.isEmpty
+        ? '没取到（$stamp）${problems.isEmpty ? '' : ' ${problems.join(' / ')}'}'
+        : '取到 ${out.length}/${wanted.length}（$stamp）'
+            '${problems.isEmpty ? '' : ' ${problems.join(' / ')}'}';
+
+    if (seen.isNotEmpty) {
+      await db.setSetting(
+        'indexQuotesCache',
+        jsonEncode([
+          for (final q in indexQuotes)
+            {'c': q.code, 'n': q.name, 'p': q.price, 'd': q.changePct},
+        ]),
+      );
     }
     notifyListeners();
   }
