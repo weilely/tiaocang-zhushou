@@ -1017,7 +1017,7 @@ class AppState extends ChangeNotifier {
     String label(String c) =>
         c == MarketIndex.shanghaiCode ? '上证指数' : _indexLabelOf(c);
     String bare(String c) => c.replaceFirst(RegExp(r'^[a-z]{2}'), '');
-    String market(String c) =>
+    String marketOf(String c) =>
         c.startsWith('sh') ? 'SH' : (c.startsWith('bj') ? 'BJ' : 'SZ');
 
     // 走「持仓行情」那条路：对指数、ETF 一视同仁，且已在真机上验证可用
@@ -1029,7 +1029,7 @@ class AppState extends ChangeNotifier {
             code: bare(c),
             name: label(c),
             kind: AssetKind.etf,
-            market: market(c),
+            market: marketOf(c),
           ),
       ];
       final got = await market.fetchAll(assets);
