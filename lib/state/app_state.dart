@@ -262,8 +262,11 @@ class AppState extends ChangeNotifier {
   Future<void> saveTxnWithCash(Txn t, Asset a, {bool linkCash = true}) async {
     final asset = await ensureAsset(a);
     final saved = t.copyWith(assetId: asset.id);
-    await db.saveTxn(saved);
-    if (linkCash) await _linkCashFor(saved);
+    final id = await db.saveTxn(saved);
+    // 改一笔之前先清掉它上次联动出来的现金流水：
+    // 否则每编辑一次就多插一条，现金余额会重复累加。
+    if (id > 0) await db.deleteCashBySrcTxn(id);
+    if (linkCash) await _linkCashFor(saved.copyWith(id: id));
     txns = await db.txns();
     cashTxns = await db.cashTxns();
     quotes = await db.quotes();
@@ -283,6 +286,8 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> removeTxn(int id) async {
+    // 联动出来的现金流水跟着一起删，别留下孤儿流水影响余额
+    await db.deleteCashBySrcTxn(id);
     await db.deleteTxn(id);
     txns = await db.txns();
     cashTxns = await db.cashTxns();
