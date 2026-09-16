@@ -907,9 +907,36 @@ class AppState extends ChangeNotifier {
   String exportTxns() => exportTxnsCsv(txns, accountsById, assetsById);
 
   /// 从 CSV 导入交易流水；返回解析结果（成功行 + 跳过的行及原因）
+  /// 从 CSV 导入交易流水；返回解析结果（成功行 + 跳过的行及原因）
+  ///
+  /// **导入前查重**：同一账户 + 同一标的 + 同一类型 + 同一天 + 份额与金额都相同的记录
+  /// 视为重复（重复导入同一份 CSV 是最常见的误操作），跳过并在结果里说明。
   Future<CsvParseResult> importTxns(String csv) async {
     final parsed = parseTxnCsv(csv);
+    final inserted = <Txn>[];
+    var skipped = 0;
+
+    bool isDup(int accountId, int assetId, ParsedTxnRow r) {
+      bool same(Txn t) =>
+          t.accountId == accountId &&
+          t.assetId == assetId &&
+          t.type == r.type &&
+          t.date.year == r.date.year &&
+          t.date.month == r.date.month &&
+          t.date.day == r.date.day &&
+          (t.shares - r.shares).abs() < 1e-6 &&
+          (t.amount - r.amount).abs() < 0.005;
+      for (final t in txns) {
+        if (same(t)) return true;
+      }
+      for (final t in inserted) {
+        if (same(t)) return true;
+      }
+      return false;
+    }
+
     for (final r in parsed.rows) {
+      // 标的：场外基金没有交易所，market 留空
       final asset = await ensureAsset(Asset(
         code: r.code,
         name: r.assetName,
@@ -921,6 +948,12 @@ class AppState extends ChangeNotifier {
       // 账户关联：按 CSV 里的账户名取；库里没有就**新建同名账户**，
       // 不能把不同账户的流水都塞进第一个账户
       final accountId = await ensureAccountByName(r.accountName);
+
+      if (isDup(accountId, asset.id!, r)) {
+        skipped++;
+        continue;
+      }
+
       // 走联动入账：导入的交易同样要记入现金流水
       await saveTxnAndLinkedCash(
         Txn(
@@ -936,11 +969,25 @@ class AppState extends ChangeNotifier {
         ),
         asset,
       );
+      inserted.add(Txn(
+        accountId: accountId,
+        assetId: asset.id!,
+        type: r.type,
+        date: r.date,
+        amount: r.amount,
+        shares: r.shares,
+      ));
     }
+
     txns = await db.txns();
     assetList = await db.assets();
     assetsById = {for (final a in assetList) if (a.id != null) a.id!: a};
+    cashTxns = await db.cashTxns();
     _recompute();
+    if (skipped > 0) {
+      parsed.errors.add(
+          '已跳过 $skipped 笔疑似重复（账户 / 标的 / 类型 / 日期 / 份额 / 金额完全相同）');
+    }
     notifyListeners();
     return parsed;
   }
