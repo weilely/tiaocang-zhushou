@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../data/db.dart';
+
 import '../../logic/portfolio.dart';
 
 /// 图表配色
@@ -277,6 +279,9 @@ class CollapsibleSectionCard extends StatefulWidget {
   final bool initiallyExpanded;
   final EdgeInsets padding;
 
+  /// 折叠状态持久化用的键；不传就按标题（去掉「（2）」这种计数）自动取
+  final String? storageKey;
+
   const CollapsibleSectionCard({
     super.key,
     required this.title,
@@ -284,6 +289,7 @@ class CollapsibleSectionCard extends StatefulWidget {
     this.trailing,
     this.initiallyExpanded = true,
     this.padding = const EdgeInsets.fromLTRB(16, 4, 16, 16),
+    this.storageKey,
   });
 
   @override
@@ -315,7 +321,7 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
               children: [
                 Expanded(
                   child: InkWell(
-                    onTap: () => setState(() => _open = !_open),
+                    onTap: _toggle,
                     borderRadius: BorderRadius.circular(6),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 4),

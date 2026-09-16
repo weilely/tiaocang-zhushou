@@ -108,7 +108,7 @@ class _MarketTickerState extends State<MarketTicker>
           Text(q.name,
               style: TextStyle(fontSize: 13, color: Theme.of(context).hintColor)),
           const SizedBox(width: 6),
-          Text(q.price.toStringAsFixed(q.priceDigits),
+          Text(q.price > 0 ? q.price.toStringAsFixed(q.priceDigits) : '--',
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
           const SizedBox(width: 6),
           Text(

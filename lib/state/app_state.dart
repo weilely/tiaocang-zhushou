@@ -1498,8 +1498,25 @@ class AppState extends ChangeNotifier {
   }
 
   /// 跑马灯用的指数：**排除上证指数**（它已经固定在状态栏上）
-  List<IndexQuote> get tickerIndices =>
-      [for (final q in indexQuotes) if (q.code != MarketIndex.shanghaiCode) q];
+  /// 跑马灯要显示的行情：**按池子里「已显示」的项来**
+  ///
+  /// 还没取到价的也先占位（价格显示 `--`）—— 这样在设置里勾选后回首页
+  /// 立刻能看到变化，价格随后由刷新补上，不必重启。
+  List<IndexQuote> get tickerIndices => [
+        for (final e in activeIndexEntries)
+          if (e.code != MarketIndex.shanghaiCode)
+            indexQuotes.firstWhere(
+              (q) => q.code == e.code,
+              orElse: () => IndexQuote(
+                code: e.code,
+                name: e.label,
+                price: 0,
+                change: 0,
+                changePct: 0,
+                priceDigits: priceDigitsForKind(e.kind),
+              ),
+            ),
+      ];
 
   // ---------------- 关注与历史净值 ----------------
 
