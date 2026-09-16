@@ -335,7 +335,11 @@ class AppState extends ChangeNotifier {
             : (t.type == TxnType.sell ? CashType.redeem : CashType.dividend),
         amount: sign * amount,
         date: t.date,
-        note: t.type.label,
+      note: () {
+        final code = assetsById[t.assetId]?.code ?? '';
+        final s = code.isEmpty ? '' : displayShortOf(code);
+        return s.isEmpty ? t.type.label : ' · ${t.type.label}';
+      }(),
         createdAt: DateTime.now(),
         srcTxnId: t.id,
       ));
@@ -365,7 +369,11 @@ class AppState extends ChangeNotifier {
           : (t.type == TxnType.sell ? CashType.redeem : CashType.dividend),
       amount: sign * amount,
       date: t.date,
-      note: t.type.label,
+      note: () {
+        final code = assetsById[t.assetId]?.code ?? '';
+        final s = code.isEmpty ? '' : displayShortOf(code);
+        return s.isEmpty ? t.type.label : ' · ${t.type.label}';
+      }(),
       createdAt: DateTime.now(),
       srcTxnId: t.id,
     ));

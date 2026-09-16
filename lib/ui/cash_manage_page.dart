@@ -118,13 +118,13 @@ class _CashManagePageState extends State<CashManagePage> {
             const SizedBox(height: 14),
             Row(
               children: [
-                _action(context, Icons.add, '充值', CashType.deposit, !isAll),
+                _action(context, Icons.add, '充值', CashType.deposit, true),
                 const SizedBox(width: 8),
-                _action(context, Icons.remove, '提现', CashType.withdraw, !isAll),
+                _action(context, Icons.remove, '提现', CashType.withdraw, true),
                 const SizedBox(width: 8),
                 _action(context, Icons.tune, '调整', CashType.adjust, !isAll),
                 const SizedBox(width: 8),
-                _action(context, Icons.savings_outlined, '收益', CashType.income, !isAll),
+                _action(context, Icons.savings_outlined, '收益', CashType.income, true),
               ],
             ),
             const Divider(height: 24),
@@ -313,8 +313,15 @@ class _CashManagePageState extends State<CashManagePage> {
   // ---------------- 记一笔 ----------------
 
   Future<void> _record({required AppState st, required String type}) async {
-    final accountId = st.accountFilter;
-    if (accountId == null) return;
+    // 「全部账户」下也要能记账：默认落到第一个账户，避免点了没反应
+    final accountId =
+        st.accountFilter ?? (st.accounts.isEmpty ? null : st.accounts.first.id);
+    if (accountId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先在设置里添加一个账户')),
+      );
+      return;
+    }
 
     final amount = TextEditingController();
     final note = TextEditingController();
