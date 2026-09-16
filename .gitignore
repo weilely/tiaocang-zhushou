@@ -1,0 +1,8 @@
+build/
+.dart_tool/
+.idea/
+*.iml
+android/.gradle/
+android/local.properties
+*.apk
+integration_test/*.bak
