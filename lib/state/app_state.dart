@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:local_auth_android/local_auth_android.dart';
 
 import '../data/backup_store.dart';
 import '../data/db.dart';
@@ -844,6 +845,26 @@ class AppState extends ChangeNotifier {
     await db.setSetting('biometricEnabled', v ? '1' : '0');
     lastMessage = v ? '已开启生物识别解锁' : '已关闭生物识别解锁';
     notifyListeners();
+  }
+
+  /// 只做一次身份验证（关闭安全开关前用），成功返回 true
+  Future<bool> verifyBiometric() async {
+    try {
+      final auth = LocalAuthentication();
+      return await auth.authenticate(
+        localizedReason: '验证身份以修改安全设置',
+        authMessages: const [
+          AndroidAuthMessages(
+            signInTitle: '验证身份',
+            biometricHint: '请验证指纹或面容',
+            cancelButton: '取消',
+          ),
+        ],
+        options: const AuthenticationOptions(stickyAuth: true),
+      );
+    } catch (_) {
+      return false;
+    }
   }
 
   /// 本机是否具备可用的人脸 / 指纹

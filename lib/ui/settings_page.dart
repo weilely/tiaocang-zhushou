@@ -63,6 +63,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _targetSection(context, st),
         _dataSection(context, st),
         _marketSection(context, st),
+          _securitySection(context, st),
         _aboutSection(context),
       ],
     );
@@ -600,6 +601,48 @@ class _SettingsPageState extends State<SettingsPage> {
   ///
   /// 池子里分两档：**已显示**（on=true）和**待选**（加了但没勾）。
   /// 点一下在两档之间来回，右侧 × 删除。
+  /// 「安全设置」：生物识别解锁（可折叠，折叠状态会记住）
+  Widget _securitySection(BuildContext context, AppState st) {
+    final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
+    return CollapsibleSectionCard(
+      title: '安全设置',
+      initiallyExpanded: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('开启后，冷启动或从后台回来超过 30 秒，需要指纹 / 面容解锁才能查看数据',
+              style: hint),
+          const SizedBox(height: 4),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: st.biometricEnabled,
+            title: const Text('生物识别解锁', style: TextStyle(fontSize: 14)),
+            subtitle: Text('支持指纹与人脸；本机没有可用的指纹 / 面容时会提示',
+                style: hint),
+            onChanged: (v) async {
+              var allow = v;
+              if (v) {
+                allow = await st.biometricAvailable();
+                if (!allow && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('本机没有可用的指纹 / 面容，或尚未在系统设置里录入')));
+                }
+              } else {
+                // 关闭前先验证一次身份，避免别人随手关掉
+                allow = await st.verifyBiometric();
+                if (!allow && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('未通过验证，安全设置保持不变')));
+                }
+              }
+              if (allow) await st.setBiometric(v);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _marketSection(BuildContext context, AppState st) {
     final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
     final active = [for (final e in st.indexPool) if (e.on) e];

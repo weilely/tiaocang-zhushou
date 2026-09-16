@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'state/app_state.dart';
+import 'ui/biometric_gate.dart';
 import 'ui/home_shell.dart';
 
 void main() {
@@ -29,7 +30,7 @@ class InvestTrackerApp extends StatelessWidget {
       // 这里把缩放卡在 1.3 倍以内：尊重「稍微大一点」的需求，又不会被拉爆版式。
       builder: (context, child) => MediaQuery.withClampedTextScaling(
         maxScaleFactor: 1.3,
-        child: child ?? const SizedBox.shrink(),
+        child: BiometricGate(child: child ?? const SizedBox.shrink()),
       ),
       home: const HomeShell(),
     );
