@@ -596,23 +596,57 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  /// 「行情指标」：跑马灯显示什么，可以按代码加指数 / ETF / 股票
-  ///
-  /// 池子里分两档：**已显示**（on=true）和**待选**（加了但没勾）。
-  /// 点一下在两档之间来回，右侧 × 删除。
+  /// 「行情指标」：**按三类分栏**（大盘指数 / 行业指数 / 场内基金），
+  /// 每类各有「已显示」和「待选」两档；类别在添加时按代码与基金库自动判定，
+  /// 三类各走各的行情通道（指数走新浪大盘指数 + 东财，场内基金走东财）。
   Widget _marketSection(BuildContext context, AppState st) {
     final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
-    final active = [for (final e in st.indexPool) if (e.on) e];
-    final pool = [for (final e in st.indexPool) if (!e.on) e];
+    const groups = [
+      ('broad', '大盘指数'),
+      ('sector', '行业指数'),
+      ('etf', '场内基金'),
+    ];
+
+    List<IndexEntry> onOf(String g) =>
+        [for (final e in st.indexPool) if (e.on && e.group == g) e];
+    List<IndexEntry> offOf(String g) =>
+        [for (final e in st.indexPool) if (!e.on && e.group == g) e];
+
+    Widget chips(List<IndexEntry> list, {required bool on}) {
+      if (list.isEmpty) {
+        return Text(on ? '（空）' : '（无）', style: hint);
+      }
+      return Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final e in list)
+            InputChip(
+              avatar: Icon(
+                on ? Icons.check_circle : Icons.radio_button_unchecked,
+                size: 16,
+              ),
+              label: Text('${e.label}（${e.code}）',
+                  style: const TextStyle(fontSize: 12)),
+              onPressed: () => st.toggleIndexEntry(e.code),
+              onDeleted: () => st.removeIndexEntry(e.code),
+              deleteIcon: const Icon(Icons.close, size: 14),
+            ),
+        ],
+      );
+    }
+
+    final activeCount = st.indexPool.where((e) => e.on).length;
 
     return CollapsibleSectionCard(
-      title: '行情指标（显示 ${active.length}）',
+      title: '行情指标（显示 $activeCount）',
       initiallyExpanded: true,
+      storageKey: 'card:行情指标',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('首页跑马灯显示这些指标，价格与涨幅每分钟自动刷新（上证固定在标题栏，不在这里）',
-              style: hint),
+          Text('首页跑马灯显示这些指标。三类各走各的行情通道，价格与涨幅每分钟自动刷新'
+              '（上证固定在标题栏，不在这里）', style: hint),
           if (st.indexQuoteDiag.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -621,8 +655,11 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(height: 10),
           Row(
             children: [
-              Text('已显示', style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700, color: Theme.of(context).hintColor)),
+              Text('已显示',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Theme.of(context).hintColor)),
               const Spacer(),
               TextButton.icon(
                 onPressed: () => _addIndexDialog(st),
@@ -631,54 +668,27 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ],
           ),
-          if (active.isEmpty)
-            Text('还没有显示中的指标', style: hint)
-          else
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final e in active)
-                  InputChip(
-                    avatar: const Icon(Icons.check_circle, size: 16),
-                    label: Text('${e.label}（${e.code}）',
-                        style: const TextStyle(fontSize: 12)),
-                    onPressed: () => st.toggleIndexEntry(e.code),
-                    onDeleted: () => st.removeIndexEntry(e.code),
-                    deleteIcon: const Icon(Icons.close, size: 14),
-                  ),
-              ],
+          for (final g in groups) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 4),
+              child: Text('· ${g.$2}', style: hint),
             ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Text('待选', style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700, color: Theme.of(context).hintColor)),
-              const SizedBox(width: 6),
-              Text('（点一下加进跑马灯）', style: hint),
-            ],
-          ),
-          const SizedBox(height: 4),
-          if (pool.isEmpty)
-            Text('没有待选项', style: hint)
-          else
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final e in pool)
-                  InputChip(
-                    avatar: const Icon(Icons.radio_button_unchecked, size: 16),
-                    label: Text('${e.label}（${e.code}）',
-                        style: const TextStyle(fontSize: 12)),
-                    onPressed: () => st.toggleIndexEntry(e.code),
-                    onDeleted: () => st.removeIndexEntry(e.code),
-                    deleteIcon: const Icon(Icons.close, size: 14),
-                  ),
-              ],
+            chips(onOf(g.$1), on: true),
+            const SizedBox(height: 8),
+          ],
+          const Divider(height: 20),
+          Text('待选（点一下加进跑马灯）', style: hint),
+          const SizedBox(height: 6),
+          for (final g in groups) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 4),
+              child: Text('· ${g.$2}', style: hint),
             ),
-          const Divider(height: 24),
-          Text('常用指数一键添加', style: hint),
+            chips(offOf(g.$1), on: false),
+            const SizedBox(height: 8),
+          ],
+          const Divider(height: 20),
+          Text('常用大盘指数一键添加', style: hint),
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,
