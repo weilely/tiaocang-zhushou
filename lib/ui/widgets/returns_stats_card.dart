@@ -657,9 +657,6 @@ class _FlowView extends StatelessWidget {
           style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
         ),
         const SizedBox(height: 12),
-        if (s == null)
-          _emptyHint(context, '还没有交易或现金记录，先记一笔买入')
-        else
           CashFlowMap(s: s),
       ],
     );
