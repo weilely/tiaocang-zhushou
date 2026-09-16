@@ -295,6 +295,41 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 交易存在、但现金流水为空时，按交易**一次性重建**现金流水
+  ///
+  /// 早期版本（CSV 导入 / 期初持仓导入）只写了交易、没联动现金，
+  /// 结果现金页和买卖完全脱节。这里只在"一条现金都没有"时补，
+  /// 绝不动用户手动记的现金。
+  Future<int> rebuildCashFromTxns() async {
+    if (cashTxns.isNotEmpty || txns.isEmpty) return 0;
+    var n = 0;
+    for (final t in txns) {
+      final sign = t.type == TxnType.buy ? -1.0 : 1.0;
+      final amount =
+          t.type == TxnType.buy ? t.amount + t.fee : t.amount - t.fee;
+      if (amount == 0) continue;
+      await db.saveCashTxn(CashTxn(
+        accountId: t.accountId,
+        type: t.type == TxnType.buy
+            ? CashType.invest
+            : (t.type == TxnType.sell ? CashType.redeem : CashType.dividend),
+        amount: sign * amount,
+        date: t.date,
+        note: t.type.label,
+        createdAt: DateTime.now(),
+        srcTxnId: t.id,
+      ));
+      n++;
+    }
+    cashTxns = await db.cashTxns();
+    _recompute();
+    if (n > 0) {
+      lastMessage = '已按 $n 笔交易重建现金流水（之前只记了交易、没联动现金）';
+    }
+    notifyListeners();
+    return n;
+  }
+
   /// 买入/卖出/分红 → 现金流水（买入扣钱、卖出和分红进钱）
   Future<void> _linkCashFor(Txn t) async {
     final sign = switch (t.type) {
@@ -592,7 +627,8 @@ class AppState extends ChangeNotifier {
     unawaited(refreshQuotes(silent: true));
     unawaited(autoBackupIfNeeded());
     unawaited(runDueDca());
-    unawaited(loadCash());
+    // 先读现金；若一条都没有而交易不少，说明是老数据，按交易补一次联动
+    unawaited(loadCash().then((_) => rebuildCashFromTxns()));
     unawaited(loadNavSamples());
   }
 
