@@ -1135,7 +1135,9 @@ class AppState extends ChangeNotifier {
   /// 每类独立 try/catch；这次没取到的沿用上一次的值，所以不会把缓存写残。
   Future<void> refreshIndexQuotes() async {
     if (indexQuotes.isEmpty) await loadMarketIndices();
-    await db.setSetting('indexQuotePing', DateTime.now().toIso8601String());
+    try {
+      await db.setSetting('indexQuotePing', DateTime.now().toIso8601String());
+    } catch (_) {}
 
     final pool = activeIndexEntries;
     final broad = <String>[
@@ -1260,7 +1262,9 @@ class AppState extends ChangeNotifier {
     final stamp = '${now.hour.toString().padLeft(2, '0')}:'
         '${now.minute.toString().padLeft(2, '0')}';
     indexQuoteDiag = '${marks.join(' · ')}（$stamp）';
-    await db.setSetting('indexQuoteDiag', indexQuoteDiag);
+    try {
+      await db.setSetting('indexQuoteDiag', indexQuoteDiag);
+    } catch (_) {}
 
     if (seen.isNotEmpty) {
       await db.setSetting(
