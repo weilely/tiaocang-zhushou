@@ -1325,17 +1325,29 @@ class AppState extends ChangeNotifier {
 
   // ---- 日历 ----
 
+  /// 日历格：**日视图 = 该月每天；月视图 = 该年 1–12 月；年视图 = 各年**
   List<PnlCell> get calendarCells {
-    final start = calendarGranularity == ReturnGranularity.year
-        ? DateTime(calendarCursor.year, 1, 1)
-        : DateTime(calendarCursor.year, calendarCursor.month, 1);
-    final end = calendarGranularity == ReturnGranularity.year
-        ? DateTime(calendarCursor.year, 12, 31)
-        : DateTime(calendarCursor.year, calendarCursor.month + 1, 0);
-    final series = _dailySeries(DateRange(start, end));
-    return calendarGranularity == ReturnGranularity.year
-        ? cellsForYear(series, calendarCursor.year)
-        : cellsForMonth(series, calendarCursor.year, calendarCursor.month);
+    switch (calendarGranularity) {
+      case ReturnGranularity.day:
+        final start = DateTime(calendarCursor.year, calendarCursor.month, 1);
+        final end = DateTime(calendarCursor.year, calendarCursor.month + 1, 0);
+        return cellsForMonth(
+          _dailySeries(DateRange(start, end)),
+          calendarCursor.year,
+          calendarCursor.month,
+        );
+      case ReturnGranularity.month:
+        final start = DateTime(calendarCursor.year, 1, 1);
+        final end = DateTime(calendarCursor.year, 12, 31);
+        return cellsForYear(
+          _dailySeries(DateRange(start, end)),
+          calendarCursor.year,
+        );
+      case ReturnGranularity.year:
+        final now = DateTime.now();
+        final start = earliestRecordDay ?? DateTime(now.year - 1, 1, 1);
+        return cellsForYears(_dailySeries(DateRange(start, now)));
+    }
   }
 
   double? get calendarPeriodPnl => periodPnlOf(calendarCells);
@@ -1352,9 +1364,9 @@ class AppState extends ChangeNotifier {
   }
 
   void shiftCalendar(int step) {
-    final base = calendarGranularity == ReturnGranularity.year
-        ? DateTime(calendarCursor.year + step, calendarCursor.month, 1)
-        : DateTime(calendarCursor.year, calendarCursor.month + step, 1);
+        final base = calendarGranularity == ReturnGranularity.day
+        ? DateTime(calendarCursor.year, calendarCursor.month + step, 1)
+        : DateTime(calendarCursor.year + step, 1, 1);
     calendarCursor = (year: base.year, month: base.month);
     notifyListeners();
   }
