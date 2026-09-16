@@ -886,6 +886,7 @@ class AppState extends ChangeNotifier {
   // ============================================================
 
   Future<void> refreshIndexQuotes() async {
+    indexQuoteDiag = '取数中…';
     try {
       final entries = activeIndexEntries;
       final wanted = <String>{
