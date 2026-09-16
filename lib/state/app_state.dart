@@ -642,8 +642,9 @@ class AppState extends ChangeNotifier {
       loading = false;
       _recompute();
     }
-    unawaited(loadMarketIndices());
-    unawaited(refreshIndexQuotes());
+    // 先读池子与缓存，再拉行情：否则首次刷新可能先跑完，
+    // 把缓存里的指标覆盖成「只有上证」，跑马灯就空了
+    unawaited(loadMarketIndices().then((_) => refreshIndexQuotes()));
     unawaited(refreshQuotes(silent: true));
     unawaited(autoBackupIfNeeded());
     unawaited(runDueDca());
@@ -1001,6 +1002,8 @@ class AppState extends ChangeNotifier {
   /// 拉行情：**指数走大盘指数通道（新浪，状态栏的上证就走它）**，
   /// 没拿到的再用东财补（ETF / 股票），最后仍缺的沿用上一次的值。
   Future<void> refreshIndexQuotes() async {
+    // 兜底：万一缓存还没读进来（界面先起来/并发），这里先补一次
+    if (indexQuotes.isEmpty) await loadMarketIndices();
     // 留痕：只要能进这个方法就落一条时间戳（排查"到底有没有被调用"）
     await db.setSetting('indexQuotePing', DateTime.now().toIso8601String());
     try {
