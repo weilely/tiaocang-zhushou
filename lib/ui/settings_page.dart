@@ -659,24 +659,35 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
           const SizedBox(height: 4),
-          if (pool.isEmpty)
-            Text('没有待选项', style: hint)
-          else
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final e in pool)
-                  InputChip(
-                    avatar: const Icon(Icons.radio_button_unchecked, size: 16),
-                    label: Text('${e.label}（${e.code}）',
-                        style: const TextStyle(fontSize: 12)),
-                    onPressed: () => st.toggleIndexEntry(e.code),
-                    onDeleted: () => st.removeIndexEntry(e.code),
-                    deleteIcon: const Icon(Icons.close, size: 14),
-                  ),
-              ],
+          for (final g in const [
+            ('broad', '大盘指数'),
+            ('sector', '行业指数'),
+            ('etf', '场内基金'),
+          ]) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 4),
+              child: Text('· ${g.$2}', style: hint),
             ),
+            if (!pool.any((e) => e.group == g.$1))
+              Text('（无）', style: hint)
+            else
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final e in pool.where((e) => e.group == g.$1))
+                    InputChip(
+                      avatar:
+                          const Icon(Icons.radio_button_unchecked, size: 16),
+                      label: Text('${e.label}（${e.code}）',
+                          style: const TextStyle(fontSize: 12)),
+                      onPressed: () => st.toggleIndexEntry(e.code),
+                      onDeleted: () => st.removeIndexEntry(e.code),
+                      deleteIcon: const Icon(Icons.close, size: 14),
+                    ),
+                ],
+              ),
+          ],
           const Divider(height: 24),
           Text('常用指数一键添加', style: hint),
           const SizedBox(height: 6),
@@ -685,7 +696,6 @@ class _SettingsPageState extends State<SettingsPage> {
             runSpacing: 6,
             children: [
               for (final idx in MarketIndex.presets)
-                if (!st.indexPool.any((e) => e.code == idx.code))
                   ActionChip(
                     label: Text(idx.name, style: const TextStyle(fontSize: 12)),
                     onPressed: () => st.addIndexEntry(
