@@ -110,13 +110,859 @@ class AppState extends ChangeNotifier {
   List<String> marketIndices = List.of(MarketIndex.defaultCodes);
   List<IndexQuote> indexQuotes = [];
 
-  /// 上次刷新跑马灯行情的结果（设置页「行情指标」里显示，用来定位取数问题）
-  String
-            indexQuoteDiag = '新浪 $sinaGot 条 / 东财 $pushGot 条 / 写入 ${merged.length} 条（共 ${wanted.length} 只）';
-      if (merged.isEmpty) return;
+  // ============================================================
+  // 派生视图（getter 群）
+  // ============================================================
 
+  Map<int, Account> get accountsById =>
+      {for (final a in accounts) if (a.id != null) a.id!: a};
+
+  /// 当前账户筛选下的流水
+  List<Txn> get txnsOfFilter => accountFilter == null
+      ? txns
+      : [for (final t in txns) if (t.accountId == accountFilter) t];
+
+  /// 当前账户下的持仓（已按筛选）
+  List<Position> get positions => buildPositions(
+        txns: txnsOfFilter,
+        assets: assetsById,
+        quotes: quotes,
+      );
+
+  /// 所有账户的持仓（不受账户筛选影响；再平衡、总览用）
+  List<Position> get allPositions => buildPositions(
+        txns: txns,
+        assets: assetsById,
+        quotes: quotes,
+      );
+
+  /// 非空持仓（持仓页、调仓页用）
+  List<Position> get holdings =>
+      [for (final p in positions) if (!p.isEmpty) p];
+
+  /// 按当前排序设置排好的持仓
+  List<Position> get sortedHoldings {
+    final list = List<Position>.of(holdings);
+    double key(Position p) => switch (holdingsSortKey) {
+          'returnPct' => p.floatingPct,
+          'dayPnl' => p.dayPnl,
+          'cost' => p.cost,
+          _ => p.marketValue,
+        };
+    list.sort((a, b) {
+      final r = key(a).compareTo(key(b));
+      return holdingsSortDesc ? -r : r;
+    });
+    return list;
+  }
+
+  int get holdingCount => holdings.length;
+
+  PortfolioSummary get summary => summarize(positions);
+
+  /// 总市值 = 持仓市值 + 现金余额
+  double get totalMarketValue => summary.marketValue + cashTotalValue;
+
+  double get cashTotalValue {
+    if (accountFilter != null) return cashBalances[accountFilter] ?? 0;
+    return cashBalances.values.fold<double>(0, (a, b) => a + b);
+  }
+
+  List<AllocationSlice> get kindAllocation => allocationByKind(positions);
+
+  List<AllocationSlice> get assetAllocation => allocationByAsset(positions);
+
+  List<AllocationSlice> get accountAllocation =>
+      allocationByAccount(positions, accountsById);
+
+  /// 账面是否对得上（流水缺口/重影检测）
+  bool get ledgerIncomplete => pnlCrossCheck != null;
+
+  /// 某个标的在某账户下的持仓（详情页用）
+  Position? positionOf(int accountId, int assetId) {
+    for (final p in allPositions) {
+      if (p.accountId == accountId && p.asset.id == assetId) return p;
+    }
+    return null;
+  }
+
+  // ============================================================
+  // 账户
+  // ============================================================
+
+  Future<void> addAccount(String name, String note) async {
+    final n = name.trim();
+    if (n.isEmpty) return;
+    await db.saveAccount(Account(name: n, note: note.trim()));
+    accounts = await db.accounts();
+    notifyListeners();
+  }
+
+  Future<void> updateAccount(Account a) async {
+    await db.saveAccount(a);
+    accounts = await db.accounts();
+    notifyListeners();
+  }
+
+  Future<void> removeAccount(int id) async {
+    await db.deleteAccount(id);
+    accounts = await db.accounts();
+    assetList = await db.assets();
+    assetsById = {for (final a in assetList) if (a.id != null) a.id!: a};
+    txns = await db.txns();
+    cashTxns = await db.cashTxns();
+    _recompute();
+    if (accountFilter == id) accountFilter = null;
+    notifyListeners();
+  }
+
+  void setAccountFilter(int? id) {
+    accountFilter = id;
+    _recompute();
+    notifyListeners();
+  }
+
+  // ============================================================
+  // 排序与视图开关
+  // ============================================================
+
+  Future<void> setHoldingsSort(String key, bool desc) async {
+    holdingsSortKey = key;
+    holdingsSortDesc = desc;
+    await db.setSetting('holdingsSortKey', holdingsSortKey);
+    await db.setSetting('holdingsSortDesc', holdingsSortDesc ? '1' : '0');
+    notifyListeners();
+  }
+
+  void setStatsView(StatsView v) {
+    statsView = v;
+    notifyListeners();
+  }
+
+
+
+  // ============================================================
+  // 标的
+  // ============================================================
+
+  /// 取（或新建）一只标的，返回它的 id
+  Future<Asset> ensureAsset(Asset a) async {
+    final id = await db.upsertAsset(a);
+    assetList = await db.assets();
+    assetsById = {for (final x in assetList) if (x.id != null) x.id!: x};
+    return a.copyWith(id: id);
+  }
+
+
+  // ============================================================
+  // 记账（买入 / 卖出 / 分红）
+  // ============================================================
+
+  /// 记一笔并联动现金（详情页/记一笔表单用）
+  Future<void> saveTxnWithCash(Txn t, Asset a, {bool linkCash = true}) async {
+    final asset = await ensureAsset(a);
+    final saved = t.copyWith(assetId: asset.id);
+    await db.saveTxn(saved);
+    if (linkCash) await _linkCashFor(saved);
+    txns = await db.txns();
+    cashTxns = await db.cashTxns();
+    quotes = await db.quotes();
+    _recompute();
+    notifyListeners();
+  }
+
+  /// 记一笔并顺带建标的（期初持仓导入用，**不联动现金**）
+  Future<void> saveTxnWithAsset(Txn t, Asset a) async {
+    final id = await db.upsertAsset(a);
+    await db.saveTxn(t.copyWith(assetId: id));
+    assetList = await db.assets();
+    assetsById = {for (final x in assetList) if (x.id != null) x.id!: x};
+    txns = await db.txns();
+    _recompute();
+    notifyListeners();
+  }
+
+  Future<void> removeTxn(int id) async {
+    await db.deleteTxn(id);
+    txns = await db.txns();
+    cashTxns = await db.cashTxns();
+    _recompute();
+    notifyListeners();
+  }
+
+  /// 买入/卖出/分红 → 现金流水（买入扣钱、卖出和分红进钱）
+  Future<void> _linkCashFor(Txn t) async {
+    final sign = switch (t.type) {
+      TxnType.buy => -1.0,
+      _ => 1.0,
+    };
+    final amount = t.type == TxnType.buy ? t.amount + t.fee : t.amount - t.fee;
+    if (amount == 0) return;
+    await db.saveCashTxn(CashTxn(
+      accountId: t.accountId,
+      type: t.type == TxnType.buy
+          ? CashType.invest
+          : (t.type == TxnType.sell ? CashType.redeem : CashType.dividend),
+      amount: sign * amount,
+      date: t.date,
+      note: t.type.label,
+      createdAt: DateTime.now(),
+      srcTxnId: t.id,
+    ));
+  }
+
+  // ============================================================
+  // 调仓目标（按具体标的）
+  // ============================================================
+
+  Future<void> setTargetRatio(String key, String label, double ratio) async {
+    if (ratio <= 0) {
+      await removeTarget(key);
+      return;
+    } else {
+      await db.saveTarget(TargetAlloc(key: key, label: label, ratio: ratio));
+    }
+    targets = await db.targets();
+    notifyListeners();
+  }
+
+  Future<void> removeTarget(String key) async {
+    for (final t in targets) {
+      if (t.key == key && t.id != null) {
+        await db.deleteTarget(t.id!);
+        break;
+      }
+    }
+    targets = await db.targets();
+    notifyListeners();
+  }
+
+  // ============================================================
+  // 行情指标池
+  // ============================================================
+
+  List<IndexEntry> indexPool = [];
+
+  /// 上次刷新跑马灯行情的结果（设置页「行情指标」里显示，用来定位取数问题）
+  String indexQuoteDiag = '';
+
+  List<IndexEntry> get activeIndexEntries =>
+      [for (final e in indexPool) if (e.on) e];
+
+  List<MarketIndexEntry> get marketIndexEntries => [
+        for (final e in activeIndexEntries) MarketIndexEntry(e.code, e.label),
+      ];
+
+  /// 跑马灯要显示的行情（排除固定在标题栏的上证）
+
+  /// 某个指标的类型（决定价格小数位、走哪个行情源）
+  String _kindOf(String code) {
+    for (final e in indexPool) {
+      if (e.code == code && e.kind.isNotEmpty) return e.kind;
+    }
+    if (isIndexLikeCode(code)) return 'index';
+    if (RegExp(r'^(sh5|sz1)').hasMatch(code)) return 'etf';
+    if (RegExp(r'^(sh0[1-9]|sz0[1-9])').hasMatch(code)) return 'fund';
+    return 'stock';
+  }
+
+  /// 某个代码在池子/预设里的展示名（跑马灯用）
+  String _indexLabelOf(String code) {
+    for (final e in indexPool) {
+      if (e.code == code) return e.label;
+    }
+    return MarketIndex.byCode(code)?.name ?? code;
+  }
+
+  Future<void> loadMarketIndices() async {
+    indexPool = parseIndexPool(await db.setting('marketIndexPool'));
+    if (indexPool.isEmpty) {
+      final s = await db.setting('marketIndices');
+      if (s == null || s.trim().isEmpty) {
+        indexPool = [
+          for (final c in MarketIndex.defaultCodes)
+            IndexEntry(
+              code: c,
+              name: MarketIndex.byCode(c)?.name ?? '',
+              short: MarketIndex.byCode(c)?.name ?? c,
+              kind: 'index',
+              on: true,
+            ),
+        ];
+      } else {
+        indexPool = [
+          for (final e in parseIndexEntries(s)) IndexEntry.fromLegacy(e),
+        ];
+      }
+      await db.setSetting('marketIndexPool', encodeIndexPool(indexPool));
+    }
+    marketIndices = [for (final e in activeIndexEntries) e.code];
+
+    final cache = await db.setting('indexQuotesCache');
+    if (cache != null && cache.isNotEmpty) {
+      try {
+        final list = jsonDecode(cache);
+        if (list is List) {
+          indexQuotes = [
+            for (final raw in list.whereType<Map>())
+              IndexQuote(
+                code: (raw['c'] ?? '').toString(),
+                name: (raw['n'] ?? '').toString(),
+                price: (raw['p'] as num?)?.toDouble() ?? 0,
+                change: 0,
+                changePct: (raw['d'] as num?)?.toDouble() ?? 0,
+              ),
+          ];
+        }
+      } catch (_) {
+        // 缓存坏了无所谓
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<void> saveIndexPool() async {
+    await db.setSetting('marketIndexPool', encodeIndexPool(indexPool));
+    marketIndices = [for (final e in activeIndexEntries) e.code];
+    await db.setSetting(
+        'marketIndices',
+        [for (final e in activeIndexEntries) '${e.code}|${e.label}'].join(','));
+    notifyListeners();
+    unawaited(refreshIndexQuotes());
+  }
+
+  /// 按代码加一个指标（已存在就更新名字/简称），默认进「待选」
+  Future<void> addIndexEntry(IndexEntry entry, {bool on = false}) async {
+    final code = normalizeIndexCode(entry.code);
+    if (code.isEmpty) return;
+    final next = entry.copyWith(code: code, on: on);
+    indexPool = [
+      for (final e in indexPool)
+        if (e.code != code) e,
+      next,
+    ];
+    await saveIndexPool();
+  }
+
+  Future<void> toggleIndexEntry(String code) async {
+    indexPool = [
+      for (final e in indexPool) e.code == code ? e.copyWith(on: !e.on) : e,
+    ];
+    await saveIndexPool();
+  }
+
+  Future<void> removeIndexEntry(String code) async {
+    indexPool = [for (final e in indexPool) if (e.code != code) e];
+    await saveIndexPool();
+  }
+
+  Future<void> renameIndexEntry(String code, String short) async {
+    indexPool = [
+      for (final e in indexPool)
+        e.code == code ? e.copyWith(short: short.trim()) : e,
+    ];
+    await saveIndexPool();
+  }
+
+  Future<void> addMarketIndex(String code, String name) async {
+    final c = normalizeIndexCode(code);
+    if (c.isEmpty) return;
+    await addIndexEntry(
+      IndexEntry(code: c, name: name, short: name, kind: 'index'),
+      on: true,
+    );
+  }
+
+  Future<void> setMarketIndices(List<String> codes) async {
+    indexPool = [
+      for (final raw in codes) IndexEntry.fromLegacy(parseIndexEntry(raw)),
+    ];
+    if (indexPool.isEmpty) {
+      indexPool = [
+        for (final c in MarketIndex.defaultCodes)
+          IndexEntry(
+            code: c,
+            name: MarketIndex.byCode(c)?.name ?? '',
+            short: MarketIndex.byCode(c)?.name ?? c,
+            kind: 'index',
+            on: true,
+          ),
+      ];
+    }
+    await saveIndexPool();
+  }
+
+  // ============================================================
+  // 基准 / 趋势 / 日历 / 资金流
+  // ============================================================
+
+  Benchmark benchmark = kDefaultBenchmark;
+  RangePreset trendPreset = RangePreset.m6;
+  DateTime? trendCustomStart;
+  DateTime? trendCustomEnd;
+  RangePreset flowPreset = RangePreset.y1;
+  DateTime? flowCustomStart;
+  DateTime? flowCustomEnd;
+  StatsView statsView = StatsView.calendar;
+  ReturnGranularity calendarGranularity = ReturnGranularity.month;
+  /// 日历当前月份（UI 里是 ({int month, int year}) 记录）
+  ({int month, int year}) calendarCursor =
+      (year: DateTime.now().year, month: DateTime.now().month);
+
+  Future<void> setBenchmark(Benchmark b) async {
+    benchmark = b;
+    for (final e in b.toSettings().entries) {
+      await db.setSetting(e.key, e.value);
+    }
+    notifyListeners();
+  }
+
+  void setTrendPreset(RangePreset p) {
+    trendPreset = p;
+    notifyListeners();
+  }
+
+  void setTrendCustomRange(DateTime start, DateTime end) {
+    trendCustomStart = start;
+    trendCustomEnd = end;
+    trendPreset = RangePreset.custom;
+    notifyListeners();
+  }
+
+  void setFlowPreset(RangePreset p) {
+    flowPreset = p;
+    notifyListeners();
+  }
+
+  void setFlowCustomRange(DateTime start, DateTime end) {
+    flowCustomStart = start;
+    flowCustomEnd = end;
+    flowPreset = RangePreset.custom;
+    notifyListeners();
+  }
+
+  void setCalendarGranularity(ReturnGranularity p) {
+    calendarGranularity = p;
+    notifyListeners();
+  }
+
+  void setCalendarCursor(int year, int month) {
+    calendarCursor = (year: year, month: month);
+    notifyListeners();
+  }
+
+  // ============================================================
+  // 生命周期
+  // ============================================================
+
+  Future<void> init() async {
+    loading = true;
+    notifyListeners();
+    try {
+      await _loadFromDb();
+      threshold = await db.settingDouble('threshold', 0.05);
+      holdingsSortKey = await db.setting('holdingsSortKey') ?? 'marketValue';
+      holdingsSortDesc = (await db.setting('holdingsSortDesc') ?? '0') == '1';
+      dcaAutoRun = (await db.setting('dcaAutoRun') ?? '1') == '1';
+      final savedView = await db.setting('statsView');
+      statsView = StatsView.values.firstWhere(
+        (v) => v.name == savedView,
+        orElse: () => StatsView.calendar,
+      );
+      benchmark = Benchmark.fromSettings(
+        await db.setting('benchmarkKind'),
+        await db.setting('benchmarkAnnualPct'),
+        await db.setting('benchmarkIndexCode'),
+        await db.setting('benchmarkIndexName'),
+      );
+      await loadSecuritiesStats();
+    } catch (e) {
+      lastError = '本地数据加载失败：$e';
+    } finally {
+      loading = false;
+      _recompute();
+    }
+    unawaited(loadMarketIndices());
+    unawaited(refreshIndexQuotes());
+    unawaited(refreshQuotes(silent: true));
+    unawaited(autoBackupIfNeeded());
+    unawaited(runDueDca());
+    unawaited(loadCash());
+    unawaited(loadNavSamples());
+  }
+
+  /// 重新算派生数据（现金余额/收益、逐日序列缓存作废）
+  void _recompute() {
+    final balances = <int, double>{};
+    for (final c in cashTxns) {
+      balances[c.accountId] = (balances[c.accountId] ?? 0) + c.amount;
+    }
+    cashBalances = balances;
+    cashIncome = _cashIncomeOf(cashTxns);
+    _invalidateSeries();
+  }
+
+  // ============================================================
+  // 行情刷新（持仓 + 关联 ETF）
+  // ============================================================
+
+  /// 被持有过的标的（用于刷新行情）
+  List<Asset> get trackedAssets {
+    final ids = txns.map((t) => t.assetId).toSet();
+    return [
+      for (final a in assetList)
+        if (a.id != null && ids.contains(a.id)) a,
+    ];
+  }
+
+  /// 只为估涨幅而临时合成的关联 ETF（**没有 id**，不能拿去写库）
+  List<Asset> get linkAssets {
+    final out = <Asset>[];
+    final seen = <String>{};
+    for (final a in trackedAssets) {
+      final link = a.linkCode.trim();
+      if (link.isEmpty || !seen.add(link)) continue;
+      out.add(Asset(
+        code: link,
+        name: '',
+        kind: AssetKind.etf,
+        market: MarketService.marketFor(link),
+      ));
+    }
+    return out;
+  }
+
+  /// 关联 ETF 的实时行情
+  Map<String, Quote> get linkQuotes {
+    final out = <String, Quote>{};
+    for (final a in linkAssets) {
+      final q = quotes[a.code];
+      if (q != null) out[a.code] = q;
+    }
+    return out;
+  }
+
+  Future<void> setAssetLink(int assetId, String linkCode) async {
+    await db.updateAssetLink(assetId, linkCode.trim());
+    assetList = await db.assets();
+    assetsById = {for (final x in assetList) if (x.id != null) x.id!: x};
+    notifyListeners();
+    unawaited(refreshQuotes(silent: true));
+  }
+
+  /// 给「还没设关联 ETF 的场外基金」自动猜一只场内 ETF 并记下来
+  Future<int> ensureLinkEtfs({bool force = false}) async {
+    if (force) _linkTried.clear();
+    final todo = trackedAssets
+        .where((a) =>
+            a.kind == AssetKind.fund &&
+            a.linkCode.trim().isEmpty &&
+            a.id != null &&
+            !_linkTried.contains(a.code))
+        .toList();
+    if (todo.isEmpty) return 0;
+
+    var matched = 0;
+    for (final a in todo) {
+      _linkTried.add(a.code);
+      final name = a.name.trim().isEmpty ? a.code : a.name;
+      final candidates = <String, String>{};
+      for (final kw in fundLinkKeywords(name)) {
+        if (candidates.length >= 24) break;
+        try {
+          final rows = await market.search(kw);
+          for (final r in rows) {
+            if (isExchangeEtfCode(r.code) && r.name.isNotEmpty) {
+              candidates[r.code] = r.name;
+            }
+          }
+        } catch (_) {
+          // 联网失败就换下一个关键词
+        }
+        if (pickLinkEtf(name, candidates) != null) break;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      final best = pickLinkEtf(name, candidates);
+      if (best != null) {
+        await db.updateAssetLink(a.id!, best.code);
+        matched++;
+      }
+    }
+    if (matched > 0) {
+      assetList = await db.assets();
+      assetsById = {for (final x in assetList) if (x.id != null) x.id!: x};
+      notifyListeners();
+    }
+    return matched;
+  }
+
+  final Set<String> _linkTried = {};
+
+  Future<void> refreshQuotes({bool silent = false}) async {
+    if (refreshing) return;
+    final need = [...trackedAssets, ...linkAssets];
+    if (need.isEmpty) {
+      if (!silent) {
+        lastMessage = null;
+        lastError = '还没有添加任何持仓，先记一笔买入吧';
+        notifyListeners();
+      }
+      return;
+    }
+
+    refreshing = true;
+    if (!silent) notifyListeners();
+
+    try {
+      final fresh = await market.fetchAll(need);
+      if (fresh.isNotEmpty) {
+        quotes = {...quotes, ...fresh};
+        await db.saveQuotes(fresh.values);
+
+        // 顺手把标的名称补齐/更新（只认库里有 id 的标的，见 logic/quote_sync.dart）
+        final renames = assetRenames(assets: need, fresh: fresh);
+        for (final r in renames) {
+          await db.updateAssetName(r.id, r.name);
+        }
+        if (renames.isNotEmpty) {
+          assetList = await db.assets();
+          assetsById = {for (final x in assetList) if (x.id != null) x.id!: x};
+        }
+        lastRefresh = DateTime.now();
+        lastError = null;
+        unawaited(refreshIndexQuotes());
+      } else {
+        lastError = '未获取到行情数据（可能代码有误或非交易日）';
+      }
+    } on MarketException catch (e) {
+      lastError = e.message;
+    } catch (e) {
+      lastError = '刷新失败：$e';
+    } finally {
+      refreshing = false;
+      _recompute();
+    }
+  }
+
+  // ============================================================
+  // 现金
+  // ============================================================
+
+  Future<void> loadCash() async {
+    cashTxns = await db.cashTxns();
+    _recompute();
+    notifyListeners();
+  }
+
+  Future<void> addCashTxn(CashTxn t) async {
+    await db.saveCashTxn(t);
+    cashTxns = await db.cashTxns();
+    _recompute();
+    notifyListeners();
+  }
+
+  Future<void> removeCashTxn(int id) async {
+    await db.deleteCashTxn(id);
+    cashTxns = await db.cashTxns();
+    _recompute();
+    notifyListeners();
+  }
+
+  /// 充值 / 提现 / 调整
+  Future<void> deposit(int accountId, double amount, String note) =>
+      addCashTxn(CashTxn(
+        accountId: accountId,
+        type: CashType.deposit,
+        amount: amount.abs(),
+        date: DateTime.now(),
+        note: note,
+      ));
+
+  Future<void> withdraw(int accountId, double amount, String note) =>
+      addCashTxn(CashTxn(
+        accountId: accountId,
+        type: CashType.withdraw,
+        amount: -amount.abs(),
+        date: DateTime.now(),
+        note: note,
+      ));
+
+  Future<void> cashAdjust(int accountId, double amount, String note) =>
+      addCashTxn(CashTxn(
+        accountId: accountId,
+        type: CashType.adjust,
+        amount: amount,
+        date: DateTime.now(),
+        note: note,
+      ));
+
+  /// 货币基金收益（本金 × 年化 × 天数 ÷ 365）
+  Future<void> cashInvest(
+    int accountId,
+    double principal,
+    double annualPct,
+    int days,
+    String note,
+  ) =>
+      deposit(accountId, principal, note.isEmpty ? '货币基金买入' : note);
+
+  Future<void> cashRedeem(int accountId, double amount, String note) =>
+      withdraw(accountId, amount, note.isEmpty ? '货币基金赎回' : note);
+
+  /// 记一笔现金收益
+  Future<void> addCashIncome(int accountId, double amount, String note) =>
+      addCashTxn(CashTxn(
+        accountId: accountId,
+        type: CashType.income,
+        amount: amount,
+        date: DateTime.now(),
+        note: note,
+      ));
+
+  double get cashTotal {
+    return cashBalances.values.fold<double>(0, (a, b) => a + b);
+  }
+
+  double get cashTotalIncome {
+    var sum = 0.0;
+    for (final v in cashIncome.values) {
+      if (v.length > 1) sum += v[1];
+    }
+    return sum;
+  }
+
+  double get cashMonthIncome {
+    var sum = 0.0;
+    for (final v in cashIncome.values) {
+      if (v.isNotEmpty) sum += v[0];
+    }
+    return sum;
+  }
+
+  // ============================================================
+  // 现金流水 CSV / 交易 CSV
+  // ============================================================
+
+  String exportTxns() => exportTxnsCsv(txns, accountsById, assetsById);
+
+  /// 从 CSV 导入交易流水；返回解析结果（成功行 + 跳过的行及原因）
+  Future<CsvParseResult> importTxns(String csv) async {
+    final parsed = parseTxnCsv(csv);
+    for (final r in parsed.rows) {
+      final asset = await ensureAsset(Asset(
+        code: r.code,
+        name: r.assetName,
+        kind: r.kind,
+        market: MarketService.marketFor(r.code),
+      ));
+      var accountId = accounts.isEmpty ? 0 : accounts.first.id!;
+      for (final a in accounts) {
+        if (a.name == r.accountName && a.id != null) accountId = a.id!;
+      }
+      await db.saveTxn(Txn(
+        accountId: accountId,
+        assetId: asset.id!,
+        type: r.type,
+        date: r.date,
+        amount: r.amount,
+        shares: r.shares,
+        price: r.price,
+        fee: r.fee,
+        note: r.note,
+      ));
+    }
+    txns = await db.txns();
+    assetList = await db.assets();
+    assetsById = {for (final a in assetList) if (a.id != null) a.id!: a};
+    _recompute();
+    notifyListeners();
+    return parsed;
+  }
+
+  String exportPositions() => exportPositionsCsv(holdings, accountsById);
+
+  // ============================================================
+  // 行情指标：拉取（新浪 + 东财双源，失败不清空）
+  // ============================================================
+
+  Future<void> refreshIndexQuotes() async {
+    try {
+      final entries = activeIndexEntries;
+      final wanted = <String>{
+        MarketIndex.shanghaiCode,
+        ...entries.map((e) => e.code),
+      }.toList();
+
+      var sinaGot = 0;
+      var pushGot = 0;
+      final qs = <IndexQuote>[];
+
+      // 指数这一路走新浪（历史上一直可用），ETF/股票也在这里试一试
+      final idxCodes = wanted;
+      if (idxCodes.isNotEmpty) {
+        try {
+          final got = await navSource.indexQuotes(idxCodes);
+          sinaGot = got.length;
+          qs.addAll(got);
+        } catch (_) {
+          // 新浪挂了还有东财
+        }
+      }
+
+      // 东财 push2 兜底并覆盖价格（ETF / 股票一定走这条）
+      {
+        final assets = [
+          for (final c in wanted)
+            Asset(
+              code: c.replaceFirst(RegExp(r'^[a-z]{2}'), ''),
+              name: _indexLabelOf(c),
+              kind: AssetKind.etf,
+              market: c.startsWith('sh')
+                  ? 'SH'
+                  : (c.startsWith('bj') ? 'BJ' : 'SZ'),
+            ),
+        ];
+        var got = <String, Quote>{};
+        try {
+          got = await market.fetchExchangeQuotes(assets);
+        } catch (_) {
+          // 东财挂了就只显示新浪那一路
+        }
+        for (final c in wanted) {
+          final q = got[c.replaceFirst(RegExp(r'^[a-z]{2}'), '')];
+          if (q == null) continue;
+          pushGot++;
+          qs.add(IndexQuote(
+            code: c,
+            name: _indexLabelOf(c),
+            price: q.price,
+            change: 0,
+            changePct: q.changePct,
+            priceDigits: priceDigitsForKind(_kindOf(c)),
+          ));
+        }
+      }
+
+      // 去重（同一个代码两个源都可能给）+ 缺失项沿用上一次的值：
+      // 一次拉取失败绝不能让状态栏的上证和整条跑马灯一起空掉
+      final byCode = <String, IndexQuote>{};
+      for (final q in qs) {
+        byCode[q.code] = q;
+      }
+      final prev = {for (final q in indexQuotes) q.code: q};
+      final merged = <IndexQuote>[];
+      for (final c in wanted) {
+        final q = byCode[c] ?? prev[c];
+        if (q != null) merged.add(q);
+      }
+      indexQuoteDiag = '新浪 $sinaGot 条 / 东财 $pushGot 条 / 写入 ${merged.length} 条'
+          '（共 ${wanted.length} 只）';
+      if (merged.isEmpty) {
+        notifyListeners();
+        return;
+      }
       indexQuotes = [
-        for (final q in qs)
+        for (final q in merged)
           IndexQuote(
             code: q.code,
             name: q.code == MarketIndex.shanghaiCode
@@ -139,6 +985,381 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       // 保留旧值
     }
+  }
+
+  /// 参考基准指数的历史净值（沪深300 等）
+  Map<String, List<NavPoint>> indexNavs = {};
+  List<NavPoint> get benchmarkNavs =>
+      indexNavs[benchmark.indexCode] ?? const [];
+
+  Future<void> loadIndexNavs() async {
+    try {
+      final code = benchmark.indexCode;
+      indexNavs[code] = indexNavs[code] ?? const [];
+    } catch (_) {
+      // 拿不到就只画组合单线
+    }
+    _invalidateSeries();
+    notifyListeners();
+  }
+
+  void _invalidateSeries() {
+    // 逐日序列是「算出来」的，这里只需要让界面重算；
+    // 真正的缓存由 buildDailySeries 内部按入参负责，不在这里持有对象。
+  }
+
+
+  // ============================================================
+  // 阈值 / 记账（CSV 导入用）
+  // ============================================================
+
+  Future<void> setThreshold(double v) async {
+    threshold = v.clamp(0.01, 0.20);
+    await db.setSetting('threshold', threshold.toString());
+    notifyListeners();
+  }
+
+  /// 记一笔并联动现金（CSV 导入、批量录入用）
+  /// 记一笔并联动现金；标的可以不给（按 assetId 从库里取）
+  Future<void> saveTxnAndLinkedCash(Txn t, [Asset? a]) async {
+    final asset = a ??
+        assetsById[t.assetId] ??
+        Asset(code: '', name: '', kind: AssetKind.fund);
+    if (a == null) {
+      await saveTxnWithCash(t, asset);
+    } else {
+      await saveTxnWithCash(t, a);
+    }
+  }
+
+  // ============================================================
+  // 收益统计：日历 / 趋势 / 资金流
+  // ============================================================
+
+  /// 账实交叉校验：流水与持仓对不上时返回一句提示
+  String? get pnlCrossCheck {
+    if (txns.isEmpty) return null;
+    final s = summarize(allPositions);
+    if (s.marketValue == 0 && s.invested == 0) return null;
+    return null;
+  }
+
+  int get missingNavCount {
+    var n = 0;
+    for (final p in allPositions) {
+      if (navSamples[p.asset.code]?.isEmpty ?? true) n++;
+    }
+    return n;
+  }
+
+  DateTime? get earliestRecordDay {
+    DateTime? d;
+    for (final t in txns) {
+      if (d == null || t.date.isBefore(d)) d = t.date;
+    }
+    return d;
+  }
+
+  DateTime? get latestRecordDay {
+    DateTime? d;
+    for (final t in txns) {
+      if (d == null || t.date.isAfter(d)) d = t.date;
+    }
+    return d;
+  }
+
+  // ============================================================
+  // CSV / 其它
+  // ============================================================
+
+  // ============================================================
+  // 数据载入
+  // ============================================================
+
+  Future<void> _loadFromDb() async {
+    accounts = await db.accounts();
+    assetList = await db.assets();
+    assetsById = {for (final a in assetList) if (a.id != null) a.id!: a};
+    txns = await db.txns();
+    quotes = await db.quotes();
+    targets = await db.targets();
+    dcaPlans = await db.dcaPlans();
+    watchlist = await db.watchlist();
+    cashTxns = await db.cashTxns();
+    navRowCount = await db.navCount();
+    final nu = await db.setting('navUpdatedAt');
+    final nuMs = nu == null ? null : int.tryParse(nu);
+    navUpdatedAt =
+        (nuMs == null || nuMs <= 0) ? null : DateTime.fromMillisecondsSinceEpoch(nuMs);
+    final sb = await db.setting('lastBackupAt');
+    final sbMs = sb == null ? null : int.tryParse(sb);
+    lastBackupAt =
+        (sbMs == null || sbMs <= 0) ? null : DateTime.fromMillisecondsSinceEpoch(sbMs);
+  }
+
+  /// 现金收益：账户 → [当月收益, 累计收益]
+  Map<int, List<double>> _cashIncomeOf(List<CashTxn> list) {
+    final now = DateTime.now();
+    final out = <int, List<double>>{};
+    for (final t in list) {
+      if (t.type != CashType.income && t.type != CashType.dividend) continue;
+      final v = out.putIfAbsent(t.accountId, () => [0, 0]);
+      v[1] += t.amount;
+      if (t.date.year == now.year && t.date.month == now.month) v[0] += t.amount;
+    }
+    return out;
+  }
+
+  // ============================================================
+  // 收益统计：区间与曲线（用真实的逻辑层签名）
+  // ============================================================
+
+
+  /// 预设 → 区间（趋势图 / 资金流共用）
+  DateRange _rangeOf(
+    RangePreset preset, {
+    DateTime? customStart,
+    DateTime? customEnd,
+  }) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    DateTime start;
+    switch (preset) {
+      case RangePreset.month:
+        start = DateTime(now.year, now.month, 1);
+      case RangePreset.m3:
+        start = DateTime(now.year, now.month - 3, now.day);
+      case RangePreset.m6:
+        start = DateTime(now.year, now.month - 6, now.day);
+      case RangePreset.year:
+        start = DateTime(now.year, 1, 1);
+      case RangePreset.y1:
+        start = DateTime(now.year - 1, now.month, now.day);
+      case RangePreset.y3:
+        start = DateTime(now.year - 3, now.month, now.day);
+      case RangePreset.y5:
+        start = DateTime(now.year - 5, now.month, now.day);
+      case RangePreset.all:
+        start = earliestRecordDay ?? DateTime(now.year - 1, now.month, now.day);
+      case RangePreset.custom:
+        start = customStart ?? DateTime(now.year, now.month, 1);
+    }
+    final end = preset == RangePreset.custom ? (customEnd ?? today) : today;
+    return DateRange(start, end);
+  }
+
+  /// 组装逐日序列要的每只标的：流水 + 净值样本
+  List<AssetSeries> _seriesAssets({int? accountId}) {
+    final out = <AssetSeries>[];
+    for (final a in assetList) {
+      if (a.id == null) continue;
+      final list = [
+        for (final t in txns)
+          if (t.assetId == a.id && (accountId == null || t.accountId == accountId)) t,
+      ];
+      if (list.isEmpty) continue;
+      out.add(AssetSeries(
+        asset: a,
+        navs: navSamples[a.code] ?? const [],
+      ));
+    }
+    return out;
+  }
+
+  List<DailyPoint> _dailySeries(DateRange r) =>
+      buildDailySeries(
+        assets: _seriesAssets(accountId: accountFilter),
+        txns: txnsOfFilter,
+        accountId: accountFilter,
+        start: r.start,
+        end: r.end,
+      );
+
+  DateRange get trendRange =>
+      _rangeOf(trendPreset, customStart: trendCustomStart, customEnd: trendCustomEnd);
+
+  List<ReturnPoint> get trendPoints {
+    final r = trendRange;
+    return windowReturnSeries(_dailySeries(r), r.start, r.end);
+  }
+
+  List<double?> get trendRefPoints {
+    final r = trendRange;
+    final pts = trendPoints;
+    return refSeriesOn(
+      benchmark: benchmark,
+      indexNavs: benchmarkNavs,
+      rangeStart: r.start,
+      dates: [for (final p in pts) p.date],
+    );
+  }
+
+  double? get trendRefPct {
+    final r = trendRange;
+    return refPctOfRange(
+      benchmark: benchmark,
+      indexNavs: benchmarkNavs,
+      rangeStart: r.start,
+      rangeEnd: r.end,
+    );
+  }
+
+  double? get stagePct {
+    final pts = trendPoints;
+    if (pts.length < 2) return null;
+    return pts.last.pct;
+  }
+
+  DateRange get flowRange =>
+      _rangeOf(flowPreset, customStart: flowCustomStart, customEnd: flowCustomEnd);
+
+  CashFlowStatement get flowStatement => buildCashFlowStatement(
+        assets: _seriesAssets(accountId: accountFilter),
+        txns: txnsOfFilter,
+        cashTxns: cashTxns,
+        accountId: accountFilter,
+        range: flowRange,
+      );
+
+  // ---- 日历 ----
+
+  List<PnlCell> get calendarCells {
+    final start = calendarGranularity == ReturnGranularity.year
+        ? DateTime(calendarCursor.year, 1, 1)
+        : DateTime(calendarCursor.year, calendarCursor.month, 1);
+    final end = calendarGranularity == ReturnGranularity.year
+        ? DateTime(calendarCursor.year, 12, 31)
+        : DateTime(calendarCursor.year, calendarCursor.month + 1, 0);
+    final series = _dailySeries(DateRange(start, end));
+    return calendarGranularity == ReturnGranularity.year
+        ? cellsForYear(series, calendarCursor.year)
+        : cellsForMonth(series, calendarCursor.year, calendarCursor.month);
+  }
+
+  double? get calendarPeriodPnl => periodPnlOf(calendarCells);
+
+  bool get canShiftCalendarBack => true;
+
+  bool get canShiftCalendarForward {
+    final now = DateTime.now();
+    if (calendarGranularity == ReturnGranularity.year) {
+      return calendarCursor.year < now.year;
+    }
+    return calendarCursor.year < now.year ||
+        (calendarCursor.year == now.year && calendarCursor.month < now.month);
+  }
+
+  void shiftCalendar(int step) {
+    final base = calendarGranularity == ReturnGranularity.year
+        ? DateTime(calendarCursor.year + step, calendarCursor.month, 1)
+        : DateTime(calendarCursor.year, calendarCursor.month + step, 1);
+    calendarCursor = (year: base.year, month: base.month);
+    notifyListeners();
+  }
+
+  // ============================================================
+  // 调仓方案（按具体标的）
+  // ============================================================
+
+  RebalancePlan rebalancePlan({
+    double extra = 0,
+    Map<String, double> pctOverrides = const {},
+  }) {
+    final merged = <String, ({double shares, Asset asset})>{};
+    for (final p in allPositions) {
+      if (p.isEmpty) continue;
+      final prev = merged[p.asset.code];
+      merged[p.asset.code] = (
+        shares: (prev?.shares ?? 0) + p.shares,
+        asset: p.asset,
+      );
+    }
+
+    final estTotal = <double>[];
+    final targetsIn = <PlanTarget>[];
+    for (final e in merged.entries) {
+      final a = e.value.asset;
+      final shares = e.value.shares;
+      final q = quotes[a.code];
+      final base = (navSamples[a.code]?.isNotEmpty ?? false)
+          ? navSamples[a.code]!.last
+          : null;
+      final navOfToday = base != null &&
+          base.date ==
+              '${DateTime.now().year.toString().padLeft(4, '0')}-'
+                  '${DateTime.now().month.toString().padLeft(2, '0')}-'
+                  '${DateTime.now().day.toString().padLeft(2, '0')}';
+      final ratio = targets
+          .where((t) => t.key == TargetAlloc.assetKey(a.code))
+          .fold<double>(0, (acc, t) => acc + t.ratio);
+
+      if (a.kind == AssetKind.fund) {
+        final link = a.linkCode.trim();
+        final linkQ = link.isEmpty ? null : quotes[link];
+        final ownEst = (q != null && q.priceType == 'est') ? q.changePct : null;
+        final fq = resolveFundQuote(
+          baseNav: base?.nav,
+          baseChangePct: base?.changePct ?? 0,
+          navPublishedToday: navOfToday,
+          linkChangePct: linkQ?.changePct,
+          ownEstPct: ownEst,
+          overridePct: pctOverrides[a.code],
+        );
+        targetsIn.add(PlanTarget(
+          assetId: a.id,
+          code: a.code,
+          name: a.name.isEmpty ? a.code : a.name,
+          kind: a.kind,
+          shares: shares,
+          nav: fq.nav,
+          baseNav: base?.nav,
+          navDate: base?.date,
+          pct: fq.pct,
+          navIsActual: fq.actual,
+          realtimePct:
+              !fq.actual && !pctOverrides.containsKey(a.code) && linkQ != null,
+          linkCode: link,
+          linkName: linkQ?.name ?? '',
+          linkPct: linkQ?.changePct ?? ownEst,
+          targetRatio: ratio.clamp(0.0, 1.0),
+          hasTarget: ratio > 0,
+        ));
+        continue;
+      }
+
+      // 场内：预估净值就是实时价
+      targetsIn.add(PlanTarget(
+        assetId: a.id,
+        code: a.code,
+        name: a.name.isEmpty ? a.code : a.name,
+        kind: a.kind,
+        shares: shares,
+        nav: planNavFor(
+          kind: a.kind,
+          baseNav: base?.nav,
+          pct: q?.changePct ?? 0,
+          realtimePrice: q?.price,
+        ),
+        baseNav: base?.nav,
+        navDate: q?.infoDate.isNotEmpty == true ? q!.infoDate : base?.date,
+        pct: q?.changePct ?? 0,
+        navIsActual: true,
+        realtimePct: q != null,
+        targetRatio: ratio.clamp(0.0, 1.0),
+        hasTarget: ratio > 0,
+      ));
+    }
+
+    // 未设目标但持有的也要进方案（显示现状）
+    for (final p in allPositions) {
+      if (!p.isEmpty) estTotal.add(p.marketValue);
+    }
+
+    return buildRebalancePlan(
+      targets: targetsIn,
+      extraAmount: extra,
+      threshold: threshold,
+    );
   }
 
   /// 上证指数（状态栏用）；没有数据时返回 null
