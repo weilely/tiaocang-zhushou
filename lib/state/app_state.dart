@@ -992,15 +992,13 @@ class AppState extends ChangeNotifier {
 
   /// 拉行情：**指数走大盘指数通道（新浪，状态栏的上证就走它）**，
   /// 没拿到的再用东财补（ETF / 股票），最后仍缺的沿用上一次的值。
-  /// 拉行情：**三类指标各走各的通道**
+  /// 拉行情：三类指标各走各的通道，且**优先用「持仓行情」那条已验证的取数路**
   ///
-  /// - 大盘指数 / 行业指数 → 新浪大盘指数通道（`s_` 前缀，一次拿全）
-  /// - 场内基金（ETF / LOF） → 东财 push2 批量（和持仓行情同一条通道）
+  /// - 指数（大盘 + 行业）：东财 push2 批量 → 拿不到再用新浪大盘指数通道补
+  /// - 场内基金（ETF / LOF）：同样走东财 push2（与持仓行情完全同一条路）
   ///
-  /// 每类独立 try/catch：一类挂了不影响其它两类；这次没取到的沿用上一次的值，
-  /// 所以任何一次失败都不会让跑马灯（或状态栏的上证）空掉。
+  /// 每类独立 try/catch；这次没取到的沿用上一次的值，所以不会把缓存写残。
   Future<void> refreshIndexQuotes() async {
-    // 兜底：万一池子/缓存还没读进来（界面先起来或并发），先补一次
     if (indexQuotes.isEmpty) await loadMarketIndices();
     await db.setSetting('indexQuotePing', DateTime.now().toIso8601String());
 
@@ -1018,35 +1016,81 @@ class AppState extends ChangeNotifier {
 
     String label(String c) =>
         c == MarketIndex.shanghaiCode ? '上证指数' : _indexLabelOf(c);
+    String bare(String c) => c.replaceFirst(RegExp(r'^[a-z]{2}'), '');
+    String market(String c) =>
+        c.startsWith('sh') ? 'SH' : (c.startsWith('bj') ? 'BJ' : 'SZ');
 
-    // 1) 指数（大盘 + 行业）走新浪大盘指数通道
+    // 走「持仓行情」那条路：对指数、ETF 一视同仁，且已在真机上验证可用
+    Future<Map<String, Quote>> viaHoldingsPath(List<String> codes) async {
+      if (codes.isEmpty) return const {};
+      final assets = [
+        for (final c in codes)
+          Asset(
+            code: bare(c),
+            name: label(c),
+            kind: AssetKind.etf,
+            market: market(c),
+          ),
+      ];
+      final got = await market.fetchAll(assets);
+      final mapped = <String, Quote>{};
+      for (final c in codes) {
+        final q = got[bare(c)];
+        if (q != null) mapped[c] = q;
+      }
+      return mapped;
+    }
+
+    // 1) 指数（大盘 + 行业）
     final idx = [...broad, ...sector];
     if (idx.isNotEmpty) {
       var ok = 0;
       try {
-        final got = await navSource.indexQuotes(idx);
-        for (final q in got) {
+        final got = await viaHoldingsPath(idx);
+        for (final c in idx) {
+          final q = got[c];
+          if (q == null) continue;
           out.add(IndexQuote(
-            code: q.code,
-            name: label(q.code),
+            code: c,
+            name: label(c),
             price: q.price,
-            change: q.change,
+            change: 0,
             changePct: q.changePct,
             priceDigits: 2,
           ));
           ok++;
         }
       } catch (_) {
-        // 这一类失败：下面会沿用旧值
+        // 下面还有新浪兜底
+      }
+      // 新浪大盘指数通道兜底（上证这类指数它一向可用）
+      final left = [for (final c in idx) if (!out.any((q) => q.code == c)) c];
+      if (left.isNotEmpty) {
+        try {
+          final got = await navSource.indexQuotes(left);
+          for (final q in got) {
+            out.add(IndexQuote(
+              code: q.code,
+              name: label(q.code),
+              price: q.price,
+              change: q.change,
+              changePct: q.changePct,
+              priceDigits: 2,
+            ));
+            ok++;
+          }
+        } catch (_) {
+          // 两路都失败：下面沿用旧值
+        }
       }
       marks.add('指数 $ok/${idx.length}');
     }
 
-    // 2) 场内基金走东财 push2
+    // 2) 场内基金（ETF / LOF）
     if (etf.isNotEmpty) {
       var ok = 0;
       try {
-        final got = await market.fetchIndexQuotes(etf);
+        final got = await viaHoldingsPath(etf);
         for (final c in etf) {
           final q = got[c];
           if (q == null) continue;
@@ -1061,12 +1105,12 @@ class AppState extends ChangeNotifier {
           ok++;
         }
       } catch (_) {
-        // 同上
+        // 沿用旧值
       }
       marks.add('场内 $ok/${etf.length}');
     }
 
-    // 3) 这一次没取到的沿用上一次的值
+    // 3) 这次没取到的沿用上一次的值
     final seen = {for (final q in out) q.code};
     for (final c in [...broad, ...sector, ...etf]) {
       if (seen.contains(c)) continue;
