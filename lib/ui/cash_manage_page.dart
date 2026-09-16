@@ -328,6 +328,8 @@ class _CashManagePageState extends State<CashManagePage> {
     final principal = TextEditingController();
     final rate = TextEditingController();
     final days = TextEditingController(text: '30');
+    // 关联基金（可选）：选了就把简称写进备注，现金流水一眼看清
+    var pickedAsset = '';
     var date = DateTime.now();
 
     await showModalBottomSheet<void>(
@@ -432,6 +434,24 @@ class _CashManagePageState extends State<CashManagePage> {
                     controller: note,
                     decoration: const InputDecoration(labelText: '备注（可选）'),
                   ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: pickedAsset,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: '关联基金（可选，显示简称）',
+                    ),
+                    items: [
+                      const DropdownMenuItem(value: '', child: Text('不关联')),
+                      for (final a in st.assetList)
+                        DropdownMenuItem(
+                          value: a.code,
+                          child: Text(st.displayShortOf(a.code),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                    ],
+                    onChanged: (v) => setSheet(() => pickedAsset = v ?? ''),
+                  ),
                   const SizedBox(height: 20),
                   FilledButton(
                     style: FilledButton.styleFrom(
@@ -455,7 +475,12 @@ class _CashManagePageState extends State<CashManagePage> {
                         type: type,
                         amount: signed,
                         date: date,
-                        note: note.text.trim(),
+                        note: () {
+                          final n = note.text.trim();
+                          if (pickedAsset.isEmpty) return n;
+                          final s = st.displayShortOf(pickedAsset);
+                          return n.isEmpty ? s : ' · ${n}';
+                        }(),
                       ));
                       if (ctx.mounted) Navigator.of(ctx).pop();
                     },
