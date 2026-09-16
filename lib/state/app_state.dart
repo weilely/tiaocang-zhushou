@@ -918,21 +918,24 @@ class AppState extends ChangeNotifier {
             ? ''
             : MarketService.marketFor(r.code),
       ));
-      var accountId = accounts.isEmpty ? 0 : accounts.first.id!;
-      for (final a in accounts) {
-        if (a.name == r.accountName && a.id != null) accountId = a.id!;
-      }
-      await db.saveTxn(Txn(
-        accountId: accountId,
-        assetId: asset.id!,
-        type: r.type,
-        date: r.date,
-        amount: r.amount,
-        shares: r.shares,
-        price: r.price,
-        fee: r.fee,
-        note: r.note,
-      ));
+      // 账户关联：按 CSV 里的账户名取；库里没有就**新建同名账户**，
+      // 不能把不同账户的流水都塞进第一个账户
+      final accountId = await ensureAccountByName(r.accountName);
+      // 走联动入账：导入的交易同样要记入现金流水
+      await saveTxnAndLinkedCash(
+        Txn(
+          accountId: accountId,
+          assetId: asset.id!,
+          type: r.type,
+          date: r.date,
+          amount: r.amount,
+          shares: r.shares,
+          price: r.price,
+          fee: r.fee,
+          note: r.note,
+        ),
+        asset,
+      );
     }
     txns = await db.txns();
     assetList = await db.assets();
