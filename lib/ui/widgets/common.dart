@@ -299,6 +299,35 @@ class CollapsibleSectionCard extends StatefulWidget {
 class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
   late bool _open = widget.initiallyExpanded;
 
+  /// 折叠记忆的键：card:账户管理（标题里的「（2）」这类计数不算）
+  String get _key =>
+      widget.storageKey ??
+      'card:';
+
+  @override
+  void initState() {
+    super.initState();
+    _restore();
+  }
+
+  /// 读回上次的折叠状态（读不到就用默认值）
+  Future<void> _restore() async {
+    try {
+      final v = await AppDatabase.instance.setting(_key);
+      if (!mounted || v == null) return;
+      final open = v == '1';
+      if (open != _open) setState(() => _open = open);
+    } catch (_) {
+      // 读不到就按默认
+    }
+  }
+
+  void _toggle() {
+    setState(() => _open = !_open);
+    // 存起来，下次启动保持不变
+    AppDatabase.instance.setSetting(_key, _open ? '1' : '0');
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);

@@ -416,15 +416,6 @@ class AppState extends ChangeNotifier {
   /// 跑马灯要显示的行情（排除固定在标题栏的上证）
 
   /// 某个指标的类型（决定价格小数位、走哪个行情源）
-  String _kindOf(String code) {
-    for (final e in indexPool) {
-      if (e.code == code && e.kind.isNotEmpty) return e.kind;
-    }
-    if (isIndexLikeCode(code)) return 'index';
-    if (RegExp(r'^(sh5|sz1)').hasMatch(code)) return 'etf';
-    if (RegExp(r'^(sh0[1-9]|sz0[1-9])').hasMatch(code)) return 'fund';
-    return 'stock';
-  }
 
   /// 某个代码在池子/预设里的展示名（跑马灯用）
   String _indexLabelOf(String code) {
