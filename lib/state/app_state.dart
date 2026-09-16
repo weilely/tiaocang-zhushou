@@ -861,6 +861,19 @@ class AppState extends ChangeNotifier {
       lastMessage = '简称已设为「$s」';
     }
     notifyListeners();
+    // 同步这只基金已有的联动流水备注，历史记录也跟着变简洁
+    for (final c in cashTxns) {
+      final src = txns.where((t) => t.id == c.srcTxnId).toList();
+      if (src.isEmpty) continue;
+      final ac = assetsById[src.first.assetId]?.code ?? '';
+      if (ac != code) continue;
+      final label = src.first.type.label;
+      final want = s.isEmpty ? label : '$s · $label';
+      if (c.note == want) continue;
+      c.note = want;
+      await db.saveCashTxn(c);
+    }
+    cashTxns = await db.cashTxns();
   }
 
   Future<void> loadCash() async {
