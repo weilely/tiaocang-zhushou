@@ -641,6 +641,7 @@ class AppState extends ChangeNotifier {
     unawaited(runDueDca());
     // 先读现金；若一条都没有而交易不少，说明是老数据，按交易补一次联动
     unawaited(loadCash().then((_) => rebuildCashFromTxns()));
+    unawaited(loadAssetShorts());
     unawaited(loadNavSamples());
   }
 
@@ -800,6 +801,59 @@ class AppState extends ChangeNotifier {
   // ============================================================
   // 现金
   // ============================================================
+
+  // ============================================================
+  // 基金简称（详情页可设；现金流水里显示，简洁明了）
+  // ============================================================
+
+  /// 代码 → 简称。存在 settings 里（键 `assetShort:<代码>`），
+  /// 不动表结构，老数据自动为空。
+  final Map<String, String> assetShorts = {};
+
+  String assetShortOf(String code) => assetShorts[code] ?? '';
+
+  /// 显示用的短名：简称 → 标的名称 → 代码
+  String displayShortOf(String code) {
+    final s = assetShortOf(code);
+    if (s.isNotEmpty) return s;
+    for (final a in assetList) {
+      if (a.code != code) continue;
+      final n = a.name.trim();
+      return n.isEmpty ? code : n;
+    }
+    return code;
+  }
+
+  Future<void> loadAssetShorts() async {
+    try {
+      final all = await db.allSettings();
+      assetShorts
+        ..clear()
+        ..addEntries([
+          for (final e in all.entries)
+            if (e.key.startsWith('assetShort:') && e.value.trim().isNotEmpty)
+              MapEntry(e.key.substring('assetShort:'.length), e.value.trim()),
+        ]);
+    } catch (_) {
+      // 读不到就当没设过
+    }
+    notifyListeners();
+  }
+
+  /// 设/清简称（传空串即清空）
+  Future<void> setAssetShort(String code, String short) async {
+    final s = short.trim();
+    if (s.isEmpty) {
+      assetShorts.remove(code);
+      await db.setSetting('assetShort:$code', '');
+      lastMessage = '已清空简称';
+    } else {
+      assetShorts[code] = s;
+      await db.setSetting('assetShort:$code', s);
+      lastMessage = '简称已设为「$s」';
+    }
+    notifyListeners();
+  }
 
   Future<void> loadCash() async {
     cashTxns = await db.cashTxns();

@@ -41,6 +41,13 @@ class AssetDetailPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 16,
+        actions: [
+          IconButton(
+            tooltip: '设置简称',
+            icon: const Icon(Icons.drive_file_rename_outline),
+            onPressed: () => _editShort(context, state, asset),
+          ),
+        ],
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -70,6 +77,37 @@ class AssetDetailPage extends StatelessWidget {
   }
 
   // ---------------- 顶部交易功能 ----------------
+
+  /// 设置这只基金的简称（现金流水里显示，简洁明了）
+  Future<void> _editShort(
+      BuildContext context, AppState state, Asset asset) async {
+    final ctrl = TextEditingController(text: state.assetShortOf(asset.code));
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('基金简称'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '例如：价值100',
+            helperText: '现金流水里显示它；留空即清空',
+            isDense: true,
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('保存')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await state.setAssetShort(asset.code, ctrl.text);
+  }
 
   Widget _actionBar(BuildContext context, Asset asset, Position p) {
     return Padding(
