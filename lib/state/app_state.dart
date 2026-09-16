@@ -985,7 +985,7 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       // 取数失败也要留痕：设置页「行情指标」里会显示，方便定位
-      indexQuoteDiag = '取数失败：';
+      indexQuoteDiag = '取数失败：${e}';
       notifyListeners();
     }
   }
