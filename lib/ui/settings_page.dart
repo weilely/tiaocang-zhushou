@@ -616,7 +616,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (st.indexQuoteDiag.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text('上次取数：', style: hint),
+              child: Text('上次取数：${st.indexQuoteDiag}', style: hint),
             ),
           const SizedBox(height: 10),
           Row(
