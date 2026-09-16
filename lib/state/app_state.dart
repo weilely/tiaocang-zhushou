@@ -1020,7 +1020,7 @@ class AppState extends ChangeNotifier {
     String marketOf(String c) =>
         c.startsWith('sh') ? 'SH' : (c.startsWith('bj') ? 'BJ' : 'SZ');
 
-    // 走「持仓行情」那条路：对指数、ETF 一视同仁，且已在真机上验证可用
+    // 走东财 push2：指数 / ETF / 股票一视同仁，且**不会**混进基金净值
     Future<Map<String, Quote>> viaHoldingsPath(List<String> codes) async {
       if (codes.isEmpty) return const {};
       final assets = [
@@ -1032,7 +1032,9 @@ class AppState extends ChangeNotifier {
             market: marketOf(c),
           ),
       ];
-      final got = await market.fetchAll(assets);
+      // 只走 push2：etchAll 在失败时会用基金净值接口兜底， 00001 这种代码
+      // 会被当成同名基金返回单位净值（1.296 那种），指数就被写坏了
+      final got = await market.fetchExchangeQuotes(assets);
       final mapped = <String, Quote>{};
       for (final c in codes) {
         final q = got[bare(c)];
