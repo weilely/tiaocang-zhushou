@@ -246,6 +246,26 @@ class AppState extends ChangeNotifier {
   // ============================================================
 
   /// 取（或新建）一只标的，返回它的 id
+  /// 按名字取账户 id；不存在就新建（CSV 导入时按账户名关联）
+  Future<int> ensureAccountByName(String name) async {
+    final n = name.trim();
+    if (n.isNotEmpty) {
+      for (final a in accounts) {
+        if (a.name == n && a.id != null) return a.id!;
+      }
+      final id = await db.saveAccount(Account(name: n, note: '导入自 CSV'));
+      accounts = await db.accounts();
+      return id;
+    }
+    for (final a in accounts) {
+      if (a.id != null) return a.id!;
+    }
+    final id = await db.saveAccount(Account(name: '默认账户', note: ''));
+    accounts = await db.accounts();
+    return id;
+  }
+
+  /// 标的
   Future<Asset> ensureAsset(Asset a) async {
     final id = await db.upsertAsset(a);
     assetList = await db.assets();
@@ -894,7 +914,9 @@ class AppState extends ChangeNotifier {
         code: r.code,
         name: r.assetName,
         kind: r.kind,
-        market: MarketService.marketFor(r.code),
+        market: r.kind == AssetKind.fund
+            ? ''
+            : MarketService.marketFor(r.code),
       ));
       var accountId = accounts.isEmpty ? 0 : accounts.first.id!;
       for (final a in accounts) {
