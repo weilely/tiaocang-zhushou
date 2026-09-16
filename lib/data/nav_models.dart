@@ -309,6 +309,18 @@ class IndexEntry {
     this.kind = '',
   });
 
+  /// 指标大类：`broad` 大盘指数 / `sector` 行业指数 / `etf` 场内基金
+  ///
+  /// 由 `kind` 与预设表推出来，不必额外存字段：
+  /// 三类各走各的行情通道（指数走新浪大盘指数、场内基金走东财）。
+  String get group {
+    if (kind == 'etf' || kind == 'stock' || kind == 'fund') return 'etf';
+    for (final p in MarketIndex.presets) {
+      if (p.code == code) return 'broad';
+    }
+    return 'sector';
+  }
+
   String get label => short.isNotEmpty
       ? short
       : (name.isNotEmpty ? name : code);

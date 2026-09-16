@@ -1001,47 +1001,62 @@ class AppState extends ChangeNotifier {
 
   /// 拉行情：**指数走大盘指数通道（新浪，状态栏的上证就走它）**，
   /// 没拿到的再用东财补（ETF / 股票），最后仍缺的沿用上一次的值。
+  /// 拉行情：**三类指标各走各的通道**
+  ///
+  /// - 大盘指数 / 行业指数 → 新浪大盘指数通道（`s_` 前缀，一次拿全）
+  /// - 场内基金（ETF / LOF） → 东财 push2 批量（和持仓行情同一条通道）
+  ///
+  /// 每类独立 try/catch：一类挂了不影响其它两类；这次没取到的沿用上一次的值，
+  /// 所以任何一次失败都不会让跑马灯（或状态栏的上证）空掉。
   Future<void> refreshIndexQuotes() async {
-    // 兜底：万一缓存还没读进来（界面先起来/并发），这里先补一次
+    // 兜底：万一池子/缓存还没读进来（界面先起来或并发），先补一次
     if (indexQuotes.isEmpty) await loadMarketIndices();
-    // 留痕：只要能进这个方法就落一条时间戳（排查"到底有没有被调用"）
     await db.setSetting('indexQuotePing', DateTime.now().toIso8601String());
-    try {
-    final wanted = <String>{
+
+    final pool = activeIndexEntries;
+    final broad = <String>[
       MarketIndex.shanghaiCode,
-      for (final e in activeIndexEntries) e.code,
-    }.toList();
+      for (final e in pool)
+        if (e.group == 'broad' && e.code != MarketIndex.shanghaiCode) e.code,
+    ];
+    final sector = [for (final e in pool) if (e.group == 'sector') e.code];
+    final etf = [for (final e in pool) if (e.group == 'etf') e.code];
+    final prev = {for (final q in indexQuotes) q.code: q};
     final out = <IndexQuote>[];
-    final seen = <String>{};
-    final problems = <String>[];
+    final marks = <String>[];
 
     String label(String c) =>
         c == MarketIndex.shanghaiCode ? '上证指数' : _indexLabelOf(c);
 
-    // 1) 大盘指数通道（新浪精简行情）：一次拿全，上证就在这里
-    try {
-      final sina = await navSource.indexQuotes(wanted);
-      for (final q in sina) {
-        out.add(IndexQuote(
-          code: q.code,
-          name: label(q.code),
-          price: q.price,
-          change: q.change,
-          changePct: q.changePct,
-          priceDigits: priceDigitsForKind(_kindOf(q.code)),
-        ));
-        seen.add(q.code);
+    // 1) 指数（大盘 + 行业）走新浪大盘指数通道
+    final idx = [...broad, ...sector];
+    if (idx.isNotEmpty) {
+      var ok = 0;
+      try {
+        final got = await navSource.indexQuotes(idx);
+        for (final q in got) {
+          out.add(IndexQuote(
+            code: q.code,
+            name: label(q.code),
+            price: q.price,
+            change: q.change,
+            changePct: q.changePct,
+            priceDigits: 2,
+          ));
+          ok++;
+        }
+      } catch (_) {
+        // 这一类失败：下面会沿用旧值
       }
-    } catch (e) {
-      problems.add('新浪 $e');
+      marks.add('指数 $ok/${idx.length}');
     }
 
-    // 2) 东财补新浪没给的（ETF / 股票）
-    final missing = [for (final c in wanted) if (!seen.contains(c)) c];
-    if (missing.isNotEmpty) {
+    // 2) 场内基金走东财 push2
+    if (etf.isNotEmpty) {
+      var ok = 0;
       try {
-        final got = await market.fetchIndexQuotes(missing);
-        for (final c in missing) {
+        final got = await market.fetchIndexQuotes(etf);
+        for (final c in etf) {
           final q = got[c];
           if (q == null) continue;
           out.add(IndexQuote(
@@ -1050,18 +1065,19 @@ class AppState extends ChangeNotifier {
             price: q.price,
             change: 0,
             changePct: q.changePct,
-            priceDigits: priceDigitsForKind(_kindOf(c)),
+            priceDigits: 4,
           ));
-          seen.add(c);
+          ok++;
         }
-      } catch (e) {
-        problems.add('东财 $e');
+      } catch (_) {
+        // 同上
       }
+      marks.add('场内 $ok/${etf.length}');
     }
 
-    // 3) 仍缺的沿用上一次的值
-    final prev = {for (final q in indexQuotes) q.code: q};
-    for (final c in wanted) {
+    // 3) 这一次没取到的沿用上一次的值
+    final seen = {for (final q in out) q.code};
+    for (final c in [...broad, ...sector, ...etf]) {
       if (seen.contains(c)) continue;
       final was = prev[c];
       if (was != null) out.add(was);
@@ -1071,10 +1087,8 @@ class AppState extends ChangeNotifier {
     final now = DateTime.now();
     final stamp = '${now.hour.toString().padLeft(2, '0')}:'
         '${now.minute.toString().padLeft(2, '0')}';
-    indexQuoteDiag = out.isEmpty
-        ? '没取到（$stamp）${problems.isEmpty ? '' : ' ${problems.join(' / ')}'}'
-        : '取到 ${out.length}/${wanted.length}（$stamp）'
-            '${problems.isEmpty ? '' : ' ${problems.join(' / ')}'}';
+    indexQuoteDiag = '${marks.join(' · ')}（$stamp）';
+    await db.setSetting('indexQuoteDiag', indexQuoteDiag);
 
     if (seen.isNotEmpty) {
       await db.setSetting(
@@ -1085,10 +1099,6 @@ class AppState extends ChangeNotifier {
         ]),
       );
     }
-    } catch (e) {
-      indexQuoteDiag = '异常：$e';
-    }
-    await db.setSetting('indexQuoteDiag', indexQuoteDiag);
     notifyListeners();
   }
 
