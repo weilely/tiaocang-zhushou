@@ -888,6 +888,9 @@ class AppState extends ChangeNotifier {
   /// 拉行情：**指数走大盘指数通道（新浪，状态栏的上证就走它）**，
   /// 没拿到的再用东财补（ETF / 股票），最后仍缺的沿用上一次的值。
   Future<void> refreshIndexQuotes() async {
+    // 留痕：只要能进这个方法就落一条时间戳（排查"到底有没有被调用"）
+    await db.setSetting('indexQuotePing', DateTime.now().toIso8601String());
+    try {
     final wanted = <String>{
       MarketIndex.shanghaiCode,
       for (final e in activeIndexEntries) e.code,
@@ -966,8 +969,13 @@ class AppState extends ChangeNotifier {
         ]),
       );
     }
+    } catch (e) {
+      indexQuoteDiag = '异常：$e';
+    }
+    await db.setSetting('indexQuoteDiag', indexQuoteDiag);
     notifyListeners();
   }
+
   /// 参考基准指数的历史净值（沪深300 等）
   Map<String, List<NavPoint>> indexNavs = {};
   List<NavPoint> get benchmarkNavs =>

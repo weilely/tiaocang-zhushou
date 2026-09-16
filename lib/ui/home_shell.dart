@@ -70,10 +70,12 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _syncIndexTimer();
-    // 界面一起来就先拉一次行情（大盘指数通道），不依赖 init 的执行顺序
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // 界面一起来就拉行情：不走 init 的链路，直接调用
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      unawaited(context.read<AppState>().refreshIndexQuotes());
+      final st = context.read<AppState>();
+      await st.db.setSetting('shellPing', DateTime.now().toIso8601String());
+      await st.refreshIndexQuotes();
     });
   }
 
