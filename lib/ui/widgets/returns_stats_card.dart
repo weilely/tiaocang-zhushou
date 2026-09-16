@@ -237,7 +237,7 @@ class _TrendView extends StatelessWidget {
           onTap: () => _pickBenchmark(context, st),
         ),
         const SizedBox(height: 12),
-        if (range == null || points.length < 2)
+        if (points.length < 2)
           _emptyHint(context, '该区间还没有净值数据，去关注页刷新净值')
         else ...[
           // 浮动提示现在画在图表内部（设计稿是图上一个深色浮层），
@@ -309,7 +309,7 @@ class _TrendView extends StatelessWidget {
     final earliest = st.earliestRecordDay ?? now.subtract(const Duration(days: 365));
     final start = await showCnDatePicker(
       context: context,
-      initialDate: st.trendRange?.start ?? earliest,
+      initialDate: st.trendRange.start,
       firstDate: earliest,
       lastDate: now,
       title: '选择起始日期',
@@ -317,7 +317,7 @@ class _TrendView extends StatelessWidget {
     if (start == null || !context.mounted) return;
     final end = await showCnDatePicker(
       context: context,
-      initialDate: st.trendRange?.end ?? now,
+      initialDate: st.trendRange.end,
       firstDate: start,
       lastDate: now,
       title: '选择结束日期',
@@ -671,7 +671,7 @@ class _FlowView extends StatelessWidget {
         st.earliestRecordDay ?? now.subtract(const Duration(days: 365));
     final start = await showCnDatePicker(
       context: context,
-      initialDate: st.flowRange?.start ?? earliest,
+      initialDate: st.flowRange.start,
       firstDate: earliest,
       lastDate: now,
       title: '选择起始日期',
@@ -679,7 +679,7 @@ class _FlowView extends StatelessWidget {
     if (start == null || !context.mounted) return;
     final end = await showCnDatePicker(
       context: context,
-      initialDate: st.flowRange?.end ?? now,
+      initialDate: st.flowRange.end,
       firstDate: start,
       lastDate: now,
       title: '选择结束日期',
