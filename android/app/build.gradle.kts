@@ -43,7 +43,7 @@ android {
         // 正式发布用 key.properties 里的签名；文件不存在时退回 debug 便于本机调试
         signingConfig = if (keystoreProps.getProperty("storeFile") != null) {
             signingConfigs.create("release") {
-                storeFile = file("../" + keystoreProps.getProperty("storeFile"))
+                storeFile = file(keystoreProps.getProperty("storeFile"))
                 storePassword = keystoreProps.getProperty("storePassword")
                 keyAlias = keystoreProps.getProperty("keyAlias")
                 keyPassword = keystoreProps.getProperty("keyPassword")
