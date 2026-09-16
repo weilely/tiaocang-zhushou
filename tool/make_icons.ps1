@@ -14,7 +14,8 @@ param(
   [string]$Source = 'E:\DSH\pic\微信图片_20260916143726_12_23.png',
   [int]$Tolerance = 20,
   [double]$LegacyRatio = 0.77,
-  [double]$AdaptiveRatio = 0.60
+  [double]$AdaptiveRatio = 0.60,
+  [switch]$FullBleed = $true
 )
 
 $ErrorActionPreference = 'Stop'
@@ -82,7 +83,7 @@ for ($y = 0; $y -lt $h; $y += 2) {
   }
 }
 if ($maxX -lt 0) { throw '没找到内容：容差可能太大' }
-$srcRect = [System.Drawing.Rectangle]::new($minX, $minY, ($maxX - $minX + 1), ($maxY - $minY + 1))
+$srcRect = if ($FullBleed) { [System.Drawing.Rectangle]::new(0, 0, $w, $h) } else { [System.Drawing.Rectangle]::new($minX, $minY, ($maxX - $minX + 1), ($maxY - $minY + 1)) }
 Write-Host "内容包围盒：$($srcRect.Width)x$($srcRect.Height) @ ($minX,$minY)"
 
 # ---------- 出图 ----------

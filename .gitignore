@@ -6,3 +6,5 @@ android/.gradle/
 android/local.properties
 *.apk
 integration_test/*.bak
+android/key.properties
+android/app/*.jks

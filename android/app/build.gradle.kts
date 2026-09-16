@@ -1,3 +1,10 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) FileInputStream(f).use { load(it) }
+}
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -33,7 +40,17 @@ android {
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+        // 正式发布用 key.properties 里的签名；文件不存在时退回 debug 便于本机调试
+        signingConfig = if (keystoreProps.getProperty("storeFile") != null) {
+            signingConfigs.create("release") {
+                storeFile = file("../" + keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        } else {
+            signingConfigs.getByName("debug")
+        }
             // ML Kit 引用了未打包的语种模型类，需要 proguard-rules.pro 里的 -dontwarn
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
