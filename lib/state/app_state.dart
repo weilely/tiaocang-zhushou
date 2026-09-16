@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:local_auth/local_auth.dart';
 
 import '../data/backup_store.dart';
 import '../data/db.dart';
@@ -650,6 +651,7 @@ class AppState extends ChangeNotifier {
     // 先读现金；若一条都没有而交易不少，说明是老数据，按交易补一次联动
     unawaited(loadCash().then((_) => rebuildCashFromTxns()));
     unawaited(loadAssetShorts());
+    unawaited(loadBiometric());
     unawaited(loadNavSamples());
   }
 
@@ -816,6 +818,43 @@ class AppState extends ChangeNotifier {
 
   /// 代码 → 简称。存在 settings 里（键 `assetShort:<代码>`），
   /// 不动表结构，老数据自动为空。
+  // ============================================================
+  // 安全设置：生物识别解锁
+  // ============================================================
+
+  /// 是否启用「启动 / 回到前台时用指纹或面容解锁」
+  bool biometricEnabled = false;
+
+  /// 当前是否处于锁定态（由 BiometricGate 使用）
+  bool locked = false;
+
+  void setLocked(bool v) {
+    if (locked == v) return;
+    locked = v;
+    notifyListeners();
+  }
+
+  Future<void> loadBiometric() async {
+    biometricEnabled = (await db.setting('biometricEnabled') ?? '0') == '1';
+    notifyListeners();
+  }
+
+  Future<void> setBiometric(bool v) async {
+    biometricEnabled = v;
+    await db.setSetting('biometricEnabled', v ? '1' : '0');
+    lastMessage = v ? '已开启生物识别解锁' : '已关闭生物识别解锁';
+    notifyListeners();
+  }
+
+  /// 本机是否具备可用的人脸 / 指纹
+  Future<bool> biometricAvailable() async {
+    try {
+      final auth = LocalAuthentication();
+      return await auth.canCheckBiometrics || await auth.isDeviceSupported();
+    } catch (_) {
+      return false;
+    }
+  }
   final Map<String, String> assetShorts = {};
 
   String assetShortOf(String code) => assetShorts[code] ?? '';
