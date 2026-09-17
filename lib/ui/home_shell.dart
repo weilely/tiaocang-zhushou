@@ -157,15 +157,18 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                 ),
               )
             : null,
+        // 设置页签没有可刷新的行情，状态栏不再显示刷新图标
         actions: [
-          IconButton(
-            tooltip: '刷新行情',
-            onPressed: state.refreshing ? null : () => state.refreshQuotes(),
-            icon: state.refreshing
-                ? const SizedBox(
-                    width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.refresh),
-          ),
+          if (_index != 4)
+            IconButton(
+              tooltip: '刷新行情',
+              onPressed: state.refreshing ? null : () => state.refreshQuotes(),
+              icon: state.refreshing
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.refresh),
+            ),
         ],
       ),
       body: IndexedStack(
