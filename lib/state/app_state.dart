@@ -2181,6 +2181,10 @@ class AppState extends ChangeNotifier {
       // 少了它恢复后余额与交易就对不上
       cashTxns: await db.cashTxns(),
       targets: targets,
+      // v3 起：关注列表（含置顶/排序）与定投计划也要进备份，
+      // 否则恢复后自选和定投全丢
+      watchlist: watchlist,
+      dcaPlans: dcaPlans,
       settings: await db.allSettings(),
     );
     return backup.encode();

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../data/dca_models.dart';
 import '../data/models.dart';
 import '../data/nav_models.dart';
 
@@ -20,8 +21,8 @@ class BackupException implements Exception {
 class AppBackup {
   static const String appTag = 'invest_tracker';
 
-  /// v1：账户/标的/流水/目标/设置；v2：增加现金流水
-  static const int currentVersion = 2;
+  /// v1：账户/标的/流水/目标/设置；v2：增加现金流水；v3：增加关注列表与定投计划
+  static const int currentVersion = 3;
 
   final int version;
   final DateTime exportedAt;
@@ -31,6 +32,8 @@ class AppBackup {
   final List<CashTxn> cashTxns;
   final List<TargetAlloc> targets;
   final Map<String, String> settings;
+  final List<WatchItem> watchlist;
+  final List<DcaPlan> dcaPlans;
 
   AppBackup({
     this.version = currentVersion,
@@ -41,6 +44,8 @@ class AppBackup {
     this.cashTxns = const [],
     required this.targets,
     required this.settings,
+    this.watchlist = const [],
+    this.dcaPlans = const [],
   });
 
   int get accountCount => accounts.length;
@@ -60,6 +65,8 @@ class AppBackup {
         'txns': txns.map((e) => e.toMap()).toList(),
         'cashTxns': cashTxns.map((e) => e.toMap()).toList(),
         'targets': targets.map((e) => e.toMap()).toList(),
+        'watchlist': watchlist.map((e) => e.toMap()).toList(),
+        'dcaPlans': dcaPlans.map((e) => e.toMap()).toList(),
         'settings': settings,
       };
 
@@ -99,6 +106,9 @@ class AppBackup {
       // v1 备份没有这一段，按空处理而不是报错
       cashTxns: _list(map['cashTxns']).map(CashTxn.fromMap).toList(),
       targets: _list(map['targets']).map(TargetAlloc.fromMap).toList(),
+      // v1/v2 备份没有这两段，按空处理而不是报错
+      watchlist: _list(map['watchlist']).map(WatchItem.fromMap).toList(),
+      dcaPlans: _list(map['dcaPlans']).map(DcaPlan.fromMap).toList(),
       settings: _stringMap(map['settings']),
     );
   }

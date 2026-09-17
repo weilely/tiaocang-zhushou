@@ -21,6 +21,9 @@ extension BackupStore on AppDatabase {
       // cash_txns 也要清：它有 src_txn_id 指回 txns，留着旧数据会与
       // 恢复后的交易错位（v1 备份不含现金流水，恢复后现金账本为空）
       await txn.delete('cash_txns');
+      // v3：关注列表与定投计划也要清空重写（v2 备份里没有这两张表的数据）
+      await txn.delete('watchlist');
+      await txn.delete('dca_plans');
       await txn.delete('txns');
       await txn.delete('targets');
       await txn.delete('assets');
@@ -51,6 +54,16 @@ extension BackupStore on AppDatabase {
       for (final t in b.targets) {
         if (t.id == null) continue;
         await txn.insert('targets', t.toMap(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final w in b.watchlist) {
+        if (w.id == null) continue;
+        await txn.insert('watchlist', w.toMap(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final p in b.dcaPlans) {
+        if (p.id == null) continue;
+        await txn.insert('dca_plans', p.toMap(),
             conflictAlgorithm: ConflictAlgorithm.replace);
       }
       for (final e in b.settings.entries) {

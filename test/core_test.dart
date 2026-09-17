@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/core/format.dart';
 import 'package:invest_tracker/data/market_api.dart';
 import 'package:invest_tracker/data/models.dart';
+import 'package:invest_tracker/data/dca_models.dart';
 import 'package:invest_tracker/data/nav_models.dart';
 import 'package:invest_tracker/logic/backup.dart';
 import 'package:invest_tracker/logic/csv_io.dart';
@@ -435,6 +436,27 @@ void main() {
             ),
           ],
           settings: {'threshold': '0.05', 'lastAutoBackupDay': '20260914'},
+          watchlist: [
+            WatchItem(
+              id: 1,
+              code: 'sh510300',
+              kind: AssetKind.etf,
+              name: '沪深300',
+              sortOrder: 0,
+              pinned: true,
+            ),
+          ],
+          dcaPlans: [
+            DcaPlan(
+              id: 1,
+              accountId: 1,
+              assetId: 1,
+              amount: 500,
+              frequency: DcaFrequency.monthly,
+              dayOfPeriod: 8,
+              startDate: DateTime(2026, 1, 8),
+            ),
+          ],
         );
 
     test('编码后再解码，账户/标的/分类/流水/目标/设置全部保留', () {
@@ -456,6 +478,31 @@ void main() {
       expect(back.txns[1].amount, closeTo(88.8, 1e-9));
       expect(back.targets.first.ratio, closeTo(0.6, 1e-9));
       expect(back.settings['threshold'], '0.05');
+    });
+
+    test('关注列表与定投计划也在备份里（v3），排序/置顶/周期都保留', () {
+      final back = AppBackup.decode(sample().encode());
+      expect(back.watchlist.single.code, 'sh510300');
+      expect(back.watchlist.single.pinned, true);
+      expect(back.watchlist.single.sortOrder, 0);
+      expect(back.dcaPlans.single.amount, closeTo(500, 1e-9));
+      expect(back.dcaPlans.single.frequency, DcaFrequency.monthly);
+      expect(back.dcaPlans.single.assetId, 1);
+    });
+
+    test('v2 老备份（没有 watchlist/dcaPlans 字段）仍能解码', () {
+      const v2 = '{"app":"invest_tracker","version":2,"exportedAt":1757781252000,'
+          '"accounts":[],"assets":[],"txns":[],"cashTxns":[],"targets":[]'
+          ',"settings":{"threshold":"0.05"}}';
+      final back = AppBackup.decode(v2);
+      expect(back.version, 2);
+      expect(back.watchlist, isEmpty);
+      expect(back.dcaPlans, isEmpty);
+    });
+
+    test('当前版本号已升到 3（v3 增加关注列表与定投计划）', () {
+      expect(AppBackup.currentVersion, 3);
+      expect(sample().encode(), contains('"version": 3'));
     });
 
     test('现金流水也在备份里，且保留 src_txn_id（恢复后余额才对得上）', () {
@@ -485,8 +532,8 @@ void main() {
     });
 
     test('当前版本号已升到 2（v1 备份不含现金流水）', () {
-      expect(AppBackup.currentVersion, 2);
-      expect(sample().encode(), contains('"version": 2'));
+      expect(AppBackup.currentVersion, 3);
+      expect(sample().encode(), contains('"version": 3'));
     });
 
     test('统计字段正确', () {
@@ -522,6 +569,8 @@ void main() {
       expect(back.txns, isEmpty);
       expect(back.targets, isEmpty);
       expect(back.settings, isEmpty);
+      expect(back.watchlist, isEmpty);
+      expect(back.dcaPlans, isEmpty);
     });
   });
 
