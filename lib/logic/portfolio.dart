@@ -104,6 +104,13 @@ class Position {
 
   bool get hasQuote => quote != null && quote!.price > 0;
 
+  /// 当日预估涨跌幅（%）：净值未更新时，用关联 ETF 的实时涨幅预估。
+  /// [estQuote] 是调用方算好的「估算用的实时行情」；为 null 表示无关联/取不到，不显示预估。
+  double? estChangePct;
+
+  /// 预估当日收益（元）= estChangePct × 昨收 × 份额；与 [estChangePct] 配套，调用方赋值
+  double? estDayPnl;
+
   double get marketValue => shares * price;
 
   double get avgCost => shares > 1e-9 ? cost / shares : 0;

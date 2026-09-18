@@ -441,6 +441,12 @@ class HoldingCardData {
   /// 「全部账户」时把账户名显示出来（设计稿没有，但不显示就分不清同代码的持仓）
   final String? accountName;
 
+  /// 当日净值未更新时的预估涨跌幅（%）；null = 用真实行情或不显示
+  final double? estChangePct;
+
+  /// 对应的预估当日收益（元）
+  final double? estDayPnl;
+
   const HoldingCardData({
     required this.name,
     required this.code,
@@ -460,6 +466,8 @@ class HoldingCardData {
     required this.changePct,
     required this.infoDate,
     this.accountName,
+    this.estChangePct,
+    this.estDayPnl,
   });
 
   factory HoldingCardData.from(
@@ -562,6 +570,22 @@ class HoldingCard extends StatelessWidget {
                     children: [
                       if (!d.hasQuote) const Tag(text: '无行情'),
                       if (d.accountName != null) Tag(text: d.accountName!),
+                      if (d.estChangePct != null) ...[
+                        const Tag(text: '预估'),
+                        Tag(
+                          text: '涨幅 %',
+                          color: d.estChangePct! < 0
+                              ? const Color(0xFF1A9C5B)
+                              : const Color(0xFFD93A3A),
+                        ),
+                        if (d.estDayPnl != null)
+                          Tag(
+                            text: '预估收益 ',
+                            color: d.estDayPnl! < 0
+                                ? const Color(0xFF1A9C5B)
+                                : const Color(0xFFD93A3A),
+                          ),
+                      ],
                     ],
                   ),
                 ),
@@ -686,22 +710,27 @@ class HoldingCard extends StatelessWidget {
   }
 }
 
-/// 灰色小标签（无行情、账户名）
+/// 小标签（无行情、账户名、预估）
 class Tag extends StatelessWidget {
   final String text;
 
-  const Tag({super.key, required this.text});
+  /// 标签文字颜色；不传则用主题提示色
+  final Color? color;
+
+  const Tag({super.key, required this.text, this.color});
 
   @override
   Widget build(BuildContext context) {
     final hint = Theme.of(context).hintColor;
+    final c = color ?? hint;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       decoration: BoxDecoration(
-        color: hint.withValues(alpha: 0.12),
+        color: c.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(text, style: TextStyle(fontSize: 10, color: hint)),
+      child: Text(text,
+          style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.w600)),
     );
   }
 }

@@ -381,7 +381,7 @@ class _RebalancePageState extends State<RebalancePage> {
             hint,
             suffix: t.navDate == null || t.navDate!.isEmpty
                 ? null
-                : (isFund ? '净值 ${t.navDate}' : '现价 ${t.navDate}'),
+                : (isFund ? (t.navIsActual ? '净值 ' : '预估净值（）') : '现价 '),
           ),
           _infoRow(
             '调仓份额',

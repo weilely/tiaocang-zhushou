@@ -8,7 +8,9 @@ extension DcaRepo on AppDatabase {
     final rows = await d.query(
       'dca_plans',
       where: onlyEnabled ? 'enabled = 1' : null,
-      orderBy: 'enabled DESC, id ASC',
+      // 固定按 id 升序：暂停/启用只改 enabled 字段，卡片位置不能跟着跳，
+      // 否则「点 A 的暂停」刷新后 A 会挪走，看起来像停错了标的
+      orderBy: 'id ASC',
     );
     return rows.map(DcaPlan.fromMap).toList();
   }

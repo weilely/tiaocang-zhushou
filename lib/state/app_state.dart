@@ -125,18 +125,56 @@ class AppState extends ChangeNotifier {
       : [for (final t in txns) if (t.accountId == accountFilter) t];
 
   /// 当前账户下的持仓（已按筛选）
-  List<Position> get positions => buildPositions(
-        txns: txnsOfFilter,
-        assets: assetsById,
-        quotes: quotes,
-      );
+  List<Position> get positions {
+    final _l = buildPositions(
+      txns: txnsOfFilter,
+      assets: assetsById,
+      quotes: quotes,
+    );
+    _fillEst(_l);
+    return _l;
+  }
 
   /// 所有账户的持仓（不受账户筛选影响；再平衡、总览用）
-  List<Position> get allPositions => buildPositions(
-        txns: txns,
-        assets: assetsById,
-        quotes: quotes,
-      );
+  List<Position> get allPositions {
+    final _l = buildPositions(
+      txns: txns,
+      assets: assetsById,
+      quotes: quotes,
+    );
+    _fillEst(_l);
+    return _l;
+  }
+
+  void _fillEst(List<Position> list) {
+    for (final p in list) {
+      p.estChangePct = _estChangeFor(p);
+      p.estDayPnl = _estDayPnlFor(p);
+    }
+  }
+
+  double? _estChangeFor(Position p) {
+    final q = p.quote;
+    if (p.asset.kind.isExchange) return q?.changePct;
+    if (q?.isTradeDayToday() ?? false) return q?.changePct;
+    final link = p.asset.linkCode.trim();
+    if (link.isEmpty) return null;
+    return linkQuotes[link]?.changePct;
+  }
+
+  double? _estDayPnlFor(Position p) {
+    final pct = _estChangeFor(p);
+    if (pct == null || p.shares <= 1e-9) return null;
+    final q = p.quote;
+    if (q == null) return null;
+    var prev = q.prevClose;
+    if (prev <= 0 && q.changePct.abs() < 100) {
+      final denom = 1 + q.changePct / 100;
+      if (denom.abs() > 1e-9) prev = q.price / denom;
+    }
+    if (prev <= 0) return null;
+    return (pct / 100) * prev * p.shares;
+  }
 
   /// 非空持仓（持仓页、调仓页用）
   List<Position> get holdings =>
@@ -222,6 +260,8 @@ class AppState extends ChangeNotifier {
     accountFilter = id;
     _recompute();
     notifyListeners();
+    // 记住上次打开的账户，下次启动直接还原（「全部账户」记为 0）
+    unawaited(db.setSetting('accountFilter', id == null ? '0' : id.toString()));
   }
 
   // ============================================================
@@ -628,6 +668,12 @@ class AppState extends ChangeNotifier {
     try {
       await _loadFromDb();
       threshold = await db.settingDouble('threshold', 0.05);
+      // 还原上次的账户过滤（'0'/空 = 全部账户）；账号已删则回退到全部
+      final _af = await db.setting('accountFilter');
+      accountFilter = _af == null || _af.isEmpty ? null : int.tryParse(_af);
+      if (accountFilter != null && !accounts.any((a) => a.id == accountFilter)) {
+        accountFilter = null;
+      }
       holdingsSortKey = await db.setting('holdingsSortKey') ?? 'marketValue';
       holdingsSortDesc = (await db.setting('holdingsSortDesc') ?? '0') == '1';
       dcaAutoRun = (await db.setting('dcaAutoRun') ?? '1') == '1';
@@ -1798,6 +1844,7 @@ class AppState extends ChangeNotifier {
   /// 逐个串行 + 200ms 节流（比并发更不容易被限流）；失败只记账不写半截。
   Future<int> updateNavHistory({bool manual = false}) async {
     if (navUpdating) return 0;
+    final today = DateTime.now().hour == 0 ? DateTime.now() : DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
     final targets = navTargets;
     if (targets.isEmpty) return 0;
 
@@ -1813,12 +1860,20 @@ class AppState extends ChangeNotifier {
         if (manual) notifyListeners();
 
         try {
-          final latest = await db.latestNavDate(a.code);
+          var latest = await db.latestNavDate(a.code);
           // 指数走新浪日K，条数上限实测 1500（2000 返回空）
           final isIndex = RegExp(r'^(sh|sz|bj)\d{6}$').hasMatch(a.code);
-          final pts = latest == null
-              ? await navSource.fullHistory(a, datalen: isIndex ? 1500 : 1000)
-              : await navSource.recentHistory(a, stopDate: latest);
+            final pts = latest == null
+                ? await navSource.fullHistory(a, datalen: isIndex ? 1500 : 1000)
+                : (manual
+                    // 手动点刷新：把最近几天全重拉一遍再 upsert（净值可能今天才公布、上次没抓到）
+                    ? await navSource.recentHistory(
+                        a, stopDate: latest, maxPages: 1, sinaDays: 7,
+                      )
+                    : (latest == today
+                        // 自动刷新且今天已抓到 → 不必再拉，避免空转
+                            ? <NavPoint>[]
+                        : await navSource.recentHistory(a, stopDate: latest)));
           if (pts.isNotEmpty) {
             await db.upsertNavPoints(pts);
             written += pts.length;
