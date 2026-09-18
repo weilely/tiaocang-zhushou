@@ -202,16 +202,26 @@ class _CalendarView extends StatelessWidget {
 
 // ==================== 趋势图 ====================
 
-class _TrendView extends StatelessWidget {
+class _TrendView extends StatefulWidget {
   const _TrendView();
+
+  @override
+  State<_TrendView> createState() => _TrendViewState();
+}
+
+class _TrendViewState extends State<_TrendView> {
+  /// 图上当前点选的点（null = 还没交互过，默认落在最后一个点）
+  int? _active;
 
   @override
   Widget build(BuildContext context) {
     final st = context.watch<AppState>();
-    final range = st.trendRange;
     final points = st.trendPoints;
     final refs = st.trendRefPoints;
-    final refPct = st.trendRefPct;
+    // 点选日期的参考收益（该点的基准值）
+    final refAt =
+        _active != null && _active! < refs.length ? refs[_active!] : st.trendRefPct;
+    // 实际收益 = 统计时段的累计收益（阶段收益），不随点选点变化
     final stage = st.stagePct;
 
     return Column(
@@ -230,9 +240,8 @@ class _TrendView extends StatelessWidget {
         const SizedBox(height: 6),
         _BenchmarkRow(
           benchmark: st.benchmark,
-          // 显示的是**本区间折算后**的参考收益率（= 年化 × 天数 ÷ 365），
-          // 与下面图例、图上虚线端点同源；年化原值在设置面板里填
-          refPct: refPct,
+          // 框里显示的是**本区间折算后**的参考收益率（= 年化 × 天数 ÷ 365）
+          refPct: st.trendRefPct,
           rangeLabel: st.trendPreset.label,
           onTap: () => _pickBenchmark(context, st),
         ),
@@ -240,66 +249,53 @@ class _TrendView extends StatelessWidget {
         if (points.length < 2)
           _emptyHint(context, '该区间还没有净值数据，去关注页刷新净值')
         else ...[
-          // 浮动提示现在画在图表内部（设计稿是图上一个深色浮层），
-          // 这里不再额外占一行
-          ReturnsLineChart(points: points, refs: refs),
+          // 拖动/点击图表显示竖直指示线与浮动提示，点选变化时刷新下方两行
+          ReturnsLineChart(
+            points: points,
+            refs: refs,
+            onActiveChanged: (i) => setState(() => _active = i),
+          ),
           const SizedBox(height: 10),
+          // 图底部只两行：点选日期的 参考收益 与 实际收益（统计时段累计）
           Row(
             children: [
               Expanded(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // 设计稿的图例左项前面有一小段虚线样式样本
-                    const DashedLineSample(),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        '${st.benchmark.legendName} '
-                        '${refPct == null ? '无数据' : fmtPct(refPct)}',
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: refPct == null
-                              ? Theme.of(context).hintColor
-                              : pnlColor(refPct),
-                        ),
-                      ),
-                    ),
-                  ],
+                child: _bottomPctRow(
+                  '参考收益',
+                  refAt,
+                  dashed: true,
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                '${fmtMonthDay(range.end)} 收益 ${stage == null ? '--' : fmtPct(stage)}',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color:
-                      stage == null ? Theme.of(context).hintColor : pnlColor(stage),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // 设计稿里「阶段收益」是**左对齐**紧跟标签，不顶到右边
-          Row(
-            children: [
-              Text('阶段收益',
-                  style:
-                      TextStyle(fontSize: 13, color: Theme.of(context).hintColor)),
-              const SizedBox(width: 8),
-              Text(
-                stage == null ? '--' : fmtPct(stage),
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: stage == null ? null : pnlColor(stage),
-                ),
+              Expanded(
+                child: _bottomPctRow('实际收益', stage),
               ),
             ],
           ),
         ],
+      ],
+    );
+  }
+
+  /// 图底部一行：标签 + 涨跌色的百分比
+  Widget _bottomPctRow(String label, double? value, {bool dashed = false}) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        if (dashed) ...[
+          const DashedLineSample(),
+          const SizedBox(width: 6),
+        ],
+        Text(label, style: TextStyle(fontSize: 12, color: theme.hintColor)),
+        const SizedBox(width: 6),
+        Text(
+          value == null ? '--' : fmtPct(value),
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: value == null ? theme.hintColor : pnlColor(value),
+          ),
+        ),
       ],
     );
   }
@@ -411,11 +407,6 @@ class _BenchmarkRow extends StatelessWidget {
           Text('%', style: TextStyle(fontSize: 14, color: theme.hintColor)),
         ],
         const Spacer(),
-        if (custom)
-          Text(
-            '$rangeLabel · 年化 ${_trimPct(benchmark.annualPct)}%',
-            style: TextStyle(fontSize: 11, color: theme.hintColor),
-          ),
       ],
     );
   }

@@ -53,8 +53,7 @@ class CashTxnTile extends StatelessWidget {
       ),
       subtitle: Text(
         '${fmtDate(txn.date)}${accountName.isEmpty ? '' : ' · $accountName'}'
-        '${txn.note.isEmpty ? '' : ' · ${txn.note}'}'
-        '${isAuto ? ' · 随交易自动记，请到交易记录里删' : ''}',
+        '${txn.note.isEmpty ? '' : ' · ${txn.note}'}',
         style: TextStyle(fontSize: 11, color: theme.hintColor),
       ),
       trailing: Text(

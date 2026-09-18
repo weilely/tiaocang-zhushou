@@ -49,14 +49,15 @@ void main() {
       expect(find.textContaining('随交易自动记'), findsNothing);
     });
 
-    testWidgets('联动流水：带「自动」标，并说明去哪儿删', (tester) async {
+    testWidgets('联动流水：带「自动」标（明细已精简，不再提示去哪儿删）', (tester) async {
       await tester.pumpWidget(host(CashTxnTile(
         txn: linked(),
         onDelete: null,
       )));
       expect(find.text('买入扣款'), findsOneWidget);
       expect(find.text('自动'), findsOneWidget);
-      expect(find.textContaining('请到交易记录里删'), findsOneWidget);
+      expect(find.textContaining('随交易自动记'), findsNothing);
+      expect(find.textContaining('请到交易记录里删'), findsNothing);
       expect(find.text('-15,700.00'), findsOneWidget);
     });
 

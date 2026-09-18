@@ -337,11 +337,7 @@ class AppState extends ChangeNotifier {
             : (t.type == TxnType.sell ? CashType.redeem : CashType.dividend),
         amount: sign * amount,
         date: t.date,
-      note: () {
-        final code = assetsById[t.assetId]?.code ?? '';
-        final s = code.isEmpty ? '' : displayShortOf(code);
-        return s.isEmpty ? t.type.label : ' · ${t.type.label}';
-      }(),
+      note: _cashNoteFor(t),
         createdAt: DateTime.now(),
         srcTxnId: t.id,
       ));
@@ -357,6 +353,20 @@ class AppState extends ChangeNotifier {
   }
 
   /// 买入/卖出/分红 → 现金流水（买入扣钱、卖出和分红进钱）
+  /// 现金流水的备注：标的简称 + 动作词。
+  /// 定投生成的买入记「定投」（不是「买入」），普通买入「买入」，卖出「卖出」，分红「分红」。
+  /// 没有简称就只显示动作词。
+  String _cashNoteFor(Txn t) {
+    final code = assetsById[t.assetId]?.code ?? '';
+    final short = code.isEmpty ? '' : displayShortOf(code);
+    final action = switch (t.type) {
+      TxnType.buy => t.note.contains('定投') ? '定投' : '买入',
+      TxnType.sell => '卖出',
+      TxnType.dividend => '分红',
+    };
+    return short.isEmpty ? action : ' · ';
+  }
+
   Future<void> _linkCashFor(Txn t) async {
     final sign = switch (t.type) {
       TxnType.buy => -1.0,
@@ -371,11 +381,7 @@ class AppState extends ChangeNotifier {
           : (t.type == TxnType.sell ? CashType.redeem : CashType.dividend),
       amount: sign * amount,
       date: t.date,
-      note: () {
-        final code = assetsById[t.assetId]?.code ?? '';
-        final s = code.isEmpty ? '' : displayShortOf(code);
-        return s.isEmpty ? t.type.label : ' · ${t.type.label}';
-      }(),
+      note: _cashNoteFor(t),
       createdAt: DateTime.now(),
       srcTxnId: t.id,
     ));
@@ -2131,7 +2137,7 @@ class AppState extends ChangeNotifier {
             assetId: plan.assetId,
             type: TxnType.buy,
             date: ref.date,
-            amount: shares * ref.price,
+            amount: plan.amount,
             shares: shares,
             price: ref.price,
             fee: 0,
