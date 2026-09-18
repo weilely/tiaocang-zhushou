@@ -18,12 +18,19 @@ void main() {
 class InvestTrackerApp extends StatelessWidget {
   const InvestTrackerApp({super.key});
 
+  static ThemeMode _modeOf(String m) => switch (m) {
+        'light' => ThemeMode.light,
+        'dark' => ThemeMode.dark,
+        _ => ThemeMode.system,
+      };
+
   @override
   Widget build(BuildContext context) {
+    final st = context.watch<AppState>();
     return MaterialApp(
       title: '调仓助手',
       debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.system,
+      themeMode: _modeOf(st.themeMode),
       theme: buildTheme(Brightness.light),
       darkTheme: buildTheme(Brightness.dark),
       // 真机上把系统字体调很大时，行内数字会被挤到换行 / 溢出。

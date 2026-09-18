@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../core/format.dart';
 import '../data/file_store.dart';
+import '../data/db_dump.dart';
 import '../data/models.dart';
 import '../data/nav_models.dart';
 import '../logic/backup.dart';
@@ -64,6 +65,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _dataSection(context, st),
         _marketSection(context, st),
           _securitySection(context, st),
+        _appearanceSection(context, st),
         _aboutSection(context),
       ],
     );
@@ -538,6 +540,29 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             onTap: _restoreBackup,
           ),
+          // 6) 历史净值 / 基础数据库 的独立备份（SQLite 原样导出）
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: const Icon(Icons.spa_outlined, size: 20),
+            title: const Text('备份历史净值（SQLite）', style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              '把 ${st.navRowCount} 条净值按表原样导成 .sqlite，可丢给 sqlite3 / 表格软件查看',
+              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            onTap: _exportNavHistory,
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: const Icon(Icons.storage_outlined, size: 20),
+            title: const Text('备份基础数据库（SQLite）', style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              '基金 / 股票基础数据（${st.securitiesFundCount + st.securitiesStockCount} 条）按表原样导出',
+              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            onTap: _exportSecurities,
+          ),
           const Divider(height: 22),
           _groupHeader(context, '导入导出'),
           ListTile(
@@ -638,6 +663,39 @@ class _SettingsPageState extends State<SettingsPage> {
               if (allow) await st.setBiometric(v);
             },
           ),
+        ],
+      ),
+    );
+  }
+
+  /// 「外观」：跟随系统 / 浅色 / 深色
+  Widget _appearanceSection(BuildContext context, AppState st) {
+    final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
+    const options = <String, String>{
+      'system': '跟随系统',
+      'light': '浅色',
+      'dark': '深色',
+    };
+    return CollapsibleSectionCard(
+      title: '外观',
+      initiallyExpanded: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('切换整机的明暗；「跟随系统」会跟随手机设置。选择会自动保存。',
+              style: hint),
+          const SizedBox(height: 8),
+          for (final m in options.keys)
+            RadioListTile<String>(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              groupValue: st.themeMode,
+              value: m,
+              title: Text(options[m] ?? m, style: const TextStyle(fontSize: 14)),
+              subtitle:
+                  m == 'system' ? Text('跟手机明暗走', style: hint) : null,
+              onChanged: (v) => st.setThemeMode(v ?? 'system'),
+            ),
         ],
       ),
     );
@@ -1067,6 +1125,57 @@ class _SettingsPageState extends State<SettingsPage> {
               '文件路径：\n$path\n\n'
               '包含：账户、标的与分类、全部交易流水、再平衡目标、设置。\n'
               '（不含行情缓存，恢复后会自动重新抓取）\n\n'
+              '取回电脑：\nadb pull "$path" .',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+          ],
+        ),
+      );
+    } catch (e) {
+      _snack('备份失败：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 6) 单独导出「历史净值」/「基础数据库」两份 SQLite
+  Future<void> _exportNavHistory() => _dumpDb(
+        title: '历史净值已备份',
+        tables: ['nav_history'],
+        fileName: '历史净值_${_stamp()}.sqlite',
+        what: 'nav_history（全部历史净值）',
+      );
+
+  Future<void> _exportSecurities() => _dumpDb(
+        title: '基础数据库已备份',
+        tables: ['securities'],
+        fileName: '基础数据库_${_stamp()}.sqlite',
+        what: 'securities（基金 / 股票基础数据）',
+      );
+
+  Future<void> _dumpDb({
+    required String title,
+    required List<String> tables,
+    required String fileName,
+    required String what,
+  }) async {
+    setState(() => _busy = true);
+    try {
+      final path =
+          await DbDumper().dumpTables(tables: tables, fileName: fileName);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: SelectableText(
+              '文件路径：\n$path\n\n'
+              '包含：$what\n'
+              '（独立 .sqlite 文件，可用 sqlite3 / 数据库工具直接打开；与完整 JSON 备份互相独立）\n\n'
               '取回电脑：\nadb pull "$path" .',
               style: const TextStyle(fontSize: 12),
             ),

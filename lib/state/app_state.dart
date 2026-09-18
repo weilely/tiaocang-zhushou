@@ -705,6 +705,7 @@ class AppState extends ChangeNotifier {
     unawaited(loadCash().then((_) => rebuildCashFromTxns()));
     unawaited(loadAssetShorts());
     unawaited(loadBiometric());
+    unawaited(loadThemeMode());
     unawaited(loadNavSamples());
   }
 
@@ -889,6 +890,24 @@ class AppState extends ChangeNotifier {
 
   Future<void> loadBiometric() async {
     biometricEnabled = (await db.setting('biometricEnabled') ?? '0') == '1';
+    notifyListeners();
+  }
+
+  // ============================================================
+  // 外观：主题（系统 / 浅色 / 深色）
+  // ============================================================
+
+  /// 'system' | 'light' | 'dark'
+  String themeMode = 'system';
+
+  Future<void> loadThemeMode() async {
+    themeMode = (await db.setting('themeMode') ?? 'system');
+    notifyListeners();
+  }
+
+  Future<void> setThemeMode(String v) async {
+    themeMode = v;
+    await db.setSetting('themeMode', v);
     notifyListeners();
   }
 
