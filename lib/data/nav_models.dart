@@ -137,9 +137,11 @@ class CashType {
         withdraw => '提现',
         adjust => '调整',
         income => '收益',
-        invest => '买入扣款',
-        redeem => '卖出入账',
-        dividend => '分红入账',
+        // 简洁优先：不写「买入扣款 / 卖出入账 / 分红入账」——
+        // 金额的正负号与红绿已经把「钱进还是钱出」说清楚了
+        invest => '买入',
+        redeem => '卖出',
+        dividend => '分红',
         _ => t,
       };
 }

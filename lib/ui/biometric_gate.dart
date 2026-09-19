@@ -28,7 +28,6 @@ class _BiometricGateState extends State<BiometricGate>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _lockAndAsk());
   }
 
   @override
@@ -53,13 +52,6 @@ class _BiometricGateState extends State<BiometricGate>
       st.setLocked(true);
       _ask();
     }
-  }
-
-  Future<void> _lockAndAsk() async {
-    final st = context.read<AppState>();
-    if (!st.biometricEnabled) return;
-    st.setLocked(true);
-    await _ask();
   }
 
   Future<void> _ask() async {
@@ -94,9 +86,24 @@ class _BiometricGateState extends State<BiometricGate>
     }
   }
 
+  /// 冷启动只锁一次；设置是异步读出来的，所以不能只在首帧回调里判断
+  bool _coldStartChecked = false;
+
   @override
   Widget build(BuildContext context) {
-    final locked = context.watch<AppState>().locked;
+    final st = context.watch<AppState>();
+    // `biometricEnabled` 由 init() 异步从设置里读出来：首帧时它还是 false，
+    // 早先在 postFrameCallback 里判断就会直接早退 —— 冷启动不锁就是这个原因。
+    // 改成「等它变成 true 的那一刻再锁」，并保证只处理一次。
+    if (!_coldStartChecked && !st.loading && st.biometricEnabled) {
+      _coldStartChecked = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        context.read<AppState>().setLocked(true);
+        _ask();
+      });
+    }
+    final locked = st.locked;
     return Stack(
       children: [
         widget.child,

@@ -49,36 +49,47 @@ void main() {
       expect(find.textContaining('随交易自动记'), findsNothing);
     });
 
-    testWidgets('联动流水：带「自动」标（明细已精简，不再提示去哪儿删）', (tester) async {
+    testWidgets('联动流水：标题就是「买入」，不再带「自动」标', (tester) async {
       await tester.pumpWidget(host(CashTxnTile(
         txn: linked(),
         onDelete: null,
       )));
-      expect(find.text('买入扣款'), findsOneWidget);
-      expect(find.text('自动'), findsOneWidget);
+      // 简洁优先：不写「买入扣款」，也不要「自动」小标
+      expect(find.text('买入'), findsOneWidget);
+      expect(find.text('买入扣款'), findsNothing);
+      expect(find.text('自动'), findsNothing);
       expect(find.textContaining('随交易自动记'), findsNothing);
       expect(find.textContaining('请到交易记录里删'), findsNothing);
       expect(find.text('-15,700.00'), findsOneWidget);
     });
 
-    testWidgets('定投联动流水：标题写「定投」，不再写「买入扣款」', (tester) async {
+    testWidgets('联动流水：日期只显示 mm-dd，不带年份', (tester) async {
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(),
+        onDelete: null,
+      )));
+      expect(find.textContaining('09-11'), findsOneWidget);
+      expect(find.textContaining('2026-09-11'), findsNothing);
+    });
+
+    testWidgets('定投联动流水：标题写「定投」', (tester) async {
       await tester.pumpWidget(host(CashTxnTile(
         txn: linked(note: '价值100 · 定投'),
         onDelete: null,
       )));
       expect(find.text('定投'), findsOneWidget);
-      expect(find.text('买入扣款'), findsNothing);
+      expect(find.text('买入'), findsNothing);
       // 动作词已在标题里，副标题只留标的简称（不重复出现「定投」）
       expect(find.textContaining('价值100'), findsOneWidget);
       expect(find.textContaining('· 定投'), findsNothing);
     });
 
-    testWidgets('联动买入：标题已写「买入扣款」，副标题不再重复动作词', (tester) async {
+    testWidgets('联动买入：标题已写「买入」，副标题不再重复动作词', (tester) async {
       await tester.pumpWidget(host(CashTxnTile(
         txn: linked(note: '价值100 · 买入'),
         onDelete: null,
       )));
-      expect(find.text('买入扣款'), findsOneWidget);
+      expect(find.text('买入'), findsOneWidget);
       expect(find.textContaining('价值100'), findsOneWidget);
       // 断言的是「价值100 · 买入」这个**连续子串**：
       // 早先写 find.textContaining('买入扣款 · 买入') 是测不出问题的
@@ -87,19 +98,21 @@ void main() {
           reason: '动作词「买入」由标题表达，备注里要滤掉');
     });
 
-    testWidgets('联动卖出 / 分红：备注里也只留简称', (tester) async {
+    testWidgets('联动卖出 / 分红：标题是「卖出」「分红」，备注只留简称', (tester) async {
       await tester.pumpWidget(host(CashTxnTile(
         txn: linked(type: CashType.redeem, amount: 800, note: '价值100 · 卖出'),
         onDelete: null,
       )));
-      expect(find.text('卖出入账'), findsOneWidget);
+      expect(find.text('卖出'), findsOneWidget);
+      expect(find.text('卖出入账'), findsNothing);
       expect(find.textContaining('价值100 · 卖出'), findsNothing);
 
       await tester.pumpWidget(host(CashTxnTile(
         txn: linked(type: CashType.dividend, amount: 88, note: '价值100 · 分红'),
         onDelete: null,
       )));
-      expect(find.text('分红入账'), findsOneWidget);
+      expect(find.text('分红'), findsOneWidget);
+      expect(find.text('分红入账'), findsNothing);
       expect(find.textContaining('价值100 · 分红'), findsNothing);
     });
 

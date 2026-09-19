@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../core/app_info.dart';
 import '../core/format.dart';
 import '../data/file_store.dart';
+import '../data/update_source.dart';
 import '../data/db_dump.dart';
 import '../data/models.dart';
 import '../data/nav_models.dart';
@@ -24,6 +25,9 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   bool _busy = false;
+
+  /// 正在联网检查更新
+  bool _checkingUpdate = false;
 
   /// 调仓目标：标的代码 → 目标占比输入框
   final Map<String, TextEditingController> _targetCtrl = {};
@@ -1466,22 +1470,90 @@ class _SettingsPageState extends State<SettingsPage> {
       title: '关于',
       initiallyExpanded: true,
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-      child: InkWell(
-        onTap: () => _showAboutDetail(context),
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(appVersionLine,
-                    style: const TextStyle(fontSize: 14)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: () => _showAboutDetail(context),
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(appVersionLine,
+                        style: const TextStyle(fontSize: 14)),
+                  ),
+                  Icon(Icons.info_outline,
+                      size: 18, color: Theme.of(context).hintColor),
+                ],
               ),
-              Icon(Icons.info_outline,
-                  size: 18, color: Theme.of(context).hintColor),
-            ],
+            ),
           ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: const Icon(Icons.system_update_alt, size: 20),
+            title: const Text('检查更新', style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              '联网查一下有没有新版本（只查看，不会自动下载安装）',
+              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            trailing: _checkingUpdate
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.chevron_right, size: 20),
+            onTap: _checkingUpdate ? null : () => _checkUpdate(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 检查更新：只查最新版号并给出下载页，绝不静默下载安装
+  Future<void> _checkUpdate(BuildContext context) async {
+    setState(() => _checkingUpdate = true);
+    final info = await fetchLatestVersion();
+    if (!mounted) return;
+    setState(() => _checkingUpdate = false);
+
+    if (info == null) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('检查更新失败'),
+          content: const Text(
+            '没能连上代码托管平台（GitHub / Gitee）。\n\n'
+            '常见原因：当前网络访问 GitHub 受限。可以去 Gitee 镜像仓库手动看最新版本。',
+            style: TextStyle(fontSize: 13, height: 1.6),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+          ],
         ),
+      );
+      return;
+    }
+
+    final hasNew = isNewerVersion(info.latest, appVersion);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(hasNew ? '发现新版本 v${info.latest}' : '已是最新版本'),
+        content: Text(
+          '当前版本：v$appVersion\n'
+          '最新版本：v${info.latest}（来源 ${
+              info.source})\n\n'
+          '${hasNew ? '可以去下面的页面下载新版安装包。\n\n${info.url}' : '暂时不用更新。\n\n${info.url}'}',
+          style: const TextStyle(fontSize: 13, height: 1.6),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+        ],
       ),
     );
   }
@@ -1491,7 +1563,7 @@ class _SettingsPageState extends State<SettingsPage> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('调仓助手 v1.0.0'),
+        title: Text('调仓助手 v$appVersion'),
         content: SingleChildScrollView(
           child: Text(
             '吹角天明@MLB\n\n'

@@ -154,13 +154,24 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// 取「**今天**的」估值涨幅（%）。
+  ///
+  /// 行情不是今天的（周末 / 节假日拿到的是上一交易日的）就返回 null ——
+  /// 拿昨天的涨幅当今天的估值是错的（用户实测周六仍在估值，就是这个原因）。
+  static double? _todayEstPct(Quote? q) =>
+      (q != null && q.isTradeDayToday()) ? q.changePct : null;
+
+  /// 单只持仓的预估涨跌幅（%）
+  ///
+  /// **只对场外基金有意义**：场内有实时价，本来就看得到行情，没有「估值」一说。
   double? _estChangeFor(Position p) {
+    if (p.asset.kind != AssetKind.fund) return null;
     final q = p.quote;
-    if (p.asset.kind.isExchange) return q?.changePct;
-    if (q?.isTradeDayToday() ?? false) return q?.changePct;
+    // 基金自己的净值/估值已经是今天的 → 那是真实值，不叫预估
+    if (q?.isTradeDayToday() ?? false) return null;
     final link = p.asset.linkCode.trim();
     if (link.isEmpty) return null;
-    return linkQuotes[link]?.changePct;
+    return _todayEstPct(linkQuotes[link]);
   }
 
   double? _estDayPnlFor(Position p) {
@@ -1863,19 +1874,23 @@ class AppState extends ChangeNotifier {
       if (a.kind == AssetKind.fund) {
         final link = a.linkCode.trim();
         final linkQ = link.isEmpty ? null : quotes[link];
-        final ownEst = (q != null && q.priceType == 'est') ? q.changePct : null;
+        // 估值依据必须来自**今天的**行情：周末/节假日拿到的是上一交易日的行情，
+        // 那时没有「今天涨了多少」可言，不该再摆预估净值 / 预估涨幅。
+        final linkToday = _todayEstPct(linkQ);
+        final ownEstToday = (q != null &&
+                q.priceType == 'est' &&
+                q.isTradeDayToday())
+            ? q.changePct
+            : null;
         final fq = resolveFundQuote(
           baseNav: base?.nav,
           baseChangePct: base?.changePct ?? 0,
           navPublishedToday: navOfToday,
-          linkChangePct: linkQ?.changePct,
-          ownEstPct: ownEst,
+          linkChangePct: linkToday,
+          ownEstPct: ownEstToday,
           overridePct: pctOverrides[a.code],
         );
-        // 估值依据 = 联动 ETF 的实时涨幅（没关联就看基金自己的估值字段）。
-        // 非交易日联动 ETF 涨幅恒为 0（当日净值与前一日相同），这时没有估值依据，
-        // 不该再摆出「预估净值 / 预估涨幅」——那等于拿 0 冒充估值。
-        final estPct = linkQ?.changePct ?? ownEst;
+        final estPct = linkToday ?? ownEstToday;
         final estMode = isFundEstMode(
           navActual: fq.actual,
           estPct: estPct,

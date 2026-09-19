@@ -73,18 +73,12 @@ class CashTxnTile extends StatelessWidget {
     final tile = ListTile(
       dense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-      title: Row(
-        children: [
-          Text(_title,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-          if (isAuto) ...[
-            const SizedBox(width: 6),
-            const _AutoTag(),
-          ],
-        ],
-      ),
+      title: Text(_title,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
       subtitle: Text(
-        '${fmtDate(txn.date)}${accountName.isEmpty ? '' : ' · $accountName'}'
+        // 日期只留 mm-dd：现金流水一年内看得最多的是最近的，
+        // 年份只在翻到往年时才有意义，天天显示反而挤掉备注
+        '${fmtMonthDay(txn.date)}${accountName.isEmpty ? '' : ' · $accountName'}'
         '${note.isEmpty ? '' : ' · $note'}',
         style: TextStyle(fontSize: 11, color: theme.hintColor),
       ),
@@ -142,24 +136,5 @@ class CashTxnTile extends StatelessWidget {
       ),
     );
     return ok ?? false;
-  }
-}
-
-/// 「自动」小标：说明这条流水是交易联动生成的，不能在现金页删
-class _AutoTag extends StatelessWidget {
-  const _AutoTag();
-
-  @override
-  Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-      decoration: BoxDecoration(
-        color: primary.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text('自动',
-          style: TextStyle(fontSize: 10, color: primary, height: 1.4)),
-    );
   }
 }
