@@ -61,6 +61,28 @@ void main() {
       expect(find.text('-15,700.00'), findsOneWidget);
     });
 
+    testWidgets('定投联动流水：标题写「定投」，不再写「买入扣款」', (tester) async {
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(note: '价值100 · 定投'),
+        onDelete: null,
+      )));
+      expect(find.text('定投'), findsOneWidget);
+      expect(find.text('买入扣款'), findsNothing);
+      // 动作词已在标题里，副标题只留标的简称（不重复出现「定投」）
+      expect(find.textContaining('价值100'), findsOneWidget);
+      expect(find.textContaining('· 定投'), findsNothing);
+    });
+
+    testWidgets('联动买入：标题已写「买入扣款」，副标题不再重复动作词', (tester) async {
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(note: '价值100 · 买入'),
+        onDelete: null,
+      )));
+      expect(find.text('买入扣款'), findsOneWidget);
+      expect(find.textContaining('价值100'), findsOneWidget);
+      expect(find.textContaining('买入扣款 · 买入'), findsNothing);
+    });
+
     testWidgets('账户名按传入决定是否显示', (tester) async {
       await tester.pumpWidget(host(CashTxnTile(
         txn: manual(),
@@ -72,7 +94,7 @@ void main() {
   });
 
   group('可删性', () {
-    testWidgets('手工流水：有 Dismissible，左滑触发删除回调', (tester) async {
+    testWidgets('手工流水：左滑先弹确认框，点「删除」才真的删', (tester) async {
       var deleted = 0;
       await tester.pumpWidget(host(CashTxnTile(
         txn: manual(),
@@ -82,7 +104,33 @@ void main() {
       expect(find.byType(Dismissible), findsOneWidget);
       await tester.drag(find.byType(Dismissible), const Offset(-500, 0));
       await tester.pumpAndSettle();
+
+      // 先出确认框，此时还没删
+      expect(find.text('删除这条现金流水？'), findsOneWidget);
+      expect(deleted, 0, reason: '确认之前不应删除');
+
+      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      await tester.pumpAndSettle();
       expect(deleted, 1);
+    });
+
+    testWidgets('手工流水：确认框点「取消」不删除，行弹回原位', (tester) async {
+      var deleted = 0;
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: manual(),
+        onDelete: () => deleted++,
+      )));
+
+      await tester.drag(find.byType(Dismissible), const Offset(-500, 0));
+      await tester.pumpAndSettle();
+      expect(find.text('删除这条现金流水？'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, '取消'));
+      await tester.pumpAndSettle();
+
+      expect(deleted, 0);
+      expect(find.byType(CashTxnTile), findsOneWidget, reason: '行还在');
+      expect(find.text('删除这条现金流水？'), findsNothing);
     });
 
     testWidgets('联动流水：连 Dismissible 都不存在（结构上就删不了）', (tester) async {

@@ -367,8 +367,9 @@ class _RebalancePageState extends State<RebalancePage> {
           ),
           const SizedBox(height: 10),
 
-          // 今天的净值已公布（或场内实时价）→ 都是真实值，不写「预估」
-          _infoRow(t.navIsActual ? '市值' : '预估', fmtYuan(line.est), hint),
+          // 只有真在估值（有联动涨幅）时才写「预估」；
+          // 净值已是真实值、或非交易日没有估值依据 → 都按真实市值算
+          _infoRow(t.estMode ? '预估' : '市值', fmtYuan(line.est), hint),
           _infoRow(
             '目标',
             t.hasTarget ? fmtYuan(line.targetValue) : '未设目标',
@@ -376,12 +377,17 @@ class _RebalancePageState extends State<RebalancePage> {
             valueColor: t.hasTarget ? null : theme.hintColor,
           ),
           _infoRow(
-            t.navIsActual ? '净值' : '预估净值',
+            t.estMode ? '预估净值' : '净值',
             t.hasNav ? fmtPrice(t.nav!) : '--',
             hint,
-            suffix: t.navDate == null || t.navDate!.isEmpty
-                ? null
-                : (isFund ? (t.navIsActual ? '净值 ' : '预估净值（）') : '现价 '),
+            // 日期后缀只在**有估值依据**时才有意义（说明预估是基于哪天的净值算的）；
+            // 场内看现价日期，非估值模式（非交易日）干脆不写日期。
+            suffix: () {
+              final d = t.navDate;
+              if (d == null || d.isEmpty) return null;
+              if (!isFund) return '现价 $d';
+              return t.estMode ? '预估净值（$d）' : null;
+            }(),
           ),
           _infoRow(
             '调仓份额',
@@ -389,52 +395,55 @@ class _RebalancePageState extends State<RebalancePage> {
             hint,
           ),
 
-          // 当日涨幅：真实值就是只读文本；只有估算时才给输入框手改
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
-              children: [
-                Text(t.navIsActual ? '当日涨幅' : '当日预估涨幅', style: hint),
-                const SizedBox(width: 10),
-                if (isFund && !t.navIsActual)
-                  SizedBox(
-                    width: 92,
-                    child: TextField(
-                      controller: _ctrlFor(t),
-                      textAlign: TextAlign.center,
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true, signed: true),
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
-                      ],
-                      style: const TextStyle(fontSize: 14),
-                      decoration: _filledBox(),
-                      onChanged: (v) => setState(() {
-                        // 空输入按 0 算：所见即所得，想回到自动就下拉刷新
-                        _pctOverride[t.code] = double.tryParse(v.trim()) ?? 0;
-                      }),
-                    ),
-                  )
-                else
-                  Text(
-                    fmtPct(t.pct),
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: pnlColor(t.pct),
-                    ),
-                  ),
-                const SizedBox(width: 6),
-                Text('%', style: hint),
-                if (!isFund) ...[
-                  const SizedBox(width: 8),
-                  Text(t.realtimePct ? '实时' : '无行情',
+          // 当日涨幅：真实值就是只读文本；只有估算时才给输入框手改。
+          // 场外基金「既不是真实净值、又没有估值依据」（非交易日，联动 ETF 涨幅为 0）
+          // 时整行不显示 —— 没有估值依据就不该摆一个预估涨幅出来。
+          if (!isFund || t.navIsActual || t.estMode)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Text(t.estMode ? '当日预估涨幅' : '当日涨幅', style: hint),
+                  const SizedBox(width: 10),
+                  if (t.estMode)
+                    SizedBox(
+                      width: 92,
+                      child: TextField(
+                        controller: _ctrlFor(t),
+                        textAlign: TextAlign.center,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true, signed: true),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
+                        ],
+                        style: const TextStyle(fontSize: 14),
+                        decoration: _filledBox(),
+                        onChanged: (v) => setState(() {
+                          // 空输入按 0 算：所见即所得，想回到自动就下拉刷新
+                          _pctOverride[t.code] = double.tryParse(v.trim()) ?? 0;
+                        }),
+                      ),
+                    )
+                  else
+                    Text(
+                      fmtPct(t.pct),
                       style: TextStyle(
-                          fontSize: 11, color: theme.hintColor)),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: pnlColor(t.pct),
+                      ),
+                    ),
+                  const SizedBox(width: 6),
+                  Text('%', style: hint),
+                  if (!isFund) ...[
+                    const SizedBox(width: 8),
+                    Text(t.realtimePct ? '实时' : '无行情',
+                        style: TextStyle(
+                            fontSize: 11, color: theme.hintColor)),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
 
           if (isFund) _linkRow(context, st, t, theme, hint),
 

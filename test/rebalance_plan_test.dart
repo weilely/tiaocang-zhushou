@@ -294,4 +294,56 @@ void main() {
       expect(q.pct, closeTo(1.1, 1e-9));
     });
   });
+
+  group('估值模式（非交易日不估）', () {
+    test('交易日：净值没公布 + 联动 ETF 有涨幅 → 估值模式', () {
+      expect(
+        isFundEstMode(navActual: false, estPct: -2.19, overridden: false),
+        isTrue,
+      );
+      expect(
+        isFundEstMode(navActual: false, estPct: 1.2, overridden: false),
+        isTrue,
+      );
+    });
+
+    test('非交易日：联动 ETF 涨幅为 0 → 不是估值模式（不显示日期、不显示预估涨幅）', () {
+      expect(
+        isFundEstMode(navActual: false, estPct: 0, overridden: false),
+        isFalse,
+      );
+      expect(
+        isFundEstMode(navActual: false, estPct: -0.0, overridden: false),
+        isFalse,
+      );
+    });
+
+    test('没关联/取不到涨幅 → 不是估值模式', () {
+      expect(
+        isFundEstMode(navActual: false, estPct: null, overridden: false),
+        isFalse,
+      );
+    });
+
+    test('今天的净值已公布 → 用真实值，不算估值模式', () {
+      expect(
+        isFundEstMode(navActual: true, estPct: 2.0, overridden: false),
+        isFalse,
+      );
+    });
+
+    test('用户手改过涨幅 → 退出估值模式（输入框收起）', () {
+      expect(
+        isFundEstMode(navActual: false, estPct: 2.0, overridden: true),
+        isFalse,
+      );
+    });
+
+    test('极小的涨幅（浮点噪声）也算没有估值依据', () {
+      expect(
+        isFundEstMode(navActual: false, estPct: 1e-12, overridden: false),
+        isFalse,
+      );
+    });
+  });
 }

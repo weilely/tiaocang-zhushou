@@ -404,7 +404,7 @@ class AppState extends ChangeNotifier {
       TxnType.sell => '卖出',
       TxnType.dividend => '分红',
     };
-    return short.isEmpty ? action : ' · ';
+    return short.isEmpty ? action : '$short · $action';
   }
 
   Future<void> _linkCashFor(Txn t) async {
@@ -1240,7 +1240,7 @@ class AppState extends ChangeNotifier {
             market: marketOf(c),
           ),
       ];
-      // 只走 push2：etchAll 在失败时会用基金净值接口兜底， 00001 这种代码
+      // 只走 push2：fetchAll 在失败时会用基金净值接口兜底，000001 这种代码
       // 会被当成同名基金返回单位净值（1.296 那种），指数就被写坏了
       final got = await market.fetchExchangeQuotes(assets);
       final mapped = <String, Quote>{};
@@ -1691,6 +1691,15 @@ class AppState extends ChangeNotifier {
           ownEstPct: ownEst,
           overridePct: pctOverrides[a.code],
         );
+        // 估值依据 = 联动 ETF 的实时涨幅（没关联就看基金自己的估值字段）。
+        // 非交易日联动 ETF 涨幅恒为 0（当日净值与前一日相同），这时没有估值依据，
+        // 不该再摆出「预估净值 / 预估涨幅」——那等于拿 0 冒充估值。
+        final estPct = linkQ?.changePct ?? ownEst;
+        final estMode = isFundEstMode(
+          navActual: fq.actual,
+          estPct: estPct,
+          overridden: pctOverrides.containsKey(a.code),
+        );
         targetsIn.add(PlanTarget(
           assetId: a.id,
           code: a.code,
@@ -1702,11 +1711,11 @@ class AppState extends ChangeNotifier {
           navDate: base?.date,
           pct: fq.pct,
           navIsActual: fq.actual,
-          realtimePct:
-              !fq.actual && !pctOverrides.containsKey(a.code) && linkQ != null,
+          realtimePct: estMode,
+          estMode: estMode,
           linkCode: link,
           linkName: linkQ?.name ?? '',
-          linkPct: linkQ?.changePct ?? ownEst,
+          linkPct: estPct,
           targetRatio: ratio.clamp(0.0, 1.0),
           hasTarget: ratio > 0,
         ));

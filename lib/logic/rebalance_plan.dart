@@ -58,6 +58,13 @@ class PlanTarget {
   /// 涨幅是不是实时行情（场内有行情 / 场外关联 ETF 有行情）
   final bool realtimePct;
 
+  /// **是否处在「估值模式」**（仅场外基金有意义）
+  ///
+  /// 成立条件：今天的净值还没公布 **且** 联动 ETF 有非零涨幅。
+  /// 非交易日时联动 ETF 涨幅为 0（当日净值与前一日相同），没有可用的估值依据，
+  /// 此时 `estMode = false` —— 卡片不写「预估」、不显示净值日期、也不显示预估涨幅。
+  final bool estMode;
+
   /// 关联 ETF（仅场外基金）
   final String linkCode;
   final String linkName;
@@ -81,6 +88,7 @@ class PlanTarget {
     this.pct = 0,
     this.navIsActual = false,
     this.realtimePct = false,
+    this.estMode = false,
     this.linkCode = '',
     this.linkName = '',
     this.linkPct,
@@ -251,6 +259,24 @@ FundQuote resolveFundQuote({
     pct: pct,
     actual: false,
   );
+}
+
+/// 场外基金是否处在「**估值模式**」。
+///
+/// 成立条件：今天的净值还没公布 **且** 有非零的估值依据（联动 ETF 的实时涨幅，
+/// 退一步用基金自己的估值字段）**且** 用户没有手改过。
+///
+/// 非交易日时联动 ETF 涨幅恒为 0（当日净值与前一日相同），**没有估值依据** ——
+/// 这时不能算「估值模式」：卡片不写「预估」、不显示净值日期、也不显示预估涨幅，
+/// 免得拿 0 冒充一个估值出来。
+bool isFundEstMode({
+  required bool navActual,
+  required double? estPct,
+  required bool overridden,
+}) {
+  if (navActual || overridden) return false;
+  if (estPct == null) return false;
+  return estPct.abs() > 1e-9;
 }
 
 /// 拼方案
