@@ -1,11 +1,15 @@
 /// 在线检查最新版本
 ///
 /// 数据源是代码托管平台的公开 API（**只读、不需要 token**）：
-/// - GitHub（当前主仓库）：`/repos/<owner>/<repo>/releases/latest`，没发 Release 就退到 `/tags`
-/// - Gitee（国内镜像）：同样优先 releases、退到 tags
+/// - GitHub（主仓库）：`/repos/<o>/<r>/releases` 与 `/tags`
+/// - Gitee（国内镜像）：同样查 releases 与 tags
 ///
-/// 只做「查」不做「装」：拿到新版号后把下载页交给用户自己点，
-/// 不静默下载安装包 —— 那属于拿用户设备开玩笑。
+/// **两边都要查、按版本号取最大**：只发 tag 没建 Release 时，
+/// 光看 Release 会把「最新版本」显示成上一个旧版本（实测 v1.0.1 只有 tag，
+/// 界面因此显示成 v1.0.0）。
+///
+/// 顺带把 Release 里的 **APK 附件直链**捞出来（[UpdateInfo.apkUrl]），
+/// 有附件就能在应用内直接下载安装；没附件则如实提示「只能手动下载」。
 library;
 
 import 'dart:convert';
@@ -23,11 +27,18 @@ class UpdateInfo {
   /// 来源（'GitHub' / 'Gitee'），用于在界面上说明
   final String source;
 
+  /// 该版本 APK 附件的**直链**；仓库里没传附件时为 null
+  final String? apkUrl;
+
   const UpdateInfo({
     required this.latest,
     required this.url,
     required this.source,
+    this.apkUrl,
   });
+
+  /// 能不能在应用内直接下载安装
+  bool get hasApk => apkUrl != null && apkUrl!.isNotEmpty;
 }
 
 /// 把 `v1.0.2` / `1.0.2` / `release-1.0.2` 这类串解析成 `[1,0,2]`
@@ -52,16 +63,17 @@ bool isNewerVersion(String a, String b) {
   return false;
 }
 
-/// 从一串 tag 名里挑出最大的版本号
+/// 从一串 tag 名里挑出最大的版本号（规范化成 `X.Y.Z`）
 String? pickNewest(List<String> tags) {
   String? best;
   for (final t in tags) {
-    if (parseVersion(t) == null) continue;
-    if (best == null || isNewerVersion(t, best)) best = t;
+    final v = parseVersion(t);
+    if (v == null) continue;
+    if (best == null || isNewerVersion(t, best)) {
+      best = '${v[0]}.${v[1]}.${v[2]}';
+    }
   }
-  if (best == null) return null;
-  final v = parseVersion(best)!;
-  return '${v[0]}.${v[1]}.${v[2]}';
+  return best;
 }
 
 /// 各仓库地址（改这里即可切换 / 增加镜像源）
@@ -94,37 +106,41 @@ Future<UpdateInfo?> fetchLatestVersion({
   return null;
 }
 
+// ==================== GitHub ====================
+
 Future<UpdateInfo?> _github(String repo, Duration timeout) async {
   if (repo.isEmpty) return null;
   const headers = {'Accept': 'application/vnd.github+json'};
   final found = <UpdateInfo>[];
 
-  // ① releases/latest
+  // ① releases 列表（不用 releases/latest：要顺便把 APK 附件直链捞出来）
   try {
     final rel = await http.get(
-      Uri.parse('https://api.github.com/repos/$repo/releases/latest'),
+      Uri.parse('https://api.github.com/repos/$repo/releases?per_page=30'),
       headers: headers,
     ).timeout(timeout);
     if (rel.statusCode == 200) {
-      final m = jsonDecode(rel.body);
-      final tag = (m is Map ? m['tag_name'] : null)?.toString() ?? '';
-      final v = parseVersion(tag);
-      if (v != null) {
-        final page = (m['html_url'] ?? '').toString();
-        found.add(UpdateInfo(
-          latest: '${v[0]}.${v[1]}.${v[2]}',
-          url: page.isNotEmpty ? page : 'https://github.com/$repo/releases',
-          source: 'GitHub',
-        ));
+      final list = jsonDecode(rel.body);
+      if (list is List) {
+        for (final m in list) {
+          if (m is! Map) continue;
+          final v = parseVersion((m['tag_name'] ?? '').toString());
+          if (v == null) continue;
+          final page = (m['html_url'] ?? '').toString();
+          found.add(UpdateInfo(
+            latest: '${v[0]}.${v[1]}.${v[2]}',
+            url: page.isNotEmpty ? page : 'https://github.com/$repo/releases',
+            source: 'GitHub',
+            apkUrl: _apkAssetOf(m['assets']),
+          ));
+        }
       }
     }
   } catch (_) {
     // 忽略，继续试 tags
   }
 
-  // ② tags —— **必须也查**：发了新 tag 但还没建 Release 时，
-  //    releases/latest 会返回上一个旧版本（实测 v1.0.1 只有 tag，
-  //    界面因此把「最新版本」显示成 v1.0.0）。
+  // ② tags —— 必须也查（见文件头注释）
   try {
     final res = await http.get(
       Uri.parse('https://api.github.com/repos/$repo/tags?per_page=100'),
@@ -133,13 +149,12 @@ Future<UpdateInfo?> _github(String repo, Duration timeout) async {
     if (res.statusCode == 200) {
       final list = jsonDecode(res.body);
       if (list is List) {
-        final newest = pickNewest([
-          for (final e in list)
-            if (e is Map && e['name'] != null) e['name'].toString(),
-        ]);
-        if (newest != null) {
+        for (final e in list) {
+          if (e is! Map || e['name'] == null) continue;
+          final v = parseVersion(e['name'].toString());
+          if (v == null) continue;
           found.add(UpdateInfo(
-            latest: newest,
+            latest: '${v[0]}.${v[1]}.${v[2]}',
             url: 'https://github.com/$repo/releases',
             source: 'GitHub',
           ));
@@ -153,33 +168,31 @@ Future<UpdateInfo?> _github(String repo, Duration timeout) async {
   return _newestOf(found);
 }
 
-/// 从多个候选里取版本号最大的那个
-UpdateInfo? _newestOf(List<UpdateInfo> list) {
-  UpdateInfo? best;
-  for (final e in list) {
-    if (best == null || isNewerVersion(e.latest, best.latest)) best = e;
-  }
-  return best;
-}
+// ==================== Gitee ====================
 
 Future<UpdateInfo?> _gitee(String repo, Duration timeout) async {
   if (repo.isEmpty) return null;
   final found = <UpdateInfo>[];
 
+  // Gitee 的 releases 列表（`releases/latest` 在没建发行版时会 404）
   try {
     final rel = await http.get(
-      Uri.parse('https://gitee.com/api/v5/repos/$repo/releases/latest'),
+      Uri.parse('https://gitee.com/api/v5/repos/$repo/releases?per_page=30'),
     ).timeout(timeout);
     if (rel.statusCode == 200) {
-      final m = jsonDecode(rel.body);
-      final tag = (m is Map ? m['tag_name'] : null)?.toString() ?? '';
-      final v = parseVersion(tag);
-      if (v != null) {
-        found.add(UpdateInfo(
-          latest: '${v[0]}.${v[1]}.${v[2]}',
-          url: 'https://gitee.com/$repo/releases',
-          source: 'Gitee',
-        ));
+      final list = jsonDecode(rel.body);
+      if (list is List) {
+        for (final m in list) {
+          if (m is! Map) continue;
+          final v = parseVersion((m['tag_name'] ?? '').toString());
+          if (v == null) continue;
+          found.add(UpdateInfo(
+            latest: '${v[0]}.${v[1]}.${v[2]}',
+            url: 'https://gitee.com/$repo/releases',
+            source: 'Gitee',
+            apkUrl: _giteeApkOf(m),
+          ));
+        }
       }
     }
   } catch (_) {
@@ -193,14 +206,14 @@ Future<UpdateInfo?> _gitee(String repo, Duration timeout) async {
     if (res.statusCode == 200) {
       final list = jsonDecode(res.body);
       if (list is List) {
-        final newest = pickNewest([
-          for (final e in list)
-            if (e is Map && (e['name'] ?? e['tag_name']) != null)
-              (e['name'] ?? e['tag_name']).toString(),
-        ]);
-        if (newest != null) {
+        for (final e in list) {
+          if (e is! Map) continue;
+          final raw = (e['name'] ?? e['tag_name'])?.toString();
+          if (raw == null) continue;
+          final v = parseVersion(raw);
+          if (v == null) continue;
           found.add(UpdateInfo(
-            latest: newest,
+            latest: '${v[0]}.${v[1]}.${v[2]}',
             url: 'https://gitee.com/$repo/releases',
             source: 'Gitee',
           ));
@@ -212,4 +225,62 @@ Future<UpdateInfo?> _gitee(String repo, Duration timeout) async {
   }
 
   return _newestOf(found);
+}
+
+// ==================== 公共小件 ====================
+
+/// 从 release 的 assets 里挑出 APK 附件的下载直链
+///
+/// 优先 `application/vnd.android.package-archive`，退而按文件名 `.apk` 判断。
+String? _apkAssetOf(Object? assets) {
+  if (assets is! List) return null;
+  String? byMime;
+  String? byName;
+  for (final a in assets) {
+    if (a is! Map) continue;
+    final url = (a['browser_download_url'] ?? '').toString();
+    if (url.isEmpty) continue;
+    final type = (a['content_type'] ?? '').toString();
+    final name = (a['name'] ?? '').toString().toLowerCase();
+    if (type.contains('android.package-archive')) byMime ??= url;
+    if (name.endsWith('.apk')) byName ??= url;
+  }
+  return byMime ?? byName;
+}
+
+/// Gitee 发行版的附件：主字段是 `assets`（与 GitHub 同名），
+/// 退一步兼容 `attach_files`（Gitee 网页上传的附件走这个）
+String? _giteeApkOf(Map m) {
+  final byAssets = _apkAssetOf(m['assets']);
+  if (byAssets != null) return byAssets;
+  final files = m['attach_files'];
+  if (files is List) {
+    for (final f in files) {
+      if (f is! Map) continue;
+      final url =
+          (f['browser_download_url'] ?? f['download_url'] ?? '').toString();
+      if (url.isEmpty) continue;
+      final name = (f['name'] ?? f['title'] ?? '').toString().toLowerCase();
+      if (name.endsWith('.apk') || url.toLowerCase().contains('.apk')) return url;
+    }
+  }
+  return null;
+}
+
+/// 从多个候选里取版本号最大的那个；**版本相同时优先带 APK 附件的**
+/// （否则会把「能直接下载安装」的能力丢掉）
+UpdateInfo? _newestOf(List<UpdateInfo> list) {
+  UpdateInfo? best;
+  for (final e in list) {
+    if (best == null) {
+      best = e;
+      continue;
+    }
+    if (isNewerVersion(e.latest, best.latest)) {
+      best = e;
+    } else if (e.latest == best.latest && e.hasApk && !best.hasApk) {
+      best = e;
+    }
+  }
+  return best;
 }

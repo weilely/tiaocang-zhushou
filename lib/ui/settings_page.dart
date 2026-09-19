@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../core/app_info.dart';
 import '../core/format.dart';
+import '../data/apk_updater.dart';
 import '../data/file_store.dart';
 import '../data/update_source.dart';
 import '../data/db_dump.dart';
@@ -1539,23 +1540,166 @@ class _SettingsPageState extends State<SettingsPage> {
     }
 
     final hasNew = isNewerVersion(info.latest, appVersion);
-    await showDialog<void>(
+
+    if (!hasNew) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('已是最新版本'),
+          content: Text(
+            '当前版本：v$appVersion\n'
+            '最新版本：v${info.latest}（来源 ${info.source}）\n\n'
+            '暂时不用更新。',
+            style: const TextStyle(fontSize: 13, height: 1.6),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // 有新版本：能拿到 APK 直链就给「下载并安装」，拿不到就只给网页
+    final canAuto = info.hasApk;
+    final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(hasNew ? '发现新版本 v${info.latest}' : '已是最新版本'),
+        title: Text('发现新版本 v${info.latest}'),
         content: Text(
           '当前版本：v$appVersion\n'
-          '最新版本：v${info.latest}（来源 ${
-              info.source})\n\n'
-          '${hasNew ? '可以去下面的页面下载新版安装包。\n\n${info.url}' : '暂时不用更新。\n\n${info.url}'}',
+          '最新版本：v${info.latest}（来源 ${info.source}）\n\n'
+          '${canAuto ? '可以直接在应用内下载并安装（下载完系统会让你确认一次安装）。'
+              '新版与当前包同签名，装上会直接覆盖、数据不丢。' : '这个版本在仓库里还没有 APK 附件，'
+              '只能打开下载页手动下载：\n\n${info.url}'}',
           style: const TextStyle(fontSize: 13, height: 1.6),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+              onPressed: () => Navigator.pop(ctx, false), child: const Text('稍后')),
+          if (canAuto)
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('下载并安装'),
+            )
+          else
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('知道了'),
+            ),
         ],
       ),
     );
+
+    if (go != true || !canAuto || !context.mounted) return;
+    await _downloadAndInstall(info);
+  }
+
+  /// 下载 APK 并拉起系统安装器
+  Future<void> _downloadAndInstall(UpdateInfo info) async {
+    // 先确认系统允许本应用「安装未知应用」，没开就引导过去
+    if (!await ApkUpdater.canInstall()) {
+      if (!mounted) return;
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('需要先允许安装'),
+          content: const Text(
+            'Android 要求手动允许「安装未知应用」，否则下载完也装不上。\n\n'
+            '下一步会打开系统设置，请把「调仓助手」这一项打开，再回来重新点「检查更新」。',
+            style: TextStyle(fontSize: 13, height: 1.6),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('去设置')),
+          ],
+        ),
+      );
+      if (go == true) await ApkUpdater.openInstallSettings();
+      return;
+    }
+
+    // 进度用 ValueNotifier 驱动，避免 StatefulBuilder 里轮询刷新的土办法
+    final progress = ValueNotifier<double>(0);
+    var cancelled = false;
+    var dialogOpen = true;
+    final dialog = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('正在下载新版'),
+        content: ValueListenableBuilder<double>(
+          valueListenable: progress,
+          builder: (_, v, _) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              LinearProgressIndicator(value: v > 0 ? v : null),
+              const SizedBox(height: 10),
+              Text(
+                v > 0 ? '${(v * 100).toStringAsFixed(0)}%' : '连接中…',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              cancelled = true;
+              Navigator.pop(ctx);
+              dialogOpen = false;
+            },
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+
+    String? path;
+    Object? err;
+    try {
+      path = await ApkUpdater.download(
+        info.apkUrl!,
+        fileName: 'tiaocang-zhushou-v${info.latest}.apk',
+        onProgress: (v) => progress.value = v ?? 0,
+        isCancelled: () => cancelled,
+      );
+    } catch (e) {
+      err = e;
+    }
+
+    // 关掉进度窗（用户点「取消」时它已经关了，别重复 pop）
+    if (dialogOpen && mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+    await dialog;
+    progress.dispose();
+
+    if (cancelled) {
+      _snack('已取消下载');
+      return;
+    }
+    if (err != null) {
+      _snack(isCancelledError(err) ? '已取消下载' : '下载失败：$err');
+      return;
+    }
+    if (path == null) {
+      _snack('下载失败：没有拿到文件');
+      return;
+    }
+    if (!mounted) return;
+    try {
+      await ApkUpdater.install(path);
+      _snack('已交给系统安装器，请按提示确认安装');
+    } catch (e) {
+      _snack('拉起安装器失败：$e');
+    }
   }
 
   /// 关于明细：默认不铺在设置页上，点一下才弹

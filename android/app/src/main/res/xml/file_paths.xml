@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 可分享的目录。下载好的 APK 放在 App 的外部私有目录
+  （/Android/data/<包名>/files/），安装时通过 content:// 交给系统安装器。
+  用 external-files-path 而不是 external-path：外部私有目录从 Android 10 起
+  无需任何存储权限，也不会被其它应用随意读取。
+-->
+<paths>
+    <external-files-path name="apk" path="." />
+    <files-path name="apk_internal" path="." />
+    <cache-path name="apk_cache" path="." />
+</paths>
