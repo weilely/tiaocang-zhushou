@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
+import '../core/app_info.dart';
 import '../core/format.dart';
 import '../data/file_store.dart';
 import '../data/db_dump.dart';
@@ -645,7 +646,10 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 「外观」：跟随系统 / 浅色 / 深色
   Widget _appearanceSection(BuildContext context, AppState st) {
     final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
-    const options = <String, String>{
+    // 用 SegmentedButton 而不是 RadioListTile：后者在 Flutter 3.32+ 已弃用，
+    // 且这样和「分红方式」的选择器样式一致
+    const modes = ['system', 'light', 'dark'];
+    const labels = <String, String>{
       'system': '跟随系统',
       'light': '浅色',
       'dark': '深色',
@@ -658,20 +662,88 @@ class _SettingsPageState extends State<SettingsPage> {
         children: [
           Text('切换整机的明暗', style: hint),
           const SizedBox(height: 8),
-          for (final m in options.keys)
-            RadioListTile<String>(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              groupValue: st.themeMode,
-              value: m,
-              title: Text(options[m] ?? m, style: const TextStyle(fontSize: 14)),
-              subtitle:
-                  m == 'system' ? Text('跟手机明暗走', style: hint) : null,
-              onChanged: (v) => st.setThemeMode(v ?? 'system'),
-            ),
+          SegmentedButton<String>(
+            segments: [
+              for (final m in modes)
+                ButtonSegment(value: m, label: Text(labels[m] ?? m)),
+            ],
+            selected: {st.themeMode},
+            onSelectionChanged: (s) => st.setThemeMode(s.first),
+          ),
         ],
       ),
     );
+  }
+
+  /// 行情指标的筹码：**只写名称、不写代码**；不带删除叉（叉太容易误删），
+  /// 删除走长按弹出的操作卡片。
+  ///
+  /// 点一下 = 在「已显示 / 待选」之间切换；长按 = 打开操作卡片。
+  Widget _indexChip(BuildContext context, AppState st, IndexEntry e,
+      {required bool on}) {
+    final chip = InputChip(
+      avatar: Icon(on ? Icons.check_circle : Icons.radio_button_unchecked,
+          size: 16),
+      label: Text(e.label, style: const TextStyle(fontSize: 12)),
+      onPressed: () => st.toggleIndexEntry(e.code),
+      // 末尾是个「⋯」而不是删除叉：点它或长按都打开操作卡片，
+      // 删除要在卡片里再确认一次，避免误删
+      onDeleted: () => _indexActionSheet(context, st, e),
+      deleteIcon: const Icon(Icons.more_horiz, size: 15),
+      deleteButtonTooltipMessage: '更多操作',
+    );
+    return GestureDetector(
+      onLongPress: () => _indexActionSheet(context, st, e),
+      child: chip,
+    );
+  }
+
+  /// 长按指标弹出的操作卡片：显示 / 隐藏、删除
+  Future<void> _indexActionSheet(
+      BuildContext context, AppState st, IndexEntry e) async {
+    final act = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(e.label,
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700)),
+                  ),
+                  Text(e.code,
+                      style: TextStyle(
+                          fontSize: 12, color: Theme.of(ctx).hintColor)),
+                ],
+              ),
+            ),
+            ListTile(
+              dense: true,
+              leading: Icon(e.on
+                  ? Icons.visibility_off_outlined
+                  : Icons.visibility_outlined),
+              title: Text(e.on ? '从跑马灯移除（保留在待选）' : '加到跑马灯'),
+              onTap: () => Navigator.pop(ctx, 'toggle'),
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.delete_outline, color: Color(0xFFD93A3A)),
+              title: const Text('删除', style: TextStyle(color: Color(0xFFD93A3A))),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (act == 'toggle') await st.toggleIndexEntry(e.code);
+    if (act == 'delete') await st.removeIndexEntry(e.code);
   }
 
   Widget _marketSection(BuildContext context, AppState st) {
@@ -707,14 +779,7 @@ class _SettingsPageState extends State<SettingsPage> {
               runSpacing: 6,
               children: [
                 for (final e in active)
-                  InputChip(
-                    avatar: const Icon(Icons.check_circle, size: 16),
-                    label: Text('${e.label}（${e.code}）',
-                        style: const TextStyle(fontSize: 12)),
-                    onPressed: () => st.toggleIndexEntry(e.code),
-                    onDeleted: () => st.removeIndexEntry(e.code),
-                    deleteIcon: const Icon(Icons.close, size: 14),
-                  ),
+                  _indexChip(context, st, e, on: true),
               ],
             ),
           const SizedBox(height: 12),
@@ -723,39 +788,30 @@ class _SettingsPageState extends State<SettingsPage> {
               Text('待选', style: TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w700, color: Theme.of(context).hintColor)),
               const SizedBox(width: 6),
-              Text('（点一下加进跑马灯）', style: hint),
+              Text('（点一下加进跑马灯，长按可删除）', style: hint),
             ],
           ),
           const SizedBox(height: 4),
+          // 该组一个标的都没有就整组不显示（不再出现「（无）」这种占位行）
           for (final g in const [
             ('broad', '大盘指数'),
             ('sector', '行业指数'),
             ('etf', '场内基金'),
-          ]) ...[
-            Padding(
-              padding: const EdgeInsets.only(top: 2, bottom: 4),
-              child: Text('· ${g.$2}', style: hint),
-            ),
-            if (!pool.any((e) => e.group == g.$1))
-              Text('（无）', style: hint)
-            else
+          ])
+            if (pool.any((e) => e.group == g.$1)) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 2, bottom: 4),
+                child: Text('· ${g.$2}', style: hint),
+              ),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
                 children: [
                   for (final e in pool.where((e) => e.group == g.$1))
-                    InputChip(
-                      avatar:
-                          const Icon(Icons.radio_button_unchecked, size: 16),
-                      label: Text('${e.label}（${e.code}）',
-                          style: const TextStyle(fontSize: 12)),
-                      onPressed: () => st.toggleIndexEntry(e.code),
-                      onDeleted: () => st.removeIndexEntry(e.code),
-                      deleteIcon: const Icon(Icons.close, size: 14),
-                    ),
+                    _indexChip(context, st, e, on: false),
                 ],
               ),
-          ],
+            ],
           const Divider(height: 24),
           Text('常用指数一键添加', style: hint),
           const SizedBox(height: 6),
@@ -1417,9 +1473,9 @@ class _SettingsPageState extends State<SettingsPage> {
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(
             children: [
-              const Expanded(
-                child: Text('调仓助手 v1.0.0　吹角天明@MLB',
-                    style: TextStyle(fontSize: 14)),
+              Expanded(
+                child: Text(appVersionLine,
+                    style: const TextStyle(fontSize: 14)),
               ),
               Icon(Icons.info_outline,
                   size: 18, color: Theme.of(context).hintColor),

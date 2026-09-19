@@ -1,0 +1,97 @@
+﻿<#
+升版本号 + 同步到 GitHub 一条龙。
+
+用法（在仓库根目录；本机执行策略禁止直接跑 .ps1，所以要带 Bypass）：
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool\bump_version.ps1 -Version 1.0.2
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool\bump_version.ps1 -Version 1.1.0 -Message "新增 xxx"
+
+注意：本文件必须存成 **UTF-8 with BOM**，否则 Windows PowerShell 5.1 会按 GBK 读中文，
+把字符串引号吃掉、整个脚本语法报错。
+
+做的事：
+  1. 改 pubspec.yaml 的 `version: X+Y`（build 号自动 +1）
+  2. 改 lib/core/app_info.dart 的 appVersion
+  3. flutter analyze + flutter test
+  4. git add / commit / tag vX / push（含 tag）
+
+版本号约定（和用户商定）：每次改动 +1 patch（1.0.1、1.0.2…），
+攒到一定量或加了成体系的功能再跳 minor（1.1.0）。
+#>
+param(
+  [Parameter(Mandatory = $true)][string]$Version,
+  [string]$Message = '',
+  [switch]$SkipPush
+)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+Set-Location $root
+
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+  throw "版本号格式应为 X.Y.Z，收到：$Version"
+}
+
+$pubspec = Join-Path $root 'pubspec.yaml'
+$info = Join-Path $root 'lib\core\app_info.dart'
+
+# ---- 1) pubspec.yaml：version: X.Y.Z+BUILD，build 号自增 ----
+$lines = [System.IO.File]::ReadAllLines($pubspec)
+$found = $false
+for ($i = 0; $i -lt $lines.Count; $i++) {
+  if ($lines[$i] -match '^version:\s*(\S+)\s*$') {
+    $old = $Matches[1]
+    $build = 1
+    if ($old -match '\+(\d+)$') { $build = [int]$Matches[1] + 1 }
+    $lines[$i] = "version: $Version+$build"
+    $found = $true
+    Write-Host "pubspec: $old -> $Version+$build"
+    break
+  }
+}
+if (-not $found) { throw "pubspec.yaml 里没找到 version: 行" }
+[System.IO.File]::WriteAllLines($pubspec, $lines, [System.Text.UTF8Encoding]::new($false))
+
+# ---- 2) app_info.dart ----
+$c = [System.IO.File]::ReadAllText($info)
+$new = [regex]::Replace($c, "appVersion = '[^']*'", "appVersion = '$Version'")
+if ($new -eq $c -and $c -notmatch "appVersion = '$Version'") {
+  throw "app_info.dart 里没能替换 appVersion"
+}
+[System.IO.File]::WriteAllText($info, $new, [System.Text.UTF8Encoding]::new($false))
+Write-Host "app_info: appVersion = $Version"
+
+# ---- 3) 校验 ----
+# 两个坑：
+# ① flutter analyze 只要有任何 issue（含 info）就返回非 0 → 要看输出而不是退出码；
+#    项目门线是「零错误零告警」，info 级 lint 属建议性、不拦发布。
+# ② flutter.bat 会把「N issues found」写到 stderr，在 $ErrorActionPreference='Stop'
+#    下会被当成终止错误 → 调用期间临时改成 Continue。
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+  $analyzeOut = @(& 'E:\flutter\bin\flutter.bat' analyze 2>&1 | ForEach-Object { "$_" })
+  $analyzeOut | ForEach-Object { Write-Host $_ }
+  $hard = $analyzeOut | Select-String -Pattern '^\s*(error|warning)\s+-'
+  if ($hard) {
+    $hard | ForEach-Object { Write-Host $_.Line }
+    throw "flutter analyze 有错误或告警，已中止"
+  }
+  & 'E:\flutter\bin\flutter.bat' test 2>&1 | ForEach-Object { Write-Host $_ }
+  if ($LASTEXITCODE -ne 0) { throw "flutter test 未通过，已中止" }
+} finally {
+  $ErrorActionPreference = $prevEap
+}
+
+# ---- 4) 提交 + 打标 + 推送 ----
+if (-not $Message) { $Message = "发布 v$Version" }
+git add -A
+git -c user.email=me@local -c user.name=dev commit -q -m "$Message"
+git tag -a "v$Version" -m "v$Version"
+Write-Host "已提交并打标 v$Version"
+
+if (-not $SkipPush) {
+  $env:GIT_SSH_COMMAND = 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new'
+  git push
+  git push origin "v$Version"
+  Write-Host "已推送到 GitHub（含 tag v$Version）"
+}

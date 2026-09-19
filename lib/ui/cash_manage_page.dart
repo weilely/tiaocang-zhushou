@@ -479,7 +479,7 @@ class _CashManagePageState extends State<CashManagePage> {
                           final n = note.text.trim();
                           if (pickedAsset.isEmpty) return n;
                           final s = st.displayShortOf(pickedAsset);
-                          return n.isEmpty ? s : '$s · ${n}';
+                          return n.isEmpty ? s : '$s · $n';
                         }(),
                       ));
                       if (ctx.mounted) Navigator.of(ctx).pop();

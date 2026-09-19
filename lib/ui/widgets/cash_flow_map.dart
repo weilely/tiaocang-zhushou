@@ -33,6 +33,7 @@ class CashFlowMap extends StatelessWidget {
           note: s.beginMissingNav.isEmpty
               ? null
               : '含成本估值：${s.beginMissingNav.join('、')}',
+          isFirst: true,
         ),
 
         // 投入 / 赎回（期间交易活动，不参与主链加减）
@@ -61,19 +62,7 @@ class CashFlowMap extends StatelessWidget {
               : (s.netFlow > 0 ? const Color(0xFFD93A3A) : null),
         ),
 
-        // 账户盈亏
-        _node(
-          context,
-          label: '账户盈亏',
-          value: fmtYuan(s.pnl, signed: true),
-          formula: '期末 − 期初 − ${s.netFlowLabel}',
-          valueColor: pnlColor(s.pnl),
-          note: s.cashAdjust.abs() > 1e-9
-              ? '含现金调整 ${fmtYuan(s.cashAdjust, signed: true)}'
-              : null,
-        ),
-
-        // 现金分红：单独显示，紧贴期末资产上方
+        // 现金分红：单独显示
         _node(
           context,
           label: '现金分红',
@@ -94,6 +83,19 @@ class CashFlowMap extends StatelessWidget {
               ? null
               : '含成本估值：${s.endMissingNav.join('、')}',
           emphasize: true,
+        ),
+
+        // 账户盈亏放最末：它是主恒等式的**残差**，读到最后正好是结论
+        _node(
+          context,
+          label: '账户盈亏',
+          value: fmtYuan(s.pnl, signed: true),
+          formula: '期末 − 期初 − ${s.netFlowLabel}',
+          valueColor: pnlColor(s.pnl),
+          note: s.cashAdjust.abs() > 1e-9
+              ? '含现金调整 ${fmtYuan(s.cashAdjust, signed: true)}'
+              : null,
+          isLast: true,
         ),
 
         if (s.ledgerIncomplete)
@@ -137,6 +139,9 @@ class CashFlowMap extends StatelessWidget {
       );
 
   /// 主干节点（实心圆点 + 实线）
+  ///
+  /// [isFirst] / [isLast] **显式传入**：以前是靠 `label == '期末资产'` 反推末节点，
+  /// 一改顺序线就画错（末尾多出一截、或该连的没连上）。
   Widget _node(
     BuildContext context, {
     required String label,
@@ -146,6 +151,8 @@ class CashFlowMap extends StatelessWidget {
     String? note,
     bool emphasize = false,
     Color? accent,
+    bool isFirst = false,
+    bool isLast = false,
   }) {
     return _row(
       context,
@@ -157,6 +164,8 @@ class CashFlowMap extends StatelessWidget {
       emphasize: emphasize,
       accent: accent,
       primary: true,
+      isFirst: isFirst,
+      isLast: isLast,
     );
   }
 
@@ -186,6 +195,8 @@ class CashFlowMap extends StatelessWidget {
     String? note,
     bool emphasize = false,
     Color? accent,
+    bool isFirst = false,
+    bool isLast = false,
   }) {
     final theme = Theme.of(context);
     final dotColor = accent ?? theme.colorScheme.primary;
@@ -203,8 +214,8 @@ class CashFlowMap extends StatelessWidget {
                 accent: dotColor,
                 primary: primary,
                 emphasize: emphasize,
-                isFirst: label == '期初资产',
-                isLast: label == '期末资产',
+                isFirst: isFirst,
+                isLast: isLast,
               ),
             ),
           ),

@@ -90,9 +90,10 @@ void main() {
       expect(y('期初资产'), lessThan(y('投入金额')));
       expect(y('投入金额'), lessThan(y('赎回金额')));
       expect(y('赎回金额'), lessThan(y('净流入')));
-      expect(y('净流入'), lessThan(y('账户盈亏')));
-      expect(y('账户盈亏'), lessThan(y('现金分红')));
+      expect(y('净流入'), lessThan(y('现金分红')));
       expect(y('现金分红'), lessThan(y('期末资产')));
+      // 账户盈亏是主恒等式的残差，排在**期末资产之后**收尾
+      expect(y('期末资产'), lessThan(y('账户盈亏')));
     });
 
     testWidgets('净流出时标签自动切换', (tester) async {

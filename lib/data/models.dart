@@ -160,6 +160,22 @@ class Txn {
         TxnType.dividend => amount,
       };
 
+  /// 成本调整流水的备注前缀（编辑页把单位成本差值记成它）
+  static const String costAdjustNote = '成本调整';
+
+  /// 红利再投流水的备注前缀（自动分红把红利折成份额时用）
+  static const String reinvestNote = '红利再投';
+
+  /// 这笔交易**不产生现金流水**（只动成本或份额，钱没进出）
+  ///
+  /// - `成本调整`：编辑页改单位成本，差值是账面调整、不是真花钱
+  /// - `红利再投 xxx`：分红直接折成份额，没经过现金
+  ///
+  /// 判现金流缺口（`investGap`）时必须把它们排除，否则会误报
+  /// 「买入没有对应的现金扣款」。
+  bool get isCashless =>
+      note == costAdjustNote || note.startsWith(reinvestNote);
+
   Map<String, Object?> toMap() => {
         'id': id,
         'account_id': accountId,

@@ -423,13 +423,15 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
           !dayOnly(t.date).isAfter(hi);
       switch (t.type) {
         case TxnType.buy:
-          if (inWindow) invest += t.amount + t.fee;
+          // 不动现金的买入（成本调整 / 红利再投）不计入「投入金额」，
+          // 否则会和现金账本对不上、误报「买入没有对应的现金扣款」
+          if (inWindow && !t.isCashless) invest += t.amount + t.fee;
           shares += t.shares;
           break;
         case TxnType.sell:
           final sold = t.shares < shares ? t.shares : shares;
           final ratio = t.shares > 1e-9 ? sold / t.shares : 0.0;
-          if (inWindow) redeem += (t.amount - t.fee) * ratio;
+          if (inWindow && !t.isCashless) redeem += (t.amount - t.fee) * ratio;
           shares -= sold;
           break;
         case TxnType.dividend:

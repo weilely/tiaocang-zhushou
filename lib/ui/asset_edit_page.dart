@@ -4,8 +4,10 @@ import 'package:provider/provider.dart';
 import '../core/format.dart';
 import '../data/models.dart';
 import '../data/securities_repo.dart';
+import '../logic/dividend.dart';
 import '../logic/link_etf.dart';
 import '../state/app_state.dart';
+import 'widgets/cn_date_picker.dart';
 
 /// 基金详情「编辑」页：从详情页右上角铅笔图标进入
 ///
@@ -168,7 +170,7 @@ class _AssetEditPageState extends State<AssetEditPage> {
             shares: 0,
             price: 0,
             fee: 0,
-            note: '成本调整',
+            note: Txn.costAdjustNote,
           ));
         }
       }
@@ -371,7 +373,70 @@ class _AssetEditPageState extends State<AssetEditPage> {
               ],
             ),
           ),
-          // 3) 持仓份额 / 4) 单位成本
+          // 3) 分红方式（只对场外基金有意义）
+          if (asset.kind == AssetKind.fund)
+            _sectionCard(
+              context,
+              icon: Icons.redeem_outlined,
+              title: '分红方式',
+              subtitle:
+                  '从生效日期起，按净值里带的分红标志自动补记交易：现金分红记一笔分红入账，红利再投按当日净值折算成份额（不动现金）。生效日之前的分红不会追溯。',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: DividendMode.none, label: Text('不自动')),
+                      ButtonSegment(value: DividendMode.cash, label: Text('现金分红')),
+                      ButtonSegment(
+                          value: DividendMode.reinvest, label: Text('红利再投')),
+                    ],
+                    selected: {st.dividendModeOf(asset.code)},
+                    onSelectionChanged: (s) => st.setDividendMode(
+                      asset.code,
+                      s.first,
+                      st.dividendModeFrom(asset.code) ?? DateTime.now(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Text('生效日期',
+                          style: TextStyle(
+                              fontSize: 13, color: Theme.of(context).hintColor)),
+                      const SizedBox(width: 10),
+                      Text(
+                        st.dividendModeDates[asset.code] ?? '未设置',
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () async {
+                          final now = DateTime.now();
+                          final picked = await showCnDatePicker(
+                            context: context,
+                            initialDate:
+                                st.dividendModeFrom(asset.code) ?? now,
+                            firstDate: DateTime(now.year - 10),
+                            lastDate: now,
+                            title: '分红方式生效日期',
+                          );
+                          if (picked == null) return;
+                          await st.setDividendMode(
+                            asset.code,
+                            st.dividendModeOf(asset.code),
+                            picked,
+                          );
+                        },
+                        child: const Text('修改'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          // 4) 持仓份额 / 5) 单位成本
           _sectionCard(
             context,
             icon: Icons.tune,

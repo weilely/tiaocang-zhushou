@@ -23,6 +23,7 @@ import '../logic/benchmark.dart';
 import '../logic/cash_flow.dart';
 import '../logic/csv_io.dart';
 import '../logic/dca.dart';
+import '../logic/dividend.dart';
 import '../logic/link_etf.dart';
 import '../logic/nav_lookup.dart';
 import '../logic/period_return.dart';
@@ -126,24 +127,24 @@ class AppState extends ChangeNotifier {
 
   /// 当前账户下的持仓（已按筛选）
   List<Position> get positions {
-    final _l = buildPositions(
+    final list = buildPositions(
       txns: txnsOfFilter,
       assets: assetsById,
       quotes: quotes,
     );
-    _fillEst(_l);
-    return _l;
+    _fillEst(list);
+    return list;
   }
 
   /// 所有账户的持仓（不受账户筛选影响；再平衡、总览用）
   List<Position> get allPositions {
-    final _l = buildPositions(
+    final list = buildPositions(
       txns: txns,
       assets: assetsById,
       quotes: quotes,
     );
-    _fillEst(_l);
-    return _l;
+    _fillEst(list);
+    return list;
   }
 
   void _fillEst(List<Position> list) {
@@ -670,8 +671,8 @@ class AppState extends ChangeNotifier {
       await _loadFromDb();
       threshold = await db.settingDouble('threshold', 0.05);
       // 还原上次的账户过滤（'0'/空 = 全部账户）；账号已删则回退到全部
-      final _af = await db.setting('accountFilter');
-      accountFilter = _af == null || _af.isEmpty ? null : int.tryParse(_af);
+      final afSaved = await db.setting('accountFilter');
+      accountFilter = afSaved == null || afSaved.isEmpty ? null : int.tryParse(afSaved);
       if (accountFilter != null && !accounts.any((a) => a.id == accountFilter)) {
         accountFilter = null;
       }
@@ -710,7 +711,10 @@ class AppState extends ChangeNotifier {
         .then((_) => rebuildCashFromTxns()));
     unawaited(loadBiometric());
     unawaited(loadThemeMode());
-    unawaited(loadNavSamples());
+    // 分红方式先就位、再读净值样本，最后按分红标志自动补记
+    unawaited(loadDividendModes()
+        .then((_) => loadNavSamples())
+        .then((_) => runAutoDividends()));
   }
 
   /// 重新算派生数据（现金余额/收益、逐日序列缓存作废）
@@ -1015,6 +1019,179 @@ class AppState extends ChangeNotifier {
     cashTxns = await db.cashTxns();
     _recompute();
     notifyListeners();
+  }
+
+  // ============================================================
+  // 场外基金分红方式（现金分红 / 红利再投）+ 生效日期
+  //
+  // 存 settings：`dividendMode:<code>` = cash|reinvest，`dividendModeAt:<code>` = yyyy-MM-dd。
+  // 生效日期必须有：只对**该日期及之后**的分红自动补记，绝不追溯历史。
+  // ============================================================
+
+  final Map<String, String> dividendModes = {};
+  final Map<String, String> dividendModeDates = {};
+
+  String dividendModeOf(String code) => dividendModes[code] ?? '';
+
+  /// 生效起始日；没设过返回 null
+  DateTime? dividendModeFrom(String code) {
+    final s = dividendModeDates[code];
+    if (s == null || s.isEmpty) return null;
+    final p = s.split('-');
+    if (p.length != 3) return null;
+    return DateTime(int.tryParse(p[0]) ?? 0, int.tryParse(p[1]) ?? 1,
+        int.tryParse(p[2]) ?? 1);
+  }
+
+  Future<void> loadDividendModes() async {
+    try {
+      final all = await db.allSettings();
+      dividendModes
+        ..clear()
+        ..addEntries([
+          for (final e in all.entries)
+            if (e.key.startsWith('dividendMode:') && e.value.trim().isNotEmpty)
+              MapEntry(e.key.substring('dividendMode:'.length), e.value.trim()),
+        ]);
+      dividendModeDates
+        ..clear()
+        ..addEntries([
+          for (final e in all.entries)
+            if (e.key.startsWith('dividendModeAt:') && e.value.trim().isNotEmpty)
+              MapEntry(
+                  e.key.substring('dividendModeAt:'.length), e.value.trim()),
+        ]);
+    } catch (_) {
+      // 读不到就当没设过
+    }
+    notifyListeners();
+  }
+
+  /// 设置某只场外基金的分红方式；[mode] 传 [DividendMode.none] 即关闭自动补记
+  Future<void> setDividendMode(String code, String mode, DateTime from) async {
+    if (!DividendMode.isValid(mode)) {
+      dividendModes.remove(code);
+      dividendModeDates.remove(code);
+      await db.setSetting('dividendMode:$code', '');
+      await db.setSetting('dividendModeAt:$code', '');
+      lastMessage = '已关闭自动分红';
+    } else {
+      dividendModes[code] = mode;
+      dividendModeDates[code] = _dayKey(from);
+      await db.setSetting('dividendMode:$code', mode);
+      await db.setSetting('dividendModeAt:$code', _dayKey(from));
+      lastMessage =
+          '分红方式：${DividendMode.label(mode)}（自 ${_dayKey(from)} 起自动补记）';
+    }
+    notifyListeners();
+  }
+
+  /// 某笔持仓在 [d] 当天持有的份额（只按流水推：买入加、卖出减）
+  static double _sharesAsOf(List<Txn> list, DateTime d) {
+    var s = 0.0;
+    for (final t in list) {
+      if (t.date.isAfter(d)) continue;
+      if (t.type == TxnType.buy) {
+        s += t.shares;
+      } else if (t.type == TxnType.sell) {
+        s -= t.shares;
+      }
+    }
+    return s;
+  }
+
+  /// 按「净值里带的分红标志」自动补记交易。
+  ///
+  /// - 现金分红 → 记一笔分红入账（联动现金流入）
+  /// - 红利再投 → 记一笔买入（份额增加，**不**动现金）
+  /// - **幂等**：以流水备注 `分红自动 <日期>` / `红利再投 <日期>` 作为标记，
+  ///   已存在同备注的流水就跳过，反复启动不会重复生成
+  /// - 只处理生效日期（含）之后的分红，生效日之前的绝不回溯
+  Future<int> runAutoDividends() async {
+    if (dividendModes.isEmpty) return 0;
+    var created = 0;
+    try {
+      for (final p in allPositions) {
+        if (p.isEmpty) continue;
+        final a = p.asset;
+        final id = a.id;
+        if (id == null || a.kind != AssetKind.fund) continue;
+        final mode = dividendModes[a.code] ?? '';
+        if (!DividendMode.isValid(mode)) continue;
+        final from = dividendModeFrom(a.code);
+        final pts = navSamples[a.code] ?? const <NavPoint>[];
+
+        // 本地的流水副本：新插入的也要算进后续日期的「持有份额」
+        final local = List<Txn>.of(p.txns);
+
+        for (final pt in pts) {
+          if (!pt.hasDividend) continue;
+          final per = perShareDividend(pt.dividend);
+          if (per == null) continue;
+          final d = DateTime.tryParse(pt.date);
+          if (d == null) continue;
+          if (from != null && d.isBefore(from)) continue;
+
+          final note = mode == DividendMode.cash
+              ? '分红自动 ${pt.date}'
+              : '${Txn.reinvestNote} ${pt.date}';
+          // 幂等：**两种备注都算已记过**。切分红方式时若只认当前方式，
+          // 同一笔分红会被记第二遍（一次现金、一次再投），金额就重了。
+          final cashNote = '分红自动 ${pt.date}';
+          final reinvestNote = '${Txn.reinvestNote} ${pt.date}';
+          if (local.any((t) => t.note == cashNote || t.note == reinvestNote)) {
+            continue;
+          }
+
+          final held = _sharesAsOf(local, d);
+          if (held <= 1e-9) continue;
+          final cash = per * held;
+          if (cash <= 1e-9) continue;
+
+          if (mode == DividendMode.cash) {
+            final t = Txn(
+              accountId: p.accountId,
+              assetId: id,
+              type: TxnType.dividend,
+              date: d,
+              amount: cash,
+              note: note,
+            );
+            await saveTxnAndLinkedCash(t);
+            local.add(t);
+          } else {
+            final navP = pt.nav;
+            if (navP <= 0) continue;
+            final sh = roundDcaShares(cash / navP, a.kind);
+            if (sh <= 0) continue;
+            final t = Txn(
+              accountId: p.accountId,
+              assetId: id,
+              type: TxnType.buy,
+              date: d,
+              amount: cash,
+              shares: sh,
+              price: navP,
+              note: note,
+            );
+            // 红利再投没有现金进出：只写交易，不动现金账本
+            await saveTxnNoCash(t);
+            local.add(t);
+          }
+          created++;
+        }
+      }
+    } catch (_) {
+      // 自动补记失败不该影响启动
+    }
+    if (created > 0) {
+      txns = await db.txns();
+      cashTxns = await db.cashTxns();
+      _recompute();
+      lastMessage = '按分红标志自动补记 $created 笔分红';
+      notifyListeners();
+    }
+    return created;
   }
 
   Future<void> addCashTxn(CashTxn t) async {
@@ -1888,7 +2065,9 @@ class AppState extends ChangeNotifier {
   /// 逐个串行 + 200ms 节流（比并发更不容易被限流）；失败只记账不写半截。
   Future<int> updateNavHistory({bool manual = false}) async {
     if (navUpdating) return 0;
-    final today = DateTime.now().hour == 0 ? DateTime.now() : DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    // 与 `latestNavDate` 同为 yyyy-MM-dd 字符串才能直接比较
+    // （早先这里给的是 DateTime，`latest == today` 恒为假、优化从未生效）
+    final today = _dayKey(DateTime.now());
     final targets = navTargets;
     if (targets.isEmpty) return 0;
 
@@ -1937,6 +2116,8 @@ class AppState extends ChangeNotifier {
       // 基准指数的历史也是这次抓的，必须一起重载，否则趋势图的基准线会一直
       // 显示「无数据」（init 里加载基准时它还没被抓下来）
       await loadIndexNavs();
+      // 新抓到的净值里可能带新的分红标志 → 顺手按分红方式补记一次
+      await runAutoDividends();
     } finally {
       navUpdating = false;
       navProgress = '';
@@ -1993,6 +2174,8 @@ class AppState extends ChangeNotifier {
           'navUpdatedAt', navUpdatedAt!.millisecondsSinceEpoch.toString());
       await loadNavSamples();
       await loadIndexNavs();
+      // 新抓到的净值里可能带新的分红标志 → 顺手按分红方式补记一次
+      await runAutoDividends();
     } finally {
       navUpdating = false;
       navProgress = '';
