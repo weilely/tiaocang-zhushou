@@ -100,11 +100,12 @@ void main() {
           endsWith('tiaocang-zhushou-v1.0.4-x86_64.apk'));
     });
 
-    test('arm64 设备不会挑到 armeabi 的包', () {
+    test('arm64 设备遇到只有 armeabi 的包 → 不给包（别塞错架构）', () {
       final a = assets(['app-armeabi-v7a.apk']);
-      // 没有 arm64 的包 → 退回「任意 apk」，但绝不能声称匹配
-      expect(pickApkAssetForAbi(a, 'arm64-v8a'), endsWith('app-armeabi-v7a.apk'));
-      // 关键是上面那次是**兜底**，不是"匹配"；有 arm64 时必须优先它
+      // 全是带架构的包、却没一个匹配 → 返回 null，界面提示"没有适配你机型的包"；
+      // 硬塞 armeabi 的包只会"下载成功、安装失败"
+      expect(pickApkAssetForAbi(a, 'arm64-v8a'), isNull);
+      // 有 arm64 时必须优先它
       final b = assets(['app-armeabi-v7a.apk', 'app-arm64-v8a.apk']);
       expect(pickApkAssetForAbi(b, 'arm64-v8a'), endsWith('app-arm64-v8a.apk'));
     });
@@ -118,9 +119,11 @@ void main() {
           endsWith('tiaocang-zhushou-v1.0.4.apk'));
     });
 
-    test('认不出设备 ABI 时退到任意 apk；没有 apk 返回 null', () {
+    test('认不出设备 ABI 时退到通用包；没有可用 apk 返回 null', () {
       final a = assets(['x-arm64.apk']);
-      expect(pickApkAssetForAbi(a, ''), endsWith('x-arm64.apk'));
+      // ABI 未知时 wanted 为空 → 带架构的包也不算匹配，但也没有通用包 → null
+      expect(pickApkAssetForAbi(a, ''), isNull);
+      expect(pickApkAssetForAbi(assets(['app.apk']), ''), endsWith('app.apk'));
       expect(pickApkAssetForAbi(assets(['notes.txt']), 'arm64-v8a'), isNull);
       expect(pickApkAssetForAbi(null, 'arm64-v8a'), isNull);
     });

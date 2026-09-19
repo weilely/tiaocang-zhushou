@@ -20,7 +20,8 @@
 param(
   [Parameter(Mandatory = $true)][string]$Version,
   [string]$Message = '',
-  [switch]$SkipPush
+  [switch]$SkipPush,
+  [switch]$Publish
 )
 
 $ErrorActionPreference = 'Stop'
@@ -104,5 +105,27 @@ if (-not $SkipPush) {
     git push gitee main
     git push gitee "v$Version"
     Write-Host "已推送到 Gitee（含 tag v$Version）"
+  }
+}
+
+# ---- 5) 出包并上传发行版附件（应用内更新靠它；-Publish 才做）----
+# 只传**拆分包**：通用包 97.7MB，本机上行实测只有 ~31KB/s，传不动；
+# 拆成 ABI 后 arm64 才 36.7MB。App 端按设备 ABI 挑对应附件
+# （见 lib/data/update_source.dart 的 pickApkAssetForAbi）。
+if ($Publish) {
+  if (-not $env:GITEE_TOKEN) {
+    Write-Host "跳过上传：没有 GITEE_TOKEN"
+  } else {
+    & 'E:\flutter\bin\flutter.bat' build apk --release --split-per-abi | Out-Host
+    foreach ($abi in @('arm64-v8a', 'armeabi-v7a')) {
+      $src = Join-Path $root "build\app\outputs\flutter-apk\app-$abi-release.apk"
+      if (-not (Test-Path $src)) { Write-Host "没有 $abi 的产物，跳过"; continue }
+      $dst = Join-Path (Split-Path -Parent $root) "tiaocang-zhushou-v$Version-$abi.apk"
+      Copy-Item $src $dst -Force
+      & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $PSScriptRoot 'publish_release.ps1') `
+        -Version $Version -ApkPath $dst `
+        -AssetName "tiaocang-zhushou-v$Version-$abi.apk"
+    }
   }
 }

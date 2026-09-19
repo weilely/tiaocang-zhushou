@@ -77,35 +77,22 @@ if (-not $releaseId) {
   Write-Host "已创建（id=$releaseId）"
 }
 
-# ---- 2) 传附件：流式 multipart ----
-#    用 StreamContent 而不是 ByteArrayContent：
-#    ① 97MB 不必全读进内存；② PowerShell 传数组给构造器会踩
-#    "Cannot find an overload ... argument count: 102458758" 的坑。
-Add-Type -AssemblyName System.Net.Http
-$client = [System.Net.Http.HttpClient]::new()
-$client.Timeout = [TimeSpan]::FromMinutes(30)
-
-$content = [System.Net.Http.MultipartFormDataContent]::new()
-$content.Add([System.Net.Http.StringContent]::new($token), 'access_token')
-
-$fs = [System.IO.File]::OpenRead($ApkPath)
-$fileContent = [System.Net.Http.StreamContent]::new($fs)
-$fileContent.Headers.ContentType =
-  [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/vnd.android.package-archive')
-$content.Add($fileContent, 'file', $attachName)
-
-$url = "$api/releases/$releaseId/attach_files"
-Write-Host "正在上传 $attachName（$sizeMb MB，可能要几分钟）…"
-try {
-  $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
-  $text = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-  if (-not $resp.IsSuccessStatusCode) {
-    throw "上传失败 HTTP $([int]$resp.StatusCode)：$text"
-  }
-  Write-Host "上传成功"
-} finally {
-  $fs.Dispose()
-  $client.Dispose()
-}
+# ---- 2) 传附件：用 curl ----
+# 为什么不用 .NET 的 HttpClient：同样的 multipart，.NET 会被 Gitee 判
+# 「登录失效 401」（令牌放在 StringContent 体里它不认），而 curl 的 -F 是好的。
+# 另外本机上行很慢（实测 ~31KB/s），所以 max-time 给足、并关掉 Expect: 100-continue
+# （大文件带 Expect 容易被服务端晾住）。
+$url = "$api/releases/$releaseId/attach_files?access_token=$token"
+$respFile = Join-Path $env:TEMP "gitee_attach_resp.json"
+Write-Host "正在上传 $attachName（$sizeMb MB）…"
+& curl.exe -sS --max-time 3600 -H "Expect:" `
+  -X POST $url `
+  -F "file=@$ApkPath;type=application/vnd.android.package-archive;filename=$attachName" `
+  -o $respFile -w "HTTP=%{http_code} 上传=%{size_upload}字节 耗时=%{time_total}s`n"
+$code = $LASTEXITCODE
+$body = if (Test-Path $respFile) { Get-Content $respFile -Raw } else { '' }
+if ($code -ne 0) { throw "curl 失败（exit=$code）：$body" }
+if ($body -notmatch '"name"') { throw "上传未成功，服务端返回：$body" }
+Write-Host "上传成功：$($body.Trim())"
 
 Write-Host "下载页：https://gitee.com/$Repo/releases/tag/$tag"

@@ -1,4 +1,4 @@
-﻿/// 在线检查最新版本
+/// 在线检查最新版本
 ///
 /// 数据源是代码托管平台的公开 API（**只读、不需要 token**）：
 /// - GitHub（主仓库）：`/repos/<o>/<r>/releases` 与 `/tags`
@@ -89,25 +89,29 @@ class UpdateSource {
 ///
 /// [deviceAbi] 传设备主 ABI（如 `arm64-v8a`）：拆分打包后发行版里有多个
 /// 架构的 APK，按它挑对应那个；空串则优先"不带架构后缀"的通用包。
+///
+/// **两个源都查、合并后再取最新**，而不是"先问 GitHub、拿到就返回"：
+/// GitHub 上常常只有 tag 没有附件，若它先返回就会把 Gitee 上**带附件**的
+/// 同一版本盖掉 —— 应用内更新明明能用，却退化成"只能手动下载"。
 Future<UpdateInfo?> fetchLatestVersion({
   String githubRepo = UpdateSource.githubRepo,
   String giteeRepo = UpdateSource.giteeRepo,
   String deviceAbi = '',
   Duration timeout = const Duration(seconds: 12),
 }) async {
-  final tries = <Future<UpdateInfo?> Function()>[
+  final all = <UpdateInfo>[];
+  for (final t in <Future<UpdateInfo?> Function()>[
     () => _github(githubRepo, timeout, deviceAbi),
     () => _gitee(giteeRepo, timeout, deviceAbi),
-  ];
-  for (final t in tries) {
+  ]) {
     try {
       final r = await t();
-      if (r != null) return r;
+      if (r != null) all.add(r);
     } catch (_) {
-      // 换下一个源
+      // 这个源不可用，换下一个
     }
   }
-  return null;
+  return _newestOf(all);
 }
 
 // ==================== GitHub ====================
@@ -259,15 +263,17 @@ const List<String> _allAbiTokens = [
 
 /// 从 release 的 assets 里挑出 APK 附件的下载直链
 ///
-/// 优先级：**匹配设备 ABI 的拆分包** → 不带架构后缀的通用包 → 任意 .apk。
-/// 早先直接取第一个 `.apk`，拆分打包后会挑到别的架构、装上失败。
+/// 优先级：**匹配设备 ABI 的拆分包** → 不带架构后缀的通用包 → **null**。
+///
+/// 注意最后是 null 而不是"随便挑一个 .apk"：如果发行版里**全是**带架构的包、
+/// 却没有一个是本机架构的，那说明这个版本没给本机出包 —— 硬塞一个别的架构
+/// 只会下载成功、安装失败，不如如实说"没有适配你机型的包"。
 String? pickApkAssetForAbi(Object? assets, String abi) {
   if (assets is! List) return null;
   final wanted = _abiTokens(abi);
 
   String? byAbi; // 命中设备架构
   String? byGeneric; // 名字里不带任何架构 → 通用包
-  String? byAny; // 兜底
 
   for (final a in assets) {
     if (a is! Map) continue;
@@ -275,15 +281,14 @@ String? pickApkAssetForAbi(Object? assets, String abi) {
     if (url.isEmpty) continue;
     final name = (a['name'] ?? '').toString().toLowerCase();
     if (!name.endsWith('.apk')) continue;
-    byAny ??= url;
 
-    if (wanted.any(name.contains)) {
+    if (wanted.isNotEmpty && wanted.any(name.contains)) {
       byAbi ??= url;
       continue;
     }
     if (!_allAbiTokens.any(name.contains)) byGeneric ??= url;
   }
-  return byAbi ?? byGeneric ?? byAny;
+  return byAbi ?? byGeneric;
 }
 
 /// Gitee 发行版的附件：主字段是 `assets`（与 GitHub 同名），
