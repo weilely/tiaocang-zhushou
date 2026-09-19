@@ -69,8 +69,8 @@ class UpdateSource {
   /// GitHub 主仓库
   static const String githubRepo = 'weilely/tiaocang-zhushou';
 
-  /// Gitee 镜像仓库（留空表示还没建；建好后填 `用户名/仓库名` 即可自动作为兜底源）
-  static const String giteeRepo = '';
+  /// Gitee 镜像仓库（国内访问更稳；GitHub 查不到时自动落到这里）
+  static const String giteeRepo = 'weilely/tiaocang-zhushou';
 }
 
 /// 查最新版本；全都失败返回 null（调用方按「查不到」提示，不报错）

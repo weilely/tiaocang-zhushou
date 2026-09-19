@@ -90,8 +90,19 @@ git tag -a "v$Version" -m "v$Version"
 Write-Host "已提交并打标 v$Version"
 
 if (-not $SkipPush) {
-  $env:GIT_SSH_COMMAND = 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new'
+  # BatchMode + ConnectTimeout：ssh 不会停下来等交互输入（不带的话
+  # 首次连新主机会卡住直到超时）
+  $env:GIT_SSH_COMMAND = 'ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new'
   git push
   git push origin "v$Version"
   Write-Host "已推送到 GitHub（含 tag v$Version）"
+
+  # Gitee 镜像：有 gitee 远端就一起推（国内访问更稳，
+  # 「检查更新」在 GitHub 不通时会落到它）
+  $hasGitee = (git remote) -contains 'gitee'
+  if ($hasGitee) {
+    git push gitee main
+    git push gitee "v$Version"
+    Write-Host "已推送到 Gitee（含 tag v$Version）"
+  }
 }
