@@ -23,6 +23,18 @@ class ApkUpdater {
     }
   }
 
+  /// 设备主 ABI（`arm64-v8a` / `armeabi-v7a` / `x86_64` …）
+  ///
+  /// 用来在发行版附件里挑对应架构的包 —— 拆分后的 APK 按 ABI 命名，
+  /// 选错架构会装不上。取不到就返回空串，调用方退回"任意 APK"。
+  static Future<String> deviceAbi() async {
+    try {
+      return await _ch.invokeMethod<String>('abi') ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// 跳到系统的「安装未知应用」设置页
   static Future<void> openInstallSettings() async {
     try {

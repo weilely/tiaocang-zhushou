@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -1516,7 +1516,9 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 检查更新：只查最新版号并给出下载页，绝不静默下载安装
   Future<void> _checkUpdate(BuildContext context) async {
     setState(() => _checkingUpdate = true);
-    final info = await fetchLatestVersion();
+    // 传设备 ABI：拆分打包后发行版里有多个架构的包，要挑对的那个
+    final abi = await ApkUpdater.deviceAbi();
+    final info = await fetchLatestVersion(deviceAbi: abi);
     if (!mounted) return;
     setState(() => _checkingUpdate = false);
 

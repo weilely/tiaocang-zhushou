@@ -76,4 +76,58 @@ void main() {
           reason: 'tag 里的 1.0.1 比 release 的 1.0.0 新，应当取它');
     });
   });
+
+  group('按设备 ABI 挑 APK 附件', () {
+    List<Map<String, Object?>> assets(List<String> names) => [
+          for (final n in names)
+            {
+              'name': n,
+              'browser_download_url': 'https://example.com/$n',
+            },
+        ];
+
+    test('三个架构都在时，各挑各的（arm64 不能挑到 armeabi-v7a）', () {
+      final a = assets([
+        'tiaocang-zhushou-v1.0.4-arm64.apk',
+        'tiaocang-zhushou-v1.0.4-armeabi-v7a.apk',
+        'tiaocang-zhushou-v1.0.4-x86_64.apk',
+      ]);
+      expect(pickApkAssetForAbi(a, 'arm64-v8a'),
+          endsWith('tiaocang-zhushou-v1.0.4-arm64.apk'));
+      expect(pickApkAssetForAbi(a, 'armeabi-v7a'),
+          endsWith('tiaocang-zhushou-v1.0.4-armeabi-v7a.apk'));
+      expect(pickApkAssetForAbi(a, 'x86_64'),
+          endsWith('tiaocang-zhushou-v1.0.4-x86_64.apk'));
+    });
+
+    test('arm64 设备不会挑到 armeabi 的包', () {
+      final a = assets(['app-armeabi-v7a.apk']);
+      // 没有 arm64 的包 → 退回「任意 apk」，但绝不能声称匹配
+      expect(pickApkAssetForAbi(a, 'arm64-v8a'), endsWith('app-armeabi-v7a.apk'));
+      // 关键是上面那次是**兜底**，不是"匹配"；有 arm64 时必须优先它
+      final b = assets(['app-armeabi-v7a.apk', 'app-arm64-v8a.apk']);
+      expect(pickApkAssetForAbi(b, 'arm64-v8a'), endsWith('app-arm64-v8a.apk'));
+    });
+
+    test('有通用包（名字不带架构）时，没匹配到就优先通用包', () {
+      final a = assets([
+        'tiaocang-zhushou-v1.0.4.apk',
+        'tiaocang-zhushou-v1.0.4-x86_64.apk',
+      ]);
+      expect(pickApkAssetForAbi(a, 'arm64-v8a'),
+          endsWith('tiaocang-zhushou-v1.0.4.apk'));
+    });
+
+    test('认不出设备 ABI 时退到任意 apk；没有 apk 返回 null', () {
+      final a = assets(['x-arm64.apk']);
+      expect(pickApkAssetForAbi(a, ''), endsWith('x-arm64.apk'));
+      expect(pickApkAssetForAbi(assets(['notes.txt']), 'arm64-v8a'), isNull);
+      expect(pickApkAssetForAbi(null, 'arm64-v8a'), isNull);
+    });
+
+    test('只认 .apk，zip/tar.gz 不会被当成安装包', () {
+      final a = assets(['v1.0.4.zip', 'v1.0.4.tar.gz', 'v1.0.4-arm64.apk']);
+      expect(pickApkAssetForAbi(a, 'arm64-v8a'), endsWith('v1.0.4-arm64.apk'));
+    });
+  });
 }

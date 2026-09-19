@@ -31,6 +31,12 @@ class MainActivity : FlutterFragmentActivity() {
                 when (call.method) {
                     "canInstall" -> result.success(canRequestInstall())
 
+                    // 设备主 ABI：用来在发行版附件里挑对应架构的 APK
+                    // （拆分后的包按 ABI 命名，选错会装不上）
+                    "abi" -> result.success(
+                        Build.SUPPORTED_ABIS.firstOrNull() ?: ""
+                    )
+
                     "openInstallSettings" -> {
                         try {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

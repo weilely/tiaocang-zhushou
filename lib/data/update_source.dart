@@ -1,4 +1,4 @@
-/// 在线检查最新版本
+﻿/// 在线检查最新版本
 ///
 /// 数据源是代码托管平台的公开 API（**只读、不需要 token**）：
 /// - GitHub（主仓库）：`/repos/<o>/<r>/releases` 与 `/tags`
@@ -86,14 +86,18 @@ class UpdateSource {
 }
 
 /// 查最新版本；全都失败返回 null（调用方按「查不到」提示，不报错）
+///
+/// [deviceAbi] 传设备主 ABI（如 `arm64-v8a`）：拆分打包后发行版里有多个
+/// 架构的 APK，按它挑对应那个；空串则优先"不带架构后缀"的通用包。
 Future<UpdateInfo?> fetchLatestVersion({
   String githubRepo = UpdateSource.githubRepo,
   String giteeRepo = UpdateSource.giteeRepo,
+  String deviceAbi = '',
   Duration timeout = const Duration(seconds: 12),
 }) async {
   final tries = <Future<UpdateInfo?> Function()>[
-    () => _github(githubRepo, timeout),
-    () => _gitee(giteeRepo, timeout),
+    () => _github(githubRepo, timeout, deviceAbi),
+    () => _gitee(giteeRepo, timeout, deviceAbi),
   ];
   for (final t in tries) {
     try {
@@ -108,7 +112,7 @@ Future<UpdateInfo?> fetchLatestVersion({
 
 // ==================== GitHub ====================
 
-Future<UpdateInfo?> _github(String repo, Duration timeout) async {
+Future<UpdateInfo?> _github(String repo, Duration timeout, String abi) async {
   if (repo.isEmpty) return null;
   const headers = {'Accept': 'application/vnd.github+json'};
   final found = <UpdateInfo>[];
@@ -131,7 +135,7 @@ Future<UpdateInfo?> _github(String repo, Duration timeout) async {
             latest: '${v[0]}.${v[1]}.${v[2]}',
             url: page.isNotEmpty ? page : 'https://github.com/$repo/releases',
             source: 'GitHub',
-            apkUrl: _apkAssetOf(m['assets']),
+            apkUrl: pickApkAssetForAbi(m['assets'], abi),
           ));
         }
       }
@@ -170,7 +174,7 @@ Future<UpdateInfo?> _github(String repo, Duration timeout) async {
 
 // ==================== Gitee ====================
 
-Future<UpdateInfo?> _gitee(String repo, Duration timeout) async {
+Future<UpdateInfo?> _gitee(String repo, Duration timeout, String abi) async {
   if (repo.isEmpty) return null;
   final found = <UpdateInfo>[];
 
@@ -190,7 +194,7 @@ Future<UpdateInfo?> _gitee(String repo, Duration timeout) async {
             latest: '${v[0]}.${v[1]}.${v[2]}',
             url: 'https://gitee.com/$repo/releases',
             source: 'Gitee',
-            apkUrl: _giteeApkOf(m),
+            apkUrl: _giteeApkOf(m, abi),
           ));
         }
       }
@@ -229,40 +233,77 @@ Future<UpdateInfo?> _gitee(String repo, Duration timeout) async {
 
 // ==================== 公共小件 ====================
 
+/// ABI 在附件名里的匹配片段
+///
+/// 拆分打包的附件名形如 `tiaocang-zhushou-v1.0.4-arm64.apk` /
+/// `...-armeabi-v7a.apk` / `...-x86_64.apk`。
+/// 注意顺序：`arm64` 不能匹配到 `armeabi-v7a`。
+List<String> _abiTokens(String abi) {
+  final a = abi.toLowerCase();
+  if (a.startsWith('arm64')) return const ['arm64'];
+  if (a.startsWith('armeabi-v7a')) return const ['armeabi-v7a'];
+  if (a.startsWith('armeabi')) return const ['armeabi'];
+  if (a.startsWith('x86_64')) return const ['x86_64'];
+  if (a.startsWith('x86')) return const ['x86'];
+  return const [];
+}
+
+/// 附件名里出现过的所有架构片段（用来判断"这是拆分包还是通用包"）
+const List<String> _allAbiTokens = [
+  'arm64',
+  'armeabi-v7a',
+  'armeabi',
+  'x86_64',
+  'x86',
+];
+
 /// 从 release 的 assets 里挑出 APK 附件的下载直链
 ///
-/// 优先 `application/vnd.android.package-archive`，退而按文件名 `.apk` 判断。
-String? _apkAssetOf(Object? assets) {
+/// 优先级：**匹配设备 ABI 的拆分包** → 不带架构后缀的通用包 → 任意 .apk。
+/// 早先直接取第一个 `.apk`，拆分打包后会挑到别的架构、装上失败。
+String? pickApkAssetForAbi(Object? assets, String abi) {
   if (assets is! List) return null;
-  String? byMime;
-  String? byName;
+  final wanted = _abiTokens(abi);
+
+  String? byAbi; // 命中设备架构
+  String? byGeneric; // 名字里不带任何架构 → 通用包
+  String? byAny; // 兜底
+
   for (final a in assets) {
     if (a is! Map) continue;
     final url = (a['browser_download_url'] ?? '').toString();
     if (url.isEmpty) continue;
-    final type = (a['content_type'] ?? '').toString();
     final name = (a['name'] ?? '').toString().toLowerCase();
-    if (type.contains('android.package-archive')) byMime ??= url;
-    if (name.endsWith('.apk')) byName ??= url;
+    if (!name.endsWith('.apk')) continue;
+    byAny ??= url;
+
+    if (wanted.any(name.contains)) {
+      byAbi ??= url;
+      continue;
+    }
+    if (!_allAbiTokens.any(name.contains)) byGeneric ??= url;
   }
-  return byMime ?? byName;
+  return byAbi ?? byGeneric ?? byAny;
 }
 
 /// Gitee 发行版的附件：主字段是 `assets`（与 GitHub 同名），
 /// 退一步兼容 `attach_files`（Gitee 网页上传的附件走这个）
-String? _giteeApkOf(Map m) {
-  final byAssets = _apkAssetOf(m['assets']);
+String? _giteeApkOf(Map m, String abi) {
+  final byAssets = pickApkAssetForAbi(m['assets'], abi);
   if (byAssets != null) return byAssets;
   final files = m['attach_files'];
   if (files is List) {
-    for (final f in files) {
-      if (f is! Map) continue;
-      final url =
-          (f['browser_download_url'] ?? f['download_url'] ?? '').toString();
-      if (url.isEmpty) continue;
-      final name = (f['name'] ?? f['title'] ?? '').toString().toLowerCase();
-      if (name.endsWith('.apk') || url.toLowerCase().contains('.apk')) return url;
-    }
+    // 归一成 assets 的形状，复用同一套「按 ABI 挑」的逻辑
+    final normalized = <Map<String, Object?>>[
+      for (final f in files)
+        if (f is Map)
+          {
+            'name': f['name'] ?? f['title'] ?? '',
+            'browser_download_url':
+                f['browser_download_url'] ?? f['download_url'] ?? '',
+          },
+    ];
+    return pickApkAssetForAbi(normalized, abi);
   }
   return null;
 }
