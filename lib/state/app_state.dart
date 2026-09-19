@@ -701,9 +701,12 @@ class AppState extends ChangeNotifier {
     unawaited(refreshQuotes(silent: true));
     unawaited(autoBackupIfNeeded());
     unawaited(runDueDca());
-    // 先读现金；若一条都没有而交易不少，说明是老数据，按交易补一次联动
-    unawaited(loadCash().then((_) => rebuildCashFromTxns()));
-    unawaited(loadAssetShorts());
+    // 先读简称，再读现金；若一条现金都没有而交易不少，说明是老数据，按交易补一次联动。
+    // 简称**必须**排在重建之前：rebuildCashFromTxns 用 displayShortOf 写备注，
+    // 简称没加载完就会退回标的全名（实测出现「易方达国证价值100ETF联接A · 定投」）。
+    unawaited(loadAssetShorts()
+        .then((_) => loadCash())
+        .then((_) => rebuildCashFromTxns()));
     unawaited(loadBiometric());
     unawaited(loadThemeMode());
     unawaited(loadNavSamples());

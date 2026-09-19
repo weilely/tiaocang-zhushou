@@ -80,7 +80,27 @@ void main() {
       )));
       expect(find.text('买入扣款'), findsOneWidget);
       expect(find.textContaining('价值100'), findsOneWidget);
-      expect(find.textContaining('买入扣款 · 买入'), findsNothing);
+      // 断言的是「价值100 · 买入」这个**连续子串**：
+      // 早先写 find.textContaining('买入扣款 · 买入') 是测不出问题的
+      // （标题与备注拼不成那个串），备注里的动作词滤没滤掉，这条才卡得住。
+      expect(find.textContaining('价值100 · 买入'), findsNothing,
+          reason: '动作词「买入」由标题表达，备注里要滤掉');
+    });
+
+    testWidgets('联动卖出 / 分红：备注里也只留简称', (tester) async {
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(type: CashType.redeem, amount: 800, note: '价值100 · 卖出'),
+        onDelete: null,
+      )));
+      expect(find.text('卖出入账'), findsOneWidget);
+      expect(find.textContaining('价值100 · 卖出'), findsNothing);
+
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(type: CashType.dividend, amount: 88, note: '价值100 · 分红'),
+        onDelete: null,
+      )));
+      expect(find.text('分红入账'), findsOneWidget);
+      expect(find.textContaining('价值100 · 分红'), findsNothing);
     });
 
     testWidgets('账户名按传入决定是否显示', (tester) async {

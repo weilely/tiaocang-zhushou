@@ -36,6 +36,14 @@ class CashTxnTile extends StatelessWidget {
   /// 标题：定投走「定投」，其余用类型名
   String get _title => isDca ? '定投' : txn.typeLabel;
 
+  /// 联动流水备注里的动作词。
+  ///
+  /// 注意：备注里的动作词来自**交易**类型（`TxnType.label`：买入 / 卖出 / 分红），
+  /// 而本行的标题用的是**现金**类型（`CashType.label`：买入扣款 / 卖出入账 / 分红入账），
+  /// 两者字面不同 —— 早先拿 `txn.typeLabel` 去比永远匹配不上，
+  /// 结果「价值100 · 买入」里的动作词滤不掉。
+  static const Set<String> _actionWords = {'买入', '卖出', '分红', '定投'};
+
   /// 副标题里的备注。
   ///
   /// 联动流水的备注是「简称 · 动作词」，而动作词标题已经写了 —— 这里把动作词去掉，
@@ -47,7 +55,7 @@ class CashTxnTile extends StatelessWidget {
         .split(' · ')
         .where((s) {
           final t = s.trim();
-          return t.isNotEmpty && t != '定投' && t != txn.typeLabel;
+          return t.isNotEmpty && !_actionWords.contains(t);
         })
         .toList();
     return parts.join(' · ');
