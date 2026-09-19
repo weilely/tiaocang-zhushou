@@ -1383,16 +1383,28 @@ class AppState extends ChangeNotifier {
 
   /// 记一笔并联动现金（CSV 导入、批量录入用）
   /// 记一笔并联动现金；标的可以不给（按 assetId 从库里取）
-  Future<void> saveTxnAndLinkedCash(Txn t, [Asset? a]) async {
+  Future<void> saveTxnAndLinkedCash(Txn t, [Asset? a, bool linkCash = true]) async {
     final asset = a ??
         assetsById[t.assetId] ??
         Asset(code: '', name: '', kind: AssetKind.fund);
     if (a == null) {
-      await saveTxnWithCash(t, asset);
+      await saveTxnWithCash(t, asset, linkCash: linkCash);
     } else {
-      await saveTxnWithCash(t, a);
+      await saveTxnWithCash(t, a, linkCash: linkCash);
     }
   }
+  /// 只写交易、不联动现金（编辑页「成本调整」用：成本差值不是真实买卖金额）
+  Future<void> saveTxnNoCash(Txn t, [Asset? a]) async {
+    final asset = a ??
+        assetsById[t.assetId] ??
+        Asset(code: '', name: '', kind: AssetKind.fund);
+    if (a == null) {
+      await saveTxnWithCash(t, asset, linkCash: false);
+    } else {
+      await saveTxnWithCash(t, a, linkCash: false);
+    }
+  }
+
 
   // ============================================================
   // 收益统计：日历 / 趋势 / 资金流

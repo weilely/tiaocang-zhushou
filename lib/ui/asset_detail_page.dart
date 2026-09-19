@@ -7,6 +7,7 @@ import '../logic/portfolio.dart';
 import '../state/app_state.dart';
 import 'dca_plan_sheet.dart';
 import 'txn_edit_page.dart';
+import 'asset_edit_page.dart';
 import 'widgets/common.dart';
 import 'widgets/txn_history.dart';
 
@@ -43,9 +44,9 @@ class AssetDetailPage extends StatelessWidget {
         titleSpacing: 16,
         actions: [
           IconButton(
-            tooltip: '设置简称',
+            tooltip: '编辑简称 / 关联 / 份额成本',
             icon: const Icon(Icons.drive_file_rename_outline),
-            onPressed: () => _editShort(context, state, asset),
+            onPressed: () => _edit(context, asset),
           ),
         ],
         title: Column(
@@ -76,37 +77,12 @@ class AssetDetailPage extends StatelessWidget {
     );
   }
 
-  // ---------------- 顶部交易功能 ----------------
-
-  /// 设置这只基金的简称（现金流水里显示，简洁明了）
-  Future<void> _editShort(
-      BuildContext context, AppState state, Asset asset) async {
-    final ctrl = TextEditingController(text: state.assetShortOf(asset.code));
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('基金简称'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '例如：价值100',
-            helperText: '现金流水里显示它；留空即清空',
-            isDense: true,
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await state.setAssetShort(asset.code, ctrl.text);
+  /// 打开「编辑」页（简称 / 关联 ETF / 持仓份额 / 单位成本）
+  Future<void> _edit(BuildContext context, Asset asset) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) =>
+          AssetEditPage(accountId: accountId, assetId: asset.id!),
+    ));
   }
 
   Widget _actionBar(BuildContext context, Asset asset, Position p) {

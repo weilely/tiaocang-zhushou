@@ -232,11 +232,21 @@ List<Position> buildPositions({
     for (final t in list) {
       switch (t.type) {
         case TxnType.buy:
+          if (t.note == '成本调整') {
+            // 份额/成本编辑页：纯成本上调（不动份额、不占现金投入）
+            cost += t.amount + t.fee;
+            break;
+          }
           invested += t.amount + t.fee;
           shares += t.shares;
           cost += t.amount + t.fee;
           break;
         case TxnType.sell:
+          if (t.note == '成本调整') {
+            // 份额/成本编辑页：纯成本下调（不动份额/现金/已实现）
+            cost -= t.amount + t.fee;
+            break;
+          }
           final avg = shares > 1e-9 ? cost / shares : 0.0;
           // 超卖（录入份额大于持仓）时按实际可卖份额折算，
           // 否则现金回收记全额、成本只扣一部分，两个口径会打架

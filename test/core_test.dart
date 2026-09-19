@@ -675,6 +675,57 @@ void main() {
       expect(p.cumulativePnl, closeTo(p.holdingPnl + p.realized, 1e-9));
     });
 
+    test('成本调整流水（note=成本调整）：只动成本、不动份额与现金', () {
+      final p = buildPositions(
+        txns: [
+          Txn(accountId: 1, assetId: 1, type: TxnType.buy, date: DateTime(2026, 8, 1),
+              amount: 10000, shares: 1000, price: 10),
+          // 把单位成本从 10 调到 11：份额 1000，差值 1000，记买入「成本调整」
+          Txn(accountId: 1, assetId: 1, type: TxnType.buy, date: DateTime(2026, 9, 1),
+              amount: 1000, shares: 0, price: 0, note: '成本调整'),
+        ],
+        assets: assets,
+        quotes: {'510300': quoteOn(DateTime.now())},
+      ).first;
+      expect(p.shares, closeTo(1000, 1e-9), reason: '成本调整不动份额');
+      expect(p.cost, closeTo(11000, 1e-9), reason: '成本 = 10000 + 1000');
+      expect(p.avgCost, closeTo(11, 1e-9));
+    });
+
+    test('成本调整流水（卖出方向）：把成本从 10 降到 9', () {
+      final p = buildPositions(
+        txns: [
+          Txn(accountId: 1, assetId: 1, type: TxnType.buy, date: DateTime(2026, 8, 1),
+              amount: 10000, shares: 1000, price: 10),
+          Txn(accountId: 1, assetId: 1, type: TxnType.sell, date: DateTime(2026, 9, 1),
+              amount: 1000, shares: 0, price: 0, note: '成本调整'),
+        ],
+        assets: assets,
+        quotes: {'510300': quoteOn(DateTime.now())},
+      ).first;
+      expect(p.shares, closeTo(1000, 1e-9));
+      expect(p.cost, closeTo(9000, 1e-9), reason: '成本 = 10000 - 1000');
+      expect(p.avgCost, closeTo(9, 1e-9));
+      expect(p.realized, closeTo(0, 1e-9), reason: '纯成本下调不产生已实现盈亏');
+    });
+
+    test('持仓调整流水（note=持仓调整）：份额变化、成本按旧单价折算', () {
+      final p = buildPositions(
+        txns: [
+          Txn(accountId: 1, assetId: 1, type: TxnType.buy, date: DateTime(2026, 8, 1),
+              amount: 10000, shares: 1000, price: 10),
+          // 份额从 1000 增到 1500，旧成本 10 → 补 500 × 10 = 5000 的买入
+          Txn(accountId: 1, assetId: 1, type: TxnType.buy, date: DateTime(2026, 9, 1),
+              amount: 5000, shares: 500, price: 10, note: '持仓调整'),
+        ],
+        assets: assets,
+        quotes: {'510300': quoteOn(DateTime.now())},
+      ).first;
+      expect(p.shares, closeTo(1500, 1e-9));
+      expect(p.avgCost, closeTo(10, 1e-9), reason: '同价加仓不改变均价');
+      expect(p.cost, closeTo(15000, 1e-9));
+    });
+
     test('没有行情时持仓收益率返回 null，而不是冒充 0%', () {
       final p = buildPositions(txns: oneBuy(), assets: assets, quotes: {}).first;
       expect(p.hasQuote, isFalse);
