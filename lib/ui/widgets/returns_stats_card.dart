@@ -235,9 +235,6 @@ class _TrendViewState extends State<_TrendView> {
           onCustom: () => _pickCustomRange(context, st),
         ),
         const SizedBox(height: 12),
-        Text('收益率',
-            style: TextStyle(fontSize: 13, color: Theme.of(context).hintColor)),
-        const SizedBox(height: 6),
         _BenchmarkRow(
           benchmark: st.benchmark,
           // 框里显示的是**本区间折算后**的参考收益率（= 年化 × 天数 ÷ 365）

@@ -160,7 +160,7 @@ Widget txnTile(
 
   final detail = switch (t.type) {
     TxnType.buy || TxnType.sell =>
-      '${fmtShares(t.shares)} 份 @ ${fmtPrice(t.price)}',
+      '${fmtSharesOf(t.shares, isFund: asset?.kind == AssetKind.fund)} 份 @ ${fmtPrice(t.price)}',
     TxnType.dividend => '分红到账',
   };
 

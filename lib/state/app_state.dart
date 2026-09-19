@@ -611,7 +611,8 @@ class AppState extends ChangeNotifier {
   DateTime? flowCustomStart;
   DateTime? flowCustomEnd;
   StatsView statsView = StatsView.calendar;
-  ReturnGranularity calendarGranularity = ReturnGranularity.month;
+  /// 收益统计默认落在日历图的**日收益**视图（粒度不落库，每次启动都用它）
+  ReturnGranularity calendarGranularity = ReturnGranularity.day;
   /// 日历当前月份（UI 里是 ({int month, int year}) 记录）
   ({int month, int year}) calendarCursor =
       (year: DateTime.now().year, month: DateTime.now().month);

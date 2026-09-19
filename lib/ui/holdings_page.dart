@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/format.dart';
+import '../data/models.dart';
 import '../logic/portfolio.dart';
 import '../logic/receipt_parser.dart';
 import '../data/ocr_source.dart';
@@ -10,6 +11,7 @@ import 'asset_detail_page.dart';
 import 'dca_manage_page.dart';
 import 'holding_import_page.dart';
 import 'widgets/common.dart';
+import 'widgets/inline_marquee.dart';
 
 /// 持仓页
 ///
@@ -410,6 +412,9 @@ class HoldingCardData {
   final String name;
   final String code;
 
+  /// 标的类型：场外基金的份额要固定两位小数
+  final bool isFund;
+
   /// 是否拿到行情；为 false 时所有金额显示 `--`
   final bool hasQuote;
 
@@ -450,6 +455,7 @@ class HoldingCardData {
   const HoldingCardData({
     required this.name,
     required this.code,
+    required this.isFund,
     required this.hasQuote,
     required this.marketValue,
     required this.ratio,
@@ -491,6 +497,7 @@ class HoldingCardData {
     return HoldingCardData(
       name: p.asset.name.isEmpty ? p.asset.code : p.asset.name,
       code: p.asset.code,
+      isFund: p.asset.kind == AssetKind.fund,
       hasQuote: hasQuote,
       marketValue: p.marketValue,
       ratio: ratio,
@@ -507,6 +514,9 @@ class HoldingCardData {
       changePct: hasQuote ? p.quote!.changePct : null,
       infoDate: p.quote?.infoDate ?? '',
       accountName: accountName,
+      // 当日净值未更新时，按关联 ETF 实时行情给个预估（场内有行情则 est 为 null，不显示）
+      estChangePct: p.estChangePct,
+      estDayPnl: p.estDayPnl,
     );
   }
 
@@ -562,30 +572,23 @@ class HoldingCard extends StatelessWidget {
                       style: TextStyle(fontSize: 14, color: theme.hintColor)),
                 ],
               ),
-              if (!d.hasQuote || d.accountName != null)
+              if (!d.hasQuote || d.accountName != null || d.estChangePct != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 3),
-                  child: Wrap(
-                    spacing: 6,
+                  child: Row(
                     children: [
-                      if (!d.hasQuote) const Tag(text: '无行情'),
-                      if (d.accountName != null) Tag(text: d.accountName!),
-                      if (d.estChangePct != null) ...[
-                        const Tag(text: '预估'),
-                        Tag(
-                          text: '涨幅 %',
-                          color: d.estChangePct! < 0
-                              ? const Color(0xFF1A9C5B)
-                              : const Color(0xFFD93A3A),
-                        ),
-                        if (d.estDayPnl != null)
-                          Tag(
-                            text: '预估收益 ',
-                            color: d.estDayPnl! < 0
-                                ? const Color(0xFF1A9C5B)
-                                : const Color(0xFFD93A3A),
-                          ),
+                      if (!d.hasQuote) ...[
+                        const Tag(text: '无行情'),
+                        const SizedBox(width: 6),
                       ],
+                      if (d.accountName != null) ...[
+                        Tag(text: d.accountName!),
+                        const SizedBox(width: 6),
+                      ],
+                      // 有估值时，账户名后面跟一段跑马灯：
+                      // 「预估涨幅 +1.23% · 预估收益 +45.67」宽度放不下就自动横向滚动
+                      if (d.estChangePct != null)
+                        Expanded(child: _estMarquee(d)),
                     ],
                   ),
                 ),
@@ -618,9 +621,16 @@ class HoldingCard extends StatelessWidget {
                   Text('占比',
                       style: TextStyle(fontSize: 15, color: theme.hintColor)),
                   const SizedBox(width: 6),
-                  Text(d.ratio == null ? '--' : fmtRatioPct(d.ratio!),
+                  // 固定宽度 + 右对齐：多张卡的百分比能对齐成一列，不会随数值长短左右跳
+                  SizedBox(
+                    width: 62,
+                    child: Text(
+                      d.ratio == null ? '--' : fmtRatioPct(d.ratio!),
+                      textAlign: TextAlign.right,
                       style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600)),
+                          fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
                 ],
               ),
 
@@ -638,7 +648,7 @@ class HoldingCard extends StatelessWidget {
                   Text('份额',
                       style: TextStyle(fontSize: 14, color: theme.hintColor)),
                   const SizedBox(width: 6),
-                  Text(fmtShares(d.shares),
+                  Text(fmtSharesOf(d.shares, isFund: d.isFund),
                       style: const TextStyle(
                           fontSize: 14, fontWeight: FontWeight.w600)),
                   const Spacer(),
@@ -678,6 +688,32 @@ class HoldingCard extends StatelessWidget {
   }
 
   /// 一行收益：左「标签 + 金额」，右「百分比」
+  /// 有估值时，账户名后面那段跑马灯：预估涨幅 + 预估收益
+  Widget _estMarquee(HoldingCardData d) {
+    final pct = d.estChangePct!;
+    final buf = StringBuffer('预估涨幅 ${pct >= 0 ? '+' : ''}${pct.toStringAsFixed(2)}%');
+    if (d.estDayPnl != null) {
+      final v = d.estDayPnl!;
+      buf.write(' · 预估收益 ${v >= 0 ? '+' : '-'}${v.abs().toStringAsFixed(2)}');
+      return InlineMarquee(
+        text: buf.toString(),
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+          color: pnlColor(v),
+        ),
+      );
+    }
+    return InlineMarquee(
+      text: buf.toString(),
+      style: TextStyle(
+        fontSize: 11.5,
+        fontWeight: FontWeight.w600,
+        color: pnlColor(pct),
+      ),
+    );
+  }
+
   Widget _pnlRow(
       BuildContext context, String label, double? amount, double? pct) {
     final theme = Theme.of(context);

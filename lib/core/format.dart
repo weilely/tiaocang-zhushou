@@ -4,6 +4,7 @@ final NumberFormat _money = NumberFormat('#,##0.00');
 final NumberFormat _price4 = NumberFormat('#,##0.0000');
 final NumberFormat _price3 = NumberFormat('#,##0.000');
 final NumberFormat _shares = NumberFormat('#,##0.##');
+final NumberFormat _shares2 = NumberFormat('#,##0.00');
 final NumberFormat _yuanShort = NumberFormat('#,##0');
 final DateFormat _date = DateFormat('yyyy-MM-dd');
 final DateFormat _dateTime = DateFormat('MM-dd HH:mm');
@@ -30,10 +31,18 @@ String fmtPrice(double v) {
 }
 
 /// 份额
-String fmtShares(double v) {
+///
+/// [fixedTwo] 为 true 时固定两位小数 —— **场外基金**按 0.01 份成交，
+/// 份额就该长成 `1,000.00` / `12.34` 的样子；场内（ETF/股票）是整数股，
+/// 固定两位只会平添噪声，所以仍用「有小数才显示」的写法。
+String fmtShares(double v, {bool fixedTwo = false}) {
   if (v.isNaN || v.isInfinite) return '--';
-  return _shares.format(v);
+  return (fixedTwo ? _shares2 : _shares).format(v);
 }
+
+/// 按标的类型格式化份额：场外基金固定两位，其余按需显示小数
+String fmtSharesOf(double v, {required bool isFund}) =>
+    fmtShares(v, fixedTwo: isFund);
 
 /// 百分比，带正负号
 String fmtPct(double v, {int digits = 2}) {

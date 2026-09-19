@@ -204,7 +204,10 @@ class AssetDetailPage extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: cell('持有份额', fmtShares(p.shares))),
+              Expanded(
+                  child: cell('持有份额',
+                      fmtSharesOf(p.shares,
+                          isFund: p.asset.kind == AssetKind.fund))),
               Expanded(child: cell('成本单价', fmtPrice(p.avgCost))),
             ],
           ),

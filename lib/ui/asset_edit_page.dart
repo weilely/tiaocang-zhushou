@@ -378,7 +378,7 @@ class _AssetEditPageState extends State<AssetEditPage> {
             title: '持仓份额 / 单位成本',
             subtitle: p == null
                 ? '该账户下还没有持仓，无法修改'
-                : '保存时记一笔「持仓调整」流水（不改动历史流水）。当前：份额 ${fmtShares(p.shares)}、成本 ${fmtPrice(p.avgCost)}',
+                : '保存时记一笔「持仓调整」流水（不改动历史流水）。当前：份额 ${fmtSharesOf(p.shares, isFund: p.asset.kind == AssetKind.fund)}、成本 ${fmtPrice(p.avgCost)}',
             child: p == null
                 ? Text('暂无持仓',
                     style: TextStyle(fontSize: 13, color: Colors.grey.shade500))

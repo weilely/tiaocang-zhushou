@@ -419,8 +419,7 @@ class _SettingsPageState extends State<SettingsPage> {
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
             child: Text(
-              '库内 ${st.navRowCount} 条 · ${st.navUpdatedAt == null ? '尚未更新过' : '上次更新 ${fmtDateTime(st.navUpdatedAt!)}'}\n'
-              '基金取天天基金的全部历史、指数取新浪日K；净值日期固定按北京时间折算',
+              '库内 ${st.navRowCount} 条 · ${st.navUpdatedAt == null ? '尚未更新过' : '上次更新 ${fmtDateTime(st.navUpdatedAt!)}'}',
               style: TextStyle(
                   fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
             ),
@@ -431,10 +430,6 @@ class _SettingsPageState extends State<SettingsPage> {
             enabled: !st.navUpdating,
             leading: const Icon(Icons.restore_page_outlined, size: 20),
             title: const Text('重建历史净值', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '清掉本地净值再全量重抓，用来修日期错位',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
             trailing: st.navUpdating
                 ? const SizedBox(
                     width: 16,
@@ -455,8 +450,7 @@ class _SettingsPageState extends State<SettingsPage> {
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
             child: Text(
-              '基金 ${st.securitiesFundCount} 条 · 股票 ${st.securitiesStockCount} 条 · $lastSec\n'
-              '存代码、名称、拼音首拼、类型、板块；只在点「更新」时才联网',
+              '基金 ${st.securitiesFundCount} 条 · 股票 ${st.securitiesStockCount} 条 · $lastSec',
               style: TextStyle(
                   fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
             ),
@@ -486,10 +480,6 @@ class _SettingsPageState extends State<SettingsPage> {
             enabled: !st.securitiesBusy,
             leading: const Icon(Icons.menu_book_outlined, size: 20),
             title: const Text('更新基金基础数据', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '一次请求约 3 MB、约 2.8 万条，含 ETF / LOF，自带首拼与类型',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
             onTap: () => _updateFundSecurities(st),
           ),
           ListTile(
@@ -498,10 +488,6 @@ class _SettingsPageState extends State<SettingsPage> {
             enabled: !st.securitiesBusy,
             leading: const Icon(Icons.show_chart_outlined, size: 20),
             title: const Text('更新股票基础数据', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '分页拉取约 5,600 只 A 股（上证/深证/创业/科创/北证），首拼本地生成',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
             onTap: () => _updateStockSecurities(st),
           ),
           ListTile(
@@ -524,7 +510,7 @@ class _SettingsPageState extends State<SettingsPage> {
             leading: const Icon(Icons.shield_outlined, size: 20),
             title: const Text('导出完整备份（推荐）', style: TextStyle(fontSize: 14)),
             subtitle: Text(
-              '账户、分类、全部流水、再平衡目标、设置；每天首次启动还会自动备份一份',
+              '每天首次启动会自动备份一份',
               style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
             ),
             onTap: _exportBackup,
@@ -585,10 +571,6 @@ class _SettingsPageState extends State<SettingsPage> {
             dense: true,
             leading: const Icon(Icons.table_chart_outlined, size: 20),
             title: const Text('导出持仓报表 CSV', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '含成本、市值、浮动/已实现盈亏、年化收益率',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
             onTap: () => _export(
               '持仓_${_stamp()}.csv',
               st.exportPositions(),
@@ -600,10 +582,6 @@ class _SettingsPageState extends State<SettingsPage> {
             dense: true,
             leading: const Icon(Icons.download_outlined, size: 20),
             title: const Text('从 CSV 导入交易流水', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '从应用目录中选取 CSV 文件',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
             onTap: _import,
           ),
           ListTile(
@@ -611,10 +589,6 @@ class _SettingsPageState extends State<SettingsPage> {
             dense: true,
             leading: const Icon(Icons.folder_open_outlined, size: 20),
             title: const Text('查看数据目录', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '用 adb 可在电脑与模拟器之间收发文件',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
             onTap: _showDirs,
           ),
         ],
@@ -682,8 +656,7 @@ class _SettingsPageState extends State<SettingsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('切换整机的明暗；「跟随系统」会跟随手机设置。选择会自动保存。',
-              style: hint),
+          Text('切换整机的明暗', style: hint),
           const SizedBox(height: 8),
           for (final m in options.keys)
             RadioListTile<String>(
@@ -712,13 +685,7 @@ class _SettingsPageState extends State<SettingsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('首页跑马灯显示这些指标，价格与涨幅每分钟自动刷新（上证固定在标题栏，不在这里）',
-              style: hint),
-          if (st.indexQuoteDiag.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text('上次取数：${st.indexQuoteDiag}', style: hint),
-            ),
+          Text('首页跑马灯显示这些指标（上证固定在标题栏，不在这里）', style: hint),
           const SizedBox(height: 10),
           Row(
             children: [

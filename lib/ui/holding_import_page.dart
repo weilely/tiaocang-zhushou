@@ -273,7 +273,7 @@ class _HoldingImportPageState extends State<HoldingImportPage> {
           if (r.existingShares != null && r.existingShares! > 0)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text('该账户已有 ${fmtShares(r.existingShares!)} 份，导入后会累加',
+              child: Text('该账户已有 ${fmtSharesOf(r.existingShares!, isFund: r.kind == AssetKind.fund)} 份，导入后会累加',
                   style: const TextStyle(fontSize: 11, color: Color(0xFFB4770A))),
             ),
           if (issue != null)

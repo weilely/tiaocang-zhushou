@@ -439,32 +439,30 @@ class _Callout extends StatelessWidget {
     return Positioned(
       left: left,
       top: top,
-      child: Container(
+      child: SizedBox(
         width: ChartGeometry.calloutWidth,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        decoration: BoxDecoration(
-          color: const Color(0xE6202124),
-          borderRadius: BorderRadius.circular(8),
-        ),
+        // 浮窗不做底色（叠在曲线上更轻）；字色跟着主题走，
+        // 深浅色主题下都协调，不再假死一块深灰。
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _line('收益', pct),
+            _line(context, '收益', pct),
             const SizedBox(height: 2),
-            if (diff != null) _line('差值', diff!),
+            if (diff != null) _line(context, '差值', diff!),
           ],
         ),
       ),
     );
   }
 
-  /// 深色底上的两行：标签用浅灰，数值用涨跌色
-  Widget _line(String label, double value) => Row(
+  /// 两行：标签用主题的次要文字色，数值用涨跌色
+  Widget _line(BuildContext context, String label, double value) => Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(label,
-              style: const TextStyle(fontSize: 11, color: Color(0xFFB9BEC6))),
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor)),
           const SizedBox(width: 6),
           Text(fmtPct(value),
               style: TextStyle(
