@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -1518,11 +1518,11 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _checkingUpdate = true);
     // 传设备 ABI：拆分打包后发行版里有多个架构的包，要挑对的那个
     final abi = await ApkUpdater.deviceAbi();
-    final info = await fetchLatestVersion(deviceAbi: abi);
+    final res = await checkUpdate(deviceAbi: abi);
     if (!mounted) return;
     setState(() => _checkingUpdate = false);
 
-    if (info == null) {
+    if (res == null) {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -1541,9 +1541,16 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
 
+    final info = res.newest;
+    // 发布策略是"只在值得的版本传附件"，所以最新版常常没有安装包；
+    // 这时若更早的版本有包，就把那一版指出来 —— 否则应用内更新
+    // 只在刚发完包的那阵子可用。
+    final inst = res.installable;
     final hasNew = isNewerVersion(info.latest, appVersion);
+    // 可安装的那版比当前还新，才算"能用应用内升级"
+    final canAuto = inst != null && isNewerVersion(inst.latest, appVersion);
 
-    if (!hasNew) {
+    if (!hasNew && !canAuto) {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -1563,18 +1570,21 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
 
-    // 有新版本：能拿到 APK 直链就给「下载并安装」，拿不到就只给网页
-    final canAuto = info.hasApk;
+    final target = canAuto ? inst : info;
+    final olderThanNewest = canAuto && target.latest != info.latest;
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('发现新版本 v${info.latest}'),
+        title: Text('发现新版本 v${canAuto ? target.latest : info.latest}'),
         content: Text(
           '当前版本：v$appVersion\n'
-          '最新版本：v${info.latest}（来源 ${info.source}）\n\n'
+          '最新版本：v${info.latest}（来源 ${info.source}）\n'
+          '${olderThanNewest ? '可安装版本：v${target.latest}（这一版提供了安装包）\n' : ''}'
+          '\n'
           '${canAuto ? '可以直接在应用内下载并安装（下载完系统会让你确认一次安装）。'
-              '新版与当前包同签名，装上会直接覆盖、数据不丢。' : '这个版本在仓库里还没有 APK 附件，'
-              '只能打开下载页手动下载：\n\n${info.url}'}',
+              '新版与当前包同签名，装上会直接覆盖、数据不丢。' : '这个最新版没有适配你机型的安装包'
+              '（发布时没上传附件，或只出了别的 CPU 架构的包）。'
+              '可以打开下载页手动看看：\n\n${info.url}'}',
           style: const TextStyle(fontSize: 13, height: 1.6),
         ),
         actions: [
@@ -1595,7 +1605,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
 
     if (go != true || !canAuto || !context.mounted) return;
-    await _downloadAndInstall(info);
+    await _downloadAndInstall(target);
   }
 
   /// 下载 APK 并拉起系统安装器

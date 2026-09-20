@@ -16,6 +16,11 @@
 
 版本号约定（和用户商定）：每次改动 +1 patch（1.0.1、1.0.2…），
 攒到一定量或加了成体系的功能再跳 minor（1.1.0）。
+
+**发布附件的约定**：默认**不传 APK 附件**（本机上行只有 ~31KB/s，传一次要 7 分钟）。
+只在"值得的版本"加 -Publish 才出包并上传，界面上的应用内更新就以
+最近一次带附件的版本为目标。平时 `git push` 推代码即可。
+事后再补传某一版：publish_release.ps1 -Version X -ApkPath <该版 APK>。
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Version,

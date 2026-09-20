@@ -85,6 +85,15 @@ class UpdateSource {
   static const String giteeRepo = 'weilely/tiaocang-zhushou';
 }
 
+/// 一次检查的结果
+typedef UpdateCheck = ({
+  /// 最新版本（可能没提供安装包）
+  UpdateInfo newest,
+
+  /// 最新**带可用安装包**的版本（可能比 [newest] 旧，也可能相等、也可能没有）
+  UpdateInfo? installable,
+});
+
 /// 查最新版本；全都失败返回 null（调用方按「查不到」提示，不报错）
 ///
 /// [deviceAbi] 传设备主 ABI（如 `arm64-v8a`）：拆分打包后发行版里有多个
@@ -93,7 +102,12 @@ class UpdateSource {
 /// **两个源都查、合并后再取最新**，而不是"先问 GitHub、拿到就返回"：
 /// GitHub 上常常只有 tag 没有附件，若它先返回就会把 Gitee 上**带附件**的
 /// 同一版本盖掉 —— 应用内更新明明能用，却退化成"只能手动下载"。
-Future<UpdateInfo?> fetchLatestVersion({
+///
+/// 返回 [UpdateCheck]：除了最新版本，还挑出**最新那个带安装包的版本**。
+/// 因为发布策略是"只在值得的版本传附件"，最新版很可能没附件，
+/// 这时能直接安装的往往是更早的那一版 —— 界面上要能把它指出来，
+/// 否则应用内更新只在刚发完包的那阵子可用。
+Future<UpdateCheck?> checkUpdate({
   String githubRepo = UpdateSource.githubRepo,
   String giteeRepo = UpdateSource.giteeRepo,
   String deviceAbi = '',
@@ -111,7 +125,29 @@ Future<UpdateInfo?> fetchLatestVersion({
       // 这个源不可用，换下一个
     }
   }
-  return _newestOf(all);
+  final newest = _newestOf(all);
+  if (newest == null) return null;
+  final installable = _newestOf([
+    for (final e in all)
+      if (e.hasApk) e,
+  ]);
+  return (newest: newest, installable: installable);
+}
+
+/// 只要最新版本号（老调用点用；不需要「可安装版本」时用这个）
+Future<UpdateInfo?> fetchLatestVersion({
+  String githubRepo = UpdateSource.githubRepo,
+  String giteeRepo = UpdateSource.giteeRepo,
+  String deviceAbi = '',
+  Duration timeout = const Duration(seconds: 12),
+}) async {
+  final r = await checkUpdate(
+    githubRepo: githubRepo,
+    giteeRepo: giteeRepo,
+    deviceAbi: deviceAbi,
+    timeout: timeout,
+  );
+  return r?.newest;
 }
 
 // ==================== GitHub ====================

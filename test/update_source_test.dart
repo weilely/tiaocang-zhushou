@@ -133,4 +133,51 @@ void main() {
       expect(pickApkAssetForAbi(a, 'arm64-v8a'), endsWith('v1.0.4-arm64.apk'));
     });
   });
+
+  group('「最新可安装版本」（只在值得的版本传附件时靠它）', () {
+    UpdateInfo info(String v, {String? apk}) => UpdateInfo(
+          latest: v,
+          url: 'https://example.com/releases',
+          source: 'Gitee',
+          apkUrl: apk,
+        );
+
+    /// 与 checkUpdate 里同一套挑选逻辑
+    UpdateInfo? newestWithApk(List<UpdateInfo> all) {
+      final withApk = all.where((e) => e.hasApk).toList();
+      if (withApk.isEmpty) return null;
+      return withApk.reduce(
+          (a, b) => isNewerVersion(b.latest, a.latest) ? b : a);
+    }
+
+    test('最新版没包、但上一版有包 → 应用内仍能升到那一版', () {
+      final all = [
+        info('1.0.9'), // 最新，没传附件
+        info('1.0.8', apk: 'https://e/1.0.8-arm64.apk'),
+        info('1.0.7', apk: 'https://e/1.0.7-arm64.apk'),
+      ];
+      final inst = newestWithApk(all)!;
+      expect(inst.latest, '1.0.8', reason: '应挑最新的那个「带包」版本');
+      expect(isNewerVersion(inst.latest, '1.0.5'), isTrue,
+          reason: '比当前新，界面该给「下载并安装」');
+    });
+
+    test('最新版自己有包 → 可安装版本就是它', () {
+      final all = [
+        info('1.1.0', apk: 'https://e/1.1.0-arm64.apk'),
+        info('1.0.8', apk: 'https://e/1.0.8-arm64.apk'),
+      ];
+      expect(newestWithApk(all)!.latest, '1.1.0');
+    });
+
+    test('一个带包的版本都没有 → 只能手动下载', () {
+      expect(newestWithApk([info('1.0.9'), info('1.0.8')]), isNull);
+    });
+
+    test('带包的那版比当前还旧 → 不该提示可升级', () {
+      final inst = newestWithApk([info('1.0.4', apk: 'https://e/x.apk')])!;
+      // 当前已经是 1.0.5，这个带包的 1.0.4 更旧 → 界面应走"没有可安装的新版"
+      expect(isNewerVersion(inst.latest, '1.0.5'), isFalse);
+    });
+  });
 }
