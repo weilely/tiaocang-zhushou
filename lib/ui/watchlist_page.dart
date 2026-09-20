@@ -14,6 +14,7 @@ import '../logic/period_return.dart';
 import '../state/app_state.dart';
 import 'holding_import_page.dart';
 import 'widgets/common.dart';
+import 'widgets/macro_card.dart';
 import 'widgets/return_table.dart';
 
 class WatchlistPage extends StatefulWidget {
@@ -72,6 +73,8 @@ class _WatchlistPageState extends State<WatchlistPage> {
           Expanded(child: _reorderList(context, st))
         else ...[
           _statsBar(context, st),
+          // 市场估值（股债利差）：一天一个点，本地累积历史
+          const MacroCard(),
           Expanded(
             child: ReturnTable(
               rows: st.watchRows,

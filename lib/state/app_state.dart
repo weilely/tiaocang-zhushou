@@ -11,6 +11,7 @@ import '../data/dca_models.dart';
 import '../data/dca_repo.dart';
 import '../data/dca_source.dart';
 import '../data/file_store.dart';
+import '../data/macro_source.dart';
 import '../data/market_api.dart';
 import '../data/models.dart';
 import '../data/nav_models.dart';
@@ -720,6 +721,7 @@ class AppState extends ChangeNotifier {
     unawaited(loadAssetShorts()
         .then((_) => loadCash())
         .then((_) => rebuildCashFromTxns()));
+    unawaited(loadMacroHistory().then((_) => refreshMacro()));
     unawaited(loadBiometric());
     unawaited(loadThemeMode());
     // 分红方式先就位、再读净值样本，最后按分红标志自动补记
@@ -878,6 +880,100 @@ class AppState extends ChangeNotifier {
     } finally {
       refreshing = false;
       _recompute();
+    }
+  }
+
+  // ============================================================
+  // 宏观估值（股债利差）
+  //
+  // 口径：股债利差 = 沪深300盈利收益率(1/PE) − 10年期国债收益率，
+  // 越大说明股票相对债券越便宜。它是**市场级**的估值温度计，
+  // 不是买卖信号 —— 界面上只呈现数值与历史分位，不给建议。
+  //
+  // 为什么要本地累积：最有用的用法是"当前处于历史多少分位"，
+  // 而免费可得的数据里国债收益率只有 2023-05 起的历史，样本太短；
+  // 从接入那天起每天记一个点，历史会随时间长起来。
+  // ============================================================
+
+  /// 库里累积的宏观估值历史（按日期升序）
+  List<MacroRow> macroHistory = [];
+
+  /// 最新一点（优先用库里的最后一条；联网取到新的会覆盖）
+  MacroRow? get macroLatest =>
+      macroHistory.isEmpty ? null : macroHistory.last;
+
+  /// 长窗口（蛋卷给的）PE 分位 0~1，取不到为 null
+  double? macroPePercentileLong;
+
+  /// 上次取数失败的原因（成功则清空）
+  String? macroError;
+
+  /// 股债利差在**本地已累积历史**里的分位（0~1）；样本不足为 null
+  double? get macroErpPercentile => percentileOf(
+        [for (final r in macroHistory) r.erp],
+        macroLatest?.erp ?? 0,
+      );
+
+  /// 分位所用的样本区间（界面上要标明，避免误导）
+  String get macroSampleRange {
+    if (macroHistory.isEmpty) return '';
+    final a = macroHistory.first.date;
+    final b = macroHistory.last.date;
+    return a == b ? a : '$a ~ $b';
+  }
+
+  Future<void> loadMacroHistory() async {
+    final rows = await db.macroAll();
+    // 表里可能混入历史脏点（PE 或国债为 0），过滤掉免得把曲线拉坏
+    macroHistory = [
+      for (final r in rows)
+        if (r.hs300Pe > 0 && r.cn10y > 0) r,
+    ];
+    notifyListeners();
+  }
+
+  /// 取今天的宏观估值并落库。
+  ///
+  /// [force] 为 false 时，**同一天只取一次**（手动下拉刷新不会反复打接口）；
+  /// 点卡片上的刷新按钮会带 force 真正重取。
+  Future<void> refreshMacro({bool force = false}) async {
+    final today = _dayKey(DateTime.now());
+    if (!force && macroLatest?.date == today) return;
+    try {
+      // 首次（库里空）先回填历史：股债利差的价值全在历史分位上，
+      // 不回填的话新装用户要等 20 天才有分位、很久才有一条像样的曲线。
+      // 拿得到约 3.4 年（受"国债历史只有 2023-05 起"的硬限制）。
+      if (macroHistory.isEmpty) {
+        final hist = await fetchMacroBackfill();
+        for (final h in hist) {
+          await db.saveMacroRow(MacroRow(
+            date: h.date,
+            hs300Pe: h.hs300Pe,
+            cn10y: h.cn10y,
+            erp: h.erp,
+          ));
+        }
+        if (hist.isNotEmpty) await loadMacroHistory();
+      }
+
+      final p = await fetchMacroPoint();
+      if (p == null) {
+        macroError = '没取到宏观估值（中证官网 / 东财接口）';
+        notifyListeners();
+        return;
+      }
+      await db.saveMacroRow(MacroRow(
+        date: p.date,
+        hs300Pe: p.hs300Pe,
+        cn10y: p.cn10y,
+        erp: p.erp,
+      ));
+      macroPePercentileLong = p.pePercentileLong;
+      macroError = null;
+      await loadMacroHistory();
+    } catch (e) {
+      macroError = '取宏观估值失败：$e';
+      notifyListeners();
     }
   }
 
@@ -1397,6 +1493,8 @@ class AppState extends ChangeNotifier {
   ///
   /// 每类独立 try/catch；这次没取到的沿用上一次的值，所以不会把缓存写残。
   Future<void> refreshIndexQuotes() async {
+    // 顺手更新宏观估值（股债利差）：它一天只变一次，内部有当日去重
+    unawaited(refreshMacro());
     if (indexQuotes.isEmpty) await loadMarketIndices();
     try {
       await db.setSetting('indexQuotePing', DateTime.now().toIso8601String());

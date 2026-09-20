@@ -11,8 +11,9 @@ class AppDatabase {
   static const String _dbName = 'invest_tracker.db';
 
   /// v2 securities，v3 dca_plans，v4 watchlist/nav_history/cash_txns，
-  /// v5 给 cash_txns 加 src_txn_id（交易联动的现金流水）
-  static const int _dbVersion = 6;
+  /// v5 给 cash_txns 加 src_txn_id（交易联动的现金流水），
+  /// v6 给 assets 加 link_code，v7 macro_history（股债利差每日累积）
+  static const int _dbVersion = 7;
 
   Database? _db;
 
@@ -113,6 +114,9 @@ class AppDatabase {
     await _createNavTable(d);
     await _createCashTable(d);
 
+    // 宏观估值（股债利差）每日累积
+    await _createMacroTable(d);
+
     // 预置一个默认账户，开箱即用
     await d.insert('accounts', {'name': '默认账户', 'note': '我的主账户'});
   }
@@ -138,6 +142,9 @@ class AppDatabase {
     if (oldVersion < 6) {
       // 调仓页要用「关联 ETF」估场外基金的当日涨幅
       await _addColumnIfMissing(d, 'assets', 'link_code', "TEXT NOT NULL DEFAULT ''");
+    }
+    if (oldVersion < 7) {
+      await _createMacroTable(d);
     }
   }
 
@@ -185,8 +192,25 @@ class AppDatabase {
         'CREATE INDEX IF NOT EXISTS idx_nav_date ON nav_history (date)');
   }
 
-  Future<void> _createCashTable(Database d) async {
+  /// 宏观估值每日一点（股债利差）
+  ///
+  /// 为什么要本地存：股债利差最有用的用法是"当前处于历史多少分位"，
+  /// 而免费可得的数据源里**国债收益率只有 2023-05 起的历史**（东财 171 市场），
+  /// 样本太短。从接入那天起每天记一个点，历史就会随时间长起来。
+  Future<void> _createMacroTable(Database d) async {
     await d.execute('''
+      CREATE TABLE IF NOT EXISTS macro_history (
+        date      TEXT PRIMARY KEY,
+        hs300_pe  REAL NOT NULL DEFAULT 0,
+        cn10y     REAL NOT NULL DEFAULT 0,
+        erp       REAL NOT NULL DEFAULT 0
+      )
+    ''');
+    await d.execute(
+        'CREATE INDEX IF NOT EXISTS idx_macro_date ON macro_history (date)');
+  }
+
+  Future<void> _createCashTable(Database d) async {    await d.execute('''
       CREATE TABLE IF NOT EXISTS cash_txns (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         account_id INTEGER NOT NULL,
@@ -420,6 +444,39 @@ class AppDatabase {
     await d.delete('targets');
   }
 
+  // ---------------- 宏观估值（股债利差）----------------
+
+  /// 按日期升序读全部历史（画曲线 + 算分位用）
+  Future<List<MacroRow>> macroAll() async {
+    final d = await database;
+    final rows =
+        await d.query('macro_history', orderBy: 'date ASC');
+    return [
+      for (final r in rows)
+        MacroRow(
+          date: (r['date'] as String?) ?? '',
+          hs300Pe: (r['hs300_pe'] as num?)?.toDouble() ?? 0,
+          cn10y: (r['cn10y'] as num?)?.toDouble() ?? 0,
+          erp: (r['erp'] as num?)?.toDouble() ?? 0,
+        ),
+    ];
+  }
+
+  /// 存一点（同一天覆盖，天然幂等）
+  Future<void> saveMacroRow(MacroRow r) async {
+    final d = await database;
+    await d.insert(
+      'macro_history',
+      {
+        'date': r.date,
+        'hs300_pe': r.hs300Pe,
+        'cn10y': r.cn10y,
+        'erp': r.erp,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
   // ---------------- 设置 ----------------
 
   Future<String?> setting(String key) async {
@@ -445,4 +502,25 @@ class AppDatabase {
     await _db?.close();
     _db = null;
   }
+}
+
+/// 宏观估值的一行（与 `macro_history` 表对应）
+///
+/// 单独定义而不复用 `MacroPoint`：表里没有"长窗口分位"这一列，
+/// 而且 data 层不该依赖网络模型。
+class MacroRow {
+  final String date;
+  final double hs300Pe;
+  final double cn10y;
+  final double erp;
+
+  const MacroRow({
+    required this.date,
+    required this.hs300Pe,
+    required this.cn10y,
+    required this.erp,
+  });
+
+  /// 盈利收益率（%）
+  double get earningsYield => hs300Pe > 0 ? 100.0 / hs300Pe : 0;
 }
