@@ -60,6 +60,14 @@ class CashFlowStatement {
   /// 现金账本里「卖出入账」的合计，用于自检
   final double cashRedeem;
 
+  /// 期间卖出净额，**不做超卖折算**（= 每笔 `amount − fee` 全额相加），
+  /// 专门用来与 [cashRedeem] 对账。
+  ///
+  /// 为什么要单独留一个：图上那个 [redeemAmount] 会按「当时账面上有多少份额」
+  /// 做超卖折算（与日线序列口径一致），而现金行是**全额**的 —— 两边口径不同，
+  /// 直接相减会凭空造出一个假缺口，误报「现金流水不完整」。
+  final double redeemLedger;
+
   /// 期初持仓里缺历史净值、退回成本单价估值的标的代码
   final List<String> beginMissingNav;
 
@@ -81,6 +89,7 @@ class CashFlowStatement {
     required this.cashAdjust,
     this.cashInvest = 0,
     this.cashRedeem = 0,
+    this.redeemLedger = 0,
     this.beginMissingNav = const [],
     this.endMissingNav = const [],
   });
@@ -90,10 +99,16 @@ class CashFlowStatement {
   /// 恒等式①在这种情况下**依然成立**（它只是算术），但那笔买入的钱没被记成
   /// 支出，于是会被当成收益，账户盈亏会明显偏大、与总览的累计收益对不上。
   /// 常见于「早年只补录了交易、没有配套现金流水」的老数据。
+  ///
+  /// 注意：买入侧没有超卖折算，两边口径天然一致。
   double get investGap => investAmount - cashInvest;
 
-  /// 期间的卖出没有在现金账本里入账
-  double get redeemGap => redeemAmount - cashRedeem;
+  /// 期间的卖出没有在现金账本里入账。
+  ///
+  /// **必须用 [redeemLedger]（不折算）而不是 [redeemAmount]**：后者做过超卖
+  /// 折算，与现金行的全额口径不同，相减会误报（实测用户数据里买卖两侧差额
+  /// 其实都是 0，却因为折算凭空报出 1050.51 的缺口）。
+  double get redeemGap => redeemLedger - cashRedeem;
 
   bool get ledgerIncomplete =>
       investGap.abs() > 0.01 || redeemGap.abs() > 0.01;
@@ -252,6 +267,7 @@ CashFlowStatement buildCashFlowStatement({
     cashAdjust: cashAdjust,
     cashInvest: cashInvest,
     cashRedeem: cashRedeem,
+    redeemLedger: flows.redeemLedger,
     beginMissingNav: beginSnap.missingNav,
     endMissingNav: endSnap.missingNav,
   );

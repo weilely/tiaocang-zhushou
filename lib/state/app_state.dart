@@ -1066,6 +1066,36 @@ class AppState extends ChangeNotifier {
 
   String assetShortOf(String code) => assetShorts[code] ?? '';
 
+  /// 现金流水的「影子交易」：按 `src_txn_id` 找。
+  ///
+  /// 显示上要以它为准，**不要解析现金行自己的备注** —— 备注是写入那一刻烘死的，
+  /// 而简称可能后来才设置、老数据里甚至写成了空的（实测用户 463 条现金行里
+  /// **0 条**备注含「定投」，但对应的影子交易里 **339 条**是定投；备注还有
+  /// 整条退化成 `" · "` 的），靠备注判断就会把定投显示成普通买入、简称也丢。
+  Txn? linkedTxnOf(CashTxn c) {
+    final id = c.srcTxnId;
+    if (id == null) return null;
+    for (final t in txns) {
+      if (t.id == id) return t;
+    }
+    return null;
+  }
+
+  /// 现金行要显示的标的短名：**现取**（简称 → 名称 → 代码）
+  String cashShortOf(CashTxn c) {
+    final t = linkedTxnOf(c);
+    if (t == null) return '';
+    final code = assetsById[t.assetId]?.code ?? '';
+    return code.isEmpty ? '' : displayShortOf(code);
+  }
+
+  /// 是不是定投联动：以**影子交易**的备注为准（现金行备注可能没有「定投」）
+  bool cashIsDca(CashTxn c) {
+    if (c.type != CashType.invest) return false;
+    final t = linkedTxnOf(c);
+    return (t?.note ?? c.note).contains('定投');
+  }
+
   /// 显示用的短名：简称 → 标的名称 → 代码
   String displayShortOf(String code) {
     final s = assetShortOf(code);

@@ -1506,7 +1506,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.chevron_right, size: 20),
-            onTap: _checkingUpdate ? null : () => _checkUpdate(context),
+            onTap: _checkingUpdate ? null : _checkUpdate,
           ),
         ],
       ),
@@ -1514,7 +1514,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   /// 检查更新：只查最新版号并给出下载页，绝不静默下载安装
-  Future<void> _checkUpdate(BuildContext context) async {
+  Future<void> _checkUpdate() async {
     setState(() => _checkingUpdate = true);
     // 传设备 ABI：拆分打包后发行版里有多个架构的包，要挑对的那个
     final abi = await ApkUpdater.deviceAbi();

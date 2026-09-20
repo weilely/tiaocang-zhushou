@@ -619,17 +619,12 @@ class HoldingCard extends StatelessWidget {
                   ),
                   const Spacer(),
                   Text('占比',
-                      style: TextStyle(fontSize: 15, color: theme.hintColor)),
+                      style: TextStyle(fontSize: 14, color: theme.hintColor)),
                   const SizedBox(width: 6),
-                  // 固定宽度 + 右对齐：多张卡的百分比能对齐成一列，不会随数值长短左右跳
-                  SizedBox(
-                    width: 62,
-                    child: Text(
-                      d.ratio == null ? '--' : fmtRatioPct(d.ratio!),
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600),
-                    ),
+                  _rightNum(
+                    context,
+                    d.ratio == null ? '--' : fmtRatioPct(d.ratio!),
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                   ),
                 ],
               ),
@@ -655,9 +650,11 @@ class HoldingCard extends StatelessWidget {
                   Text('成本',
                       style: TextStyle(fontSize: 14, color: theme.hintColor)),
                   const SizedBox(width: 6),
-                  Text(fmtPrice(d.avgCost),
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  _rightNum(
+                    context,
+                    fmtPrice(d.avgCost),
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
                 ],
               ),
 
@@ -714,12 +711,27 @@ class HoldingCard extends StatelessWidget {
     );
   }
 
+  /// 卡片右侧那一列数字：**统一宽度 + 右对齐**。
+  ///
+  /// 为什么要统一：占比 / 三个收益率 / 成本 原本有的用固定 62px 盒子、有的是自然宽度，
+  /// 于是右边界各不相同（实测 10.3% 收在 825、+1.25% 收在 845），看着就是对不齐。
+  /// 而且固定宽度在**系统字体放大**时会被撑爆（用户手机字体就是调大的），
+  /// 所以宽度还要跟着 textScaler 走。
+  static const double _rightColBase = 62;
+
+  Widget _rightNum(BuildContext context, String text, TextStyle style) {
+    final scale = MediaQuery.textScalerOf(context).scale(1.0);
+    return SizedBox(
+      width: _rightColBase * scale,
+      child: Text(text, textAlign: TextAlign.right, maxLines: 1,
+          overflow: TextOverflow.visible, style: style),
+    );
+  }
   Widget _pnlRow(
       BuildContext context, String label, double? amount, double? pct) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
+      padding: const EdgeInsets.symmetric(vertical: 3),      child: Row(
         children: [
           Text(label, style: TextStyle(fontSize: 14, color: theme.hintColor)),
           const SizedBox(width: 8),
@@ -732,9 +744,10 @@ class HoldingCard extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          Text(
+          _rightNum(
+            context,
             pct == null ? '--' : fmtPct(pct),
-            style: TextStyle(
+            TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
               color: pct == null ? theme.hintColor : pnlColor(pct),

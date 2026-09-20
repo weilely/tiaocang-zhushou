@@ -82,6 +82,15 @@ try {
     $hard | ForEach-Object { Write-Host $_.Line }
     throw "flutter analyze 有错误或告警，已中止"
   }
+  # info 级 lint 也拦一道：`unrelated_type_equality_checks` 这类错误只是 info，
+  # 我因为"只 grep error|warning"漏过两次真 bug（最典型：拿 AssetKind 枚举去比
+  # 字符串，判等恒为假）。基线 7 条属既有，**变多就说明新代码引入了新问题**。
+  $infos = @($analyzeOut | Select-String -Pattern '^\s*info\s+-')
+  Write-Host "info 级 lint：$($infos.Count) 条（基线 7）"
+  if ($infos.Count -gt 7) {
+    $infos | ForEach-Object { Write-Host $_.Line }
+    throw "info 级 lint 比基线多了，先看看是不是新引入的"
+  }
   & 'E:\flutter\bin\flutter.bat' test 2>&1 | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { throw "flutter test 未通过，已中止" }
 } finally {

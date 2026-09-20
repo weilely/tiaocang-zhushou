@@ -54,23 +54,29 @@ class ReturnsStatsCard extends StatelessWidget {
   /// 典型场景：一只基金早就清仓了，交易记录还在、但它从没被抓过净值 ——
   /// 那时它持有期间的日子在日历上就是空的。不提示的话用户只会觉得「数据没了」。
   Widget _missingNavHint(BuildContext context, int count) {
-    final hint = Theme.of(context).hintColor;
+    // 底色和文字都必须**跟着明暗主题走**：早先底色写死成浅米色、文字又用
+    // 主题的 hintColor，深色模式下两者都是浅色 → 白底白字，整段提示看不见
+    // （实测在深色模式的日历页就是这个效果）。
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final bg = dark ? const Color(0xFF3A2E14) : const Color(0xFFFFF6E5);
+    final fg = dark ? const Color(0xFFEAD9AE) : const Color(0xFF7A5A12);
+    final icon = dark ? const Color(0xFFE0B85C) : const Color(0xFFB4770A);
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF6E5),
+        color: bg,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.info_outline, size: 15, color: Color(0xFFB4770A)),
+          Icon(Icons.info_outline, size: 15, color: icon),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
               '有 $count 只标的还没有历史净值（清仓的也算），它们持有期间的日子显示不出收益。'
               '去「设置 → 数据维护中心 → 重建历史净值」补一次即可。',
-              style: TextStyle(fontSize: 11, color: hint, height: 1.5),
+              style: TextStyle(fontSize: 11, color: fg, height: 1.5),
             ),
           ),
         ],

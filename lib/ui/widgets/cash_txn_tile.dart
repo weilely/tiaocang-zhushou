@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/format.dart';
+import '../../data/models.dart';
 import '../../data/nav_models.dart';
 
 /// 现金流水的一行
@@ -12,6 +13,15 @@ import '../../data/nav_models.dart';
 class CashTxnTile extends StatelessWidget {
   final CashTxn txn;
 
+  /// 这笔现金流水的**影子交易**（联动来源）。老数据可能取不到，允许为 null。
+  final Txn? linkedTxn;
+
+  /// **现取**的标的短名（简称 → 名称 → 代码）。
+  ///
+  /// 不要用 [txn] 备注里那一段：备注是写入时烘死的，简称后来才设、或当时为空，
+  /// 就会出现整条备注退化成 `" · "`、或明明设了简称却看不见的情况。
+  final String shortName;
+
   /// 账户名（「全部账户」视图下才需要显示）
   final String accountName;
 
@@ -21,6 +31,8 @@ class CashTxnTile extends StatelessWidget {
   const CashTxnTile({
     super.key,
     required this.txn,
+    this.linkedTxn,
+    this.shortName = '',
     this.accountName = '',
     this.onDelete,
   });
@@ -28,8 +40,13 @@ class CashTxnTile extends StatelessWidget {
   /// 是否由交易联动生成
   bool get isAuto => txn.srcTxnId != null;
 
-  /// 定投联动生成的买入：现金流水里标题直接写「定投」，与交易记录里的标签一致
-  bool get isDca => txn.type == CashType.invest && txn.note.contains('定投');
+  /// 定投联动生成的买入：现金流水里标题直接写「定投」，与交易记录里的标签一致。
+  ///
+  /// 判断依据优先用**影子交易的备注**：现金行自己的备注常常没有「定投」
+  /// （老数据尤其如此），只认它的话定投会显示成普通买入。
+  bool get isDca =>
+      txn.type == CashType.invest &&
+      (linkedTxn?.note ?? txn.note).contains('定投');
 
   bool get deletable => onDelete != null && !isAuto;
 
@@ -39,18 +56,19 @@ class CashTxnTile extends StatelessWidget {
   /// 联动流水备注里的动作词。
   ///
   /// 注意：备注里的动作词来自**交易**类型（`TxnType.label`：买入 / 卖出 / 分红），
-  /// 而本行的标题用的是**现金**类型（`CashType.label`：买入扣款 / 卖出入账 / 分红入账），
+  /// 而本行的标题用的是**现金**类型（`CashType.label`：买入/卖出/分红），
   /// 两者字面不同 —— 早先拿 `txn.typeLabel` 去比永远匹配不上，
   /// 结果「价值100 · 买入」里的动作词滤不掉。
   static const Set<String> _actionWords = {'买入', '卖出', '分红', '定投'};
 
-  /// 副标题里的备注。
+  /// 副标题里的标的。
   ///
-  /// 联动流水的备注是「简称 · 动作词」，而动作词标题已经写了 —— 这里把动作词去掉，
-  /// 只留标的简称，免得一行里出现两遍「买入 / 定投」。手记流水原样显示。
+  /// 优先用**现取的短名**；取不到才退回解析备注（只留标的简称，滤掉动作词，
+  /// 免得一行里出现两遍「买入 / 定投」）。手记流水原样显示备注。
   String get _note {
-    if (txn.note.isEmpty) return '';
     if (!isAuto) return txn.note;
+    if (shortName.isNotEmpty) return shortName;
+    if (txn.note.isEmpty) return '';
     final parts = txn.note
         .split(' · ')
         .where((s) {

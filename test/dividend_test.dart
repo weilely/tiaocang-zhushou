@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/logic/dividend.dart';
+import 'package:invest_tracker/logic/range_preset.dart';
+import 'package:invest_tracker/logic/cash_flow.dart';
 import 'package:invest_tracker/logic/returns_calendar.dart';
 
 /// 分红送配原文解析：只认现金分红，拆分/折算一律不算
@@ -61,7 +63,12 @@ void main() {
           note: note,
         );
 
-    ({double invest, double redeem, double dividend}) totals(List<Txn> list) =>
+    ({
+      double invest,
+      double redeem,
+      double dividend,
+      double redeemLedger,
+    }) totals(List<Txn> list) =>
         flowTotals(txns: list, start: day, end: day);
 
     test('普通买入照常计入', () {
@@ -95,6 +102,82 @@ void main() {
       expect(buy(note: '定投').isCashless, isFalse);
       expect(buy(note: Txn.costAdjustNote).isCashless, isTrue);
       expect(buy(note: '${Txn.reinvestNote} 2026-06-30').isCashless, isTrue);
+    });
+  });
+
+  // 用户真实数据（2026-09-20）暴露的假阳性：卖出侧做过超卖折算，现金行是全额，
+  // 两边一减凭空报出 1050.51 的「现金流水不完整」。这里把这条守死。
+  group('超卖折算不能让「卖出 vs 现金」对账误报', () {
+    final d1 = DateTime(2026, 9, 1);
+    final d2 = DateTime(2026, 9, 2);
+
+    Txn sell({required double amount, required double shares, double fee = 0}) =>
+        Txn(
+          accountId: 1,
+          assetId: 1,
+          type: TxnType.sell,
+          date: d2,
+          amount: amount,
+          shares: shares,
+          price: 1,
+          fee: fee,
+        );
+
+    Txn buy({required double shares}) => Txn(
+          accountId: 1,
+          assetId: 1,
+          type: TxnType.buy,
+          date: d1,
+          amount: shares,
+          shares: shares,
+          price: 1,
+        );
+
+    test('卖出份额超过账上持有 → 图上的赎回金额打折，但对账口径不打折', () {
+      // 只买过 100 份，却卖了 200 份（早年漏录买入的典型情形）
+      final list = [buy(shares: 100), sell(amount: 20000, shares: 200)];
+      final f = flowTotals(txns: list, start: d1, end: d2);
+      expect(f.redeem, closeTo(10000, 1e-9), reason: '图上按 100/200 折算');
+      expect(f.redeemLedger, closeTo(20000, 1e-9),
+          reason: '对账要用全额 —— 联动现金行记的就是全额');
+    });
+
+    test('正常卖出（没超卖）两个口径相同', () {
+      final list = [buy(shares: 500), sell(amount: 3000, shares: 300)];
+      final f = flowTotals(txns: list, start: d1, end: d2);
+      expect(f.redeem, closeTo(3000, 1e-9));
+      expect(f.redeemLedger, closeTo(3000, 1e-9));
+    });
+
+    test('手续费在两个口径里都是扣掉之后再折算/相加', () {
+      final list = [buy(shares: 500), sell(amount: 3000, shares: 300, fee: 15)];
+      final f = flowTotals(txns: list, start: d1, end: d2);
+      expect(f.redeemLedger, closeTo(2985, 1e-9));
+      expect(f.redeem, closeTo(2985, 1e-9));
+    });
+
+    test('账本完整时 redeemGap 为 0（这就是用户那次假警告）', () {
+      // 超卖了，但现金行是全额 → 用 redeemLedger 对账必须为 0
+      final st = CashFlowStatement(
+        range: DateRange(d1, d2),
+        beginHolding: 0,
+        beginCash: 0,
+        endHolding: 0,
+        endCash: 0,
+        deposit: 0,
+        withdraw: 0,
+        investAmount: 100,
+        redeemAmount: 10000, // 折算后的图口径
+        dividend: 0,
+        cashIncome: 0,
+        cashAdjust: 0,
+        cashInvest: 100,
+        cashRedeem: 20000, // 现金行全额
+        redeemLedger: 20000, // 对账口径 = 全额
+      );
+      expect(st.redeemGap, closeTo(0, 1e-9));
+      expect(st.ledgerIncomplete, isFalse,
+          reason: '账本其实是完整的，不该报警');
     });
   });
 }

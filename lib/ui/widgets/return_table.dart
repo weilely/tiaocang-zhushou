@@ -14,6 +14,9 @@ class ReturnTable extends StatefulWidget {
   final void Function(WatchRow row)? onTap;
   final void Function(WatchRow row)? onMenu;
 
+  /// 列表为空时显示的话；默认沿用原来的文案
+  final String emptyText;
+
   /// 首列宽度
   ///
   /// 148dp 是留给「代码 + 完整名称」两行排布的：约 12.5 字/行，
@@ -25,6 +28,7 @@ class ReturnTable extends StatefulWidget {
     required this.rows,
     this.onTap,
     this.onMenu,
+    this.emptyText = '还没有关注的标的',
     this.firstWidth = 148,
   });
 
@@ -181,7 +185,11 @@ class _ReturnTableState extends State<ReturnTable> {
         Expanded(
           child: rows.isEmpty
               ? Center(
-                  child: Text('还没有关注的标的',
+                  // 空列表的文案由调用方给：关注页在「选了某个分类」时要写
+                  // 「这个分类下还没有标的」，直接说"还没有关注的标的"会让人
+                  // 以为关注列表被清空了
+                  child: Text(widget.emptyText,
+                      textAlign: TextAlign.center,
                       style: TextStyle(
                           fontSize: 13, color: Theme.of(context).hintColor)),
                 )

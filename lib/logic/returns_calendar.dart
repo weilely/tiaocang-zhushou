@@ -396,7 +396,11 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
 /// 在 [start, end] 内按标的汇总「买入含手续费」「卖出净额」「现金分红」
 ///
 /// 与 [buildDailySeries] 共用超卖折算规则，保证两边口径一致。
-({double invest, double redeem, double dividend}) flowTotals({
+///
+/// 额外返回 [redeemLedger]：**不做超卖折算**的卖出净额，专供与现金账本对账
+/// （现金行是全额，用折算过的数去比会误报"现金流水不完整"）。
+({double invest, double redeem, double dividend, double redeemLedger})
+    flowTotals({
   required List<Txn> txns,
   int? accountId,
   required DateTime start,
@@ -415,6 +419,7 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
   var invest = 0.0;
   var redeem = 0.0;
   var dividend = 0.0;
+  var redeemLedger = 0.0;
   for (final list in grouped.values) {
     list.sort((a, b) => a.date.compareTo(b.date));
     var shares = 0.0;
@@ -431,7 +436,11 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
         case TxnType.sell:
           final sold = t.shares < shares ? t.shares : shares;
           final ratio = t.shares > 1e-9 ? sold / t.shares : 0.0;
-          if (inWindow && !t.isCashless) redeem += (t.amount - t.fee) * ratio;
+          if (inWindow && !t.isCashless) {
+            redeem += (t.amount - t.fee) * ratio;
+            // 联动现金行记的是全额 amount−fee，对账要用这个
+            redeemLedger += t.amount - t.fee;
+          }
           shares -= sold;
           break;
         case TxnType.dividend:
@@ -440,5 +449,10 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
       }
     }
   }
-  return (invest: invest, redeem: redeem, dividend: dividend);
+  return (
+    invest: invest,
+    redeem: redeem,
+    dividend: dividend,
+    redeemLedger: redeemLedger,
+  );
 }

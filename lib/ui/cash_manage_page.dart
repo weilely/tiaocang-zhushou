@@ -303,8 +303,13 @@ class _CashManagePageState extends State<CashManagePage> {
     // 由买入/卖出/分红/定投联动生成的那条流水**不在这里删**：
     // 它是交易的影子，单独删掉会让现金余额与交易对不上。
     // 要删就去删那笔交易，联动流水会跟着一起走 —— 所以这里不给删除回调。
+    // 显示用的标的短名与「是不是定投」都**从影子交易现取**，不吃现金行备注 ——
+    // 备注是写入时烘死的，老数据里可能没有「定投」、简称也缺失（实测用户的 463 条
+    // 现金行里 0 条备注含「定投」，而对应的影子交易有 339 条是定投）。
     return CashTxnTile(
       txn: t,
+      linkedTxn: st.linkedTxnOf(t),
+      shortName: st.cashShortOf(t),
       accountName: isAll ? '' : (st.accountsById[t.accountId]?.name ?? ''),
       onDelete: t.srcTxnId != null ? null : () => st.removeCashTxn(t.id!),
     );

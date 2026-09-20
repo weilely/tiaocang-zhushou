@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/data/nav_models.dart';
 import 'package:invest_tracker/ui/widgets/cash_txn_tile.dart';
 
@@ -209,6 +210,71 @@ void main() {
         CashTxnTile(txn: manual(type: CashType.dividend, amount: 88)).isAuto,
         isFalse,
       );
+    });
+  });
+
+  // 用户真实数据（2026-09-20）暴露的：现金行备注是写入时烘死的，
+  // 老数据里 463 条备注有 0 条含「定投」、简称也没写进去，于是
+  // 「看不出是定投和简称」。显示必须以**影子交易**为准。
+  group('显示要以影子交易为准，不吃现金行备注', () {
+    Txn txn({String note = ''}) => Txn(
+          id: 42,
+          accountId: 1,
+          assetId: 7,
+          type: TxnType.buy,
+          date: DateTime(2026, 9, 11),
+          amount: 900,
+          shares: 100,
+          price: 9,
+          note: note,
+        );
+
+    testWidgets('备注退化成「 · 」、但影子交易是定投 → 标题仍写「定投」', (tester) async {
+      await tester.pumpWidget(host(CashTxnTile(
+        // 老数据的真实样子：简称没取到、动作词又被滤掉，整条成了「 · 」
+        txn: linked(note: ' · '),
+        linkedTxn: txn(note: '定投'),
+        shortName: '价值',
+        onDelete: null,
+      )));
+      expect(find.text('定投'), findsOneWidget, reason: '不能因为现金行备注里没有「定投」就显示成买入');
+      expect(find.text('买入'), findsNothing);
+      // 短名现取，不依赖备注
+      expect(find.textContaining('价值'), findsOneWidget);
+      // 副标题应是「月日 · 简称」——退化的「 · 」整段被顶掉了，不会多出空段
+      expect(find.textContaining('09-11 · 价值'), findsOneWidget);
+      expect(find.textContaining(' ·  · '), findsNothing, reason: '退化备注不该露出来');
+    });
+
+    testWidgets('现金行备注写着「成长 · 买入」但影子交易是定投 → 也是「定投」', (tester) async {
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(note: '成长 · 买入'),
+        linkedTxn: txn(note: '定投'),
+        shortName: '成长',
+        onDelete: null,
+      )));
+      expect(find.text('定投'), findsOneWidget);
+    });
+
+    testWidgets('现取的简称优先于备注里那一段', (tester) async {
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(note: '易方达国证价值100ETF联接发起式A · 买入'),
+        linkedTxn: txn(),
+        shortName: '价值',
+        onDelete: null,
+      )));
+      expect(find.textContaining('价值'), findsOneWidget);
+      expect(find.textContaining('易方达国证价值100ETF联接发起式A'), findsNothing,
+          reason: '设了简称就不该再显示全名');
+    });
+
+    testWidgets('拿不到影子交易时退回解析备注（老行为不能坏）', (tester) async {
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(note: '价值100 · 买入'),
+        onDelete: null,
+      )));
+      expect(find.text('买入'), findsOneWidget);
+      expect(find.textContaining('价值100'), findsOneWidget);
     });
   });
 }

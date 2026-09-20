@@ -16,6 +16,7 @@ import 'holding_import_page.dart';
 import 'widgets/common.dart';
 import 'widgets/macro_card.dart';
 import 'widgets/return_table.dart';
+import 'widgets/segmented_pills.dart';
 
 class WatchlistPage extends StatefulWidget {
   const WatchlistPage({super.key});
@@ -30,6 +31,27 @@ class _WatchlistPageState extends State<WatchlistPage> {
   List<SecurityRow> _results = const [];
   bool _searching = false;
   bool _sortMode = false;
+
+  /// 列表分类：null=全部，否则是 `AssetKind`。
+  ///
+  /// 注意 `WatchItem.kind` 是 **AssetKind 枚举**、不是字符串 —— 早先拿
+  /// `== 'fund'` 去比永远为假（标签全显示 0），而这类错误只是 info 级 lint
+  /// `unrelated_type_equality_checks`，很容易被"只看 error/warning"放过去。
+  AssetKind? _kind;
+
+  /// 三个分类标签的顺序与中文名（用户口径：基金 / 股票 / ETF）
+  static const List<AssetKind> kindTabs = [
+    AssetKind.fund,
+    AssetKind.stock,
+    AssetKind.etf,
+  ];
+
+  static String kindLabel(AssetKind kind) => switch (kind) {
+        AssetKind.fund => '基金',
+        AssetKind.stock => '股票',
+        AssetKind.etf => 'ETF',
+        AssetKind.other => '其他',
+      };
 
   @override
   void dispose() {
@@ -64,6 +86,15 @@ class _WatchlistPageState extends State<WatchlistPage> {
   Widget build(BuildContext context) {
     final st = context.watch<AppState>();
 
+    // 分类标签：全部 + 基金/股票/ETF **三个固定分类**（各自带数量）。
+    // 不按"有没有这类标的"来决定显不显示 —— 用户要的就是这三个标签，
+    // 藏起来等于没做；数量为 0 反而一眼看得出这类还没加。
+    final allRows = st.watchRows;
+    final kind = _kind;
+    final rows = kind == null
+        ? allRows
+        : [for (final r in allRows) if (r.item.kind == kind) r];
+
     return Column(
       children: [
         _searchBar(context, st),
@@ -72,12 +103,36 @@ class _WatchlistPageState extends State<WatchlistPage> {
         else if (_sortMode)
           Expanded(child: _reorderList(context, st))
         else ...[
-          _statsBar(context, st),
+          _statsBar(context, st, rows),
           // 市场估值（股债利差）：一天一个点，本地累积历史
           const MacroCard(),
+          if (allRows.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SegmentedPills<AssetKind?>(
+                  expand: false,
+                  selected: kind,
+                  onChanged: (v) => setState(() => _kind = v),
+                  items: [
+                    (value: null, label: '全部 ${allRows.length}'),
+                    for (final k in kindTabs)
+                      (
+                        value: k,
+                        label:
+                            '${kindLabel(k)} ${allRows.where((r) => r.item.kind == k).length}'
+                      ),
+                  ],
+                ),
+              ),
+            ),
           Expanded(
             child: ReturnTable(
-              rows: st.watchRows,
+              rows: rows,
+              emptyText: kind == null
+                  ? '还没有关注的标的'
+                  : '这个分类下还没有标的',
               onTap: _showNavHistory,
               onMenu: (r) => _itemMenu(st, r),
             ),
@@ -144,12 +199,13 @@ class _WatchlistPageState extends State<WatchlistPage> {
     );
   }
 
-  Widget _statsBar(BuildContext context, AppState st) {
+  Widget _statsBar(BuildContext context, AppState st, List<WatchRow> rows) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
       child: Row(
         children: [
-          Text('共 ${st.watchlist.length} 只',
+          // 分类筛选后显示的是**当前看到的那一批**有几只，避免"共 9 只却只列 3 行"的疑惑
+          Text('共 ${rows.length} 只',
               style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor)),
           const SizedBox(width: 10),
           Text('净值 ${st.navRowCount} 条',
@@ -199,6 +255,10 @@ class _WatchlistPageState extends State<WatchlistPage> {
             tooltip: '加入关注',
             icon: const Icon(Icons.add_circle_outline),
             onPressed: () async {
+              // 先取好 messenger：await 之后就不能再用 context 了
+              // （analyzer 的 use_build_context_synchronously 会拦，
+              //   而且真的可能在不该用的时候用）
+              final messenger = ScaffoldMessenger.of(context);
               await st.addToWatch(Asset(
                 code: r.code,
                 name: r.name,
@@ -211,7 +271,7 @@ class _WatchlistPageState extends State<WatchlistPage> {
                 _search.clear();
                 _results = const [];
               });
-              ScaffoldMessenger.of(context).showSnackBar(
+              messenger.showSnackBar(
                 SnackBar(content: Text('已加入关注：${r.name}'), duration: const Duration(seconds: 2)),
               );
             },
