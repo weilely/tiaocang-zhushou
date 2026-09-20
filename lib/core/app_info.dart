@@ -5,7 +5,7 @@
 /// `pubspec.yaml` 的 `version:` 永远一起改 —— 升版本请走那个脚本，别手改单个文件。
 library;
 
-const String appVersion = '1.0.7';
+const String appVersion = '1.0.8';
 
 /// 作者署名
 const String appAuthor = '吹角天明@MLB';
