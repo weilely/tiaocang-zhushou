@@ -447,4 +447,112 @@ void main() {
       svc.dispose();
     });
   });
+
+  // ---------------- 同花顺代码表 → 基础数据行 ----------------
+
+  group('同花顺代码表映射', () {
+    Map<String, dynamic> item(String ticker, String name, String assetType,
+            {String? exchange}) =>
+        {
+          'thscode': '$ticker.${exchange ?? 'OF'}',
+          'ticker': ticker,
+          'name': name,
+          'exchange': exchange,
+          'asset_type': assetType,
+        };
+
+    test('A 股：板块由代码推、市场用接口给的 exchange、拼音本地生成', () {
+      final r = SecuritiesSource.rowFromHithink(
+          item('600519', '贵州茅台', 'a-share', exchange: 'SH'), 1);
+      expect(r, isNotNull);
+      expect(r!.code, '600519');
+      expect(r.kind, 'stock');
+      expect(r.name, '贵州茅台');
+      expect(r.market, 'SH');
+      expect(r.secType, '股票-上证');
+      expect(r.secClass, '股票');
+      expect(r.secSub, '上证');
+      expect(r.pinyin, 'GZMT');
+      expect(r.fullPinyin, 'guizhoumaotai');
+      expect(r.source, 'hithink');
+      expect(r.updatedAt, 1);
+    });
+
+    test('北交所 920xxx 归北证、市场 BJ', () {
+      final r = SecuritiesSource.rowFromHithink(
+          item('920001', '某北交所股', 'a-share', exchange: 'BJ'), 1)!;
+      expect(r.secSub, '北证');
+      expect(r.market, 'BJ');
+    });
+
+    test('exchange 缺失时按板块兜市场，不留空', () {
+      final r = SecuritiesSource.rowFromHithink(
+          item('688111', '科创某某', 'a-share'), 1)!;
+      expect(r.market, 'SH'); // 科创 → 沪
+      final r2 =
+          SecuritiesSource.rowFromHithink(item('300750', '创业某某', 'a-share'), 1)!;
+      expect(r2.market, 'SZ');
+    });
+
+    test('场外基金：kind=fund、没有市场、类型只能记未分类', () {
+      final r = SecuritiesSource.rowFromHithink(
+          item('000001', '华夏成长', 'fund-otc'), 1)!;
+      expect(r.kind, 'fund');
+      expect(r.market, '');
+      expect(r.secClass, '未分类');
+      expect(r.secType, '未分类');
+      expect(r.pinyin, 'HXCZ');
+    });
+
+    test('ETF / LOF 都算 etf，市场取 exchange', () {
+      final etf = SecuritiesSource.rowFromHithink(
+          item('510300', '沪深300ETF', 'fund-etf', exchange: 'SH'), 1)!;
+      expect(etf.kind, 'etf');
+      expect(etf.market, 'SH');
+
+      final lof = SecuritiesSource.rowFromHithink(
+          item('501029', '红利基金', 'fund-lof', exchange: 'SH'), 1)!;
+      expect(lof.kind, 'etf');
+      expect(lof.market, 'SH');
+    });
+
+    test('ETF 的 exchange 缺失时按代码前缀兜（沪 5 / 深 1）', () {
+      final sh = SecuritiesSource.rowFromHithink(
+          item('510300', '沪深300ETF', 'fund-etf'), 1)!;
+      expect(sh.market, 'SH');
+      final sz = SecuritiesSource.rowFromHithink(
+          item('159915', '创业板ETF', 'fund-etf'), 1)!;
+      expect(sz.market, 'SZ');
+    });
+
+    test('指数/期货/期权不进基础数据（与现有口径一致）', () {
+      expect(
+          SecuritiesSource.rowFromHithink(item('000001', '上证指数', 'a-share-index'), 1),
+          isNull);
+      expect(SecuritiesSource.rowFromHithink(item('IF2609', '沪深300期指', 'futures'), 1),
+          isNull);
+    });
+
+    test('缺代码或缺名称的条目跳过，不产生空行', () {
+      expect(
+          SecuritiesSource.rowFromHithink(
+              item('', '没有代码', 'a-share', exchange: 'SH'), 1),
+          isNull);
+      expect(
+          SecuritiesSource.rowFromHithink(
+              item('600000', '', 'a-share', exchange: 'SH'), 1),
+          isNull);
+    });
+
+    test('批量映射：认不出的丢掉，同一批 updated_at 一致', () {
+      final rows = SecuritiesSource.rowsFromHithink([
+        item('600519', '贵州茅台', 'a-share', exchange: 'SH'),
+        item('000001', '上证指数', 'a-share-index'),
+        item('000001', '华夏成长', 'fund-otc'),
+      ]);
+      expect(rows.length, 2);
+      expect(rows.map((e) => e.code), containsAll(['600519', '000001']));
+      expect(rows[0].updatedAt, rows[1].updatedAt);
+    });
+  });
 }

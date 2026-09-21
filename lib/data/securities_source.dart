@@ -299,6 +299,94 @@ class SecuritiesSource {
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       );
 
+  /// 同花顺 `meta/tickers/list` 的条目 → 本地基础数据行
+  ///
+  /// 同花顺的代码表**只给代码/名称/交易所**，不给拼音、也不给基金类型，所以：
+  /// - 拼音一律用本地字典生成（首拼 + 全拼），与股票名录原来的做法一致；
+  /// - 基金的 `secType/secClass` 只能记「未分类」——**这正是基金仍以东财为主的原因**
+  ///   （东财那个列表带「混合型-偏股」这类分类，设置页的分类筛选与再平衡大类靠它）。
+  ///   同花顺这边只在东财不可用时兜底：宁可有代码能搜，也不要整块空着。
+  ///
+  /// 只收 `a-share` / `fund-otc` / `fund-etf` / `fund-lof`；指数、期货、期权
+  /// 不进基础数据（与现有口径一致）。认不出的条目直接跳过。
+  static List<SecurityRow> rowsFromHithink(List<Map<String, dynamic>> raw) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final out = <SecurityRow>[];
+    for (final m in raw) {
+      final row = rowFromHithink(m, now);
+      if (row != null) out.add(row);
+    }
+    return out;
+  }
+
+  /// 单条映射（[now] 由调用方统一给，保证同批 `updated_at` 一致）
+  static SecurityRow? rowFromHithink(Map<String, dynamic> raw, int now) {
+    final code = (raw['ticker'] ?? '').toString().trim();
+    final name = (raw['name'] ?? '').toString().trim();
+    final type = (raw['asset_type'] ?? '').toString().trim();
+    final ex = (raw['exchange'] ?? '').toString().trim().toUpperCase();
+    if (code.isEmpty || name.isEmpty) return null;
+
+    final pinyin = pinyinInitials(name);
+    final full = fullPinyinOf(name);
+
+    switch (type) {
+      case 'a-share':
+        final board = boardOf(code);
+        // 同花顺会给 exchange；缺失时按板块兜一个，不留空
+        final market = ex.isNotEmpty
+            ? ex
+            : switch (board) {
+                '上证' || '科创' => 'SH',
+                '北证' => 'BJ',
+                _ => 'SZ',
+              };
+        return SecurityRow(
+          code: code,
+          kind: 'stock',
+          name: name,
+          pinyin: pinyin,
+          fullPinyin: full,
+          secType: '股票-$board',
+          secClass: '股票',
+          secSub: board,
+          market: market,
+          source: 'hithink',
+          updatedAt: now,
+        );
+      case 'fund-otc':
+        return SecurityRow(
+          code: code,
+          kind: 'fund',
+          name: name,
+          pinyin: pinyin,
+          fullPinyin: full,
+          secType: '未分类',
+          secClass: '未分类',
+          market: '', // 场外基金没有交易所
+          source: 'hithink',
+          updatedAt: now,
+        );
+      case 'fund-etf':
+      case 'fund-lof':
+        return SecurityRow(
+          code: code,
+          kind: 'etf',
+          name: name,
+          pinyin: pinyin,
+          fullPinyin: full,
+          secType: '未分类',
+          secClass: '未分类',
+          // 后缀缺失时按代码前缀兜（沪 5 开头、深 1 开头），与东财那条路同口径
+          market: ex.isNotEmpty ? ex : (code.startsWith('5') ? 'SH' : 'SZ'),
+          source: 'hithink',
+          updatedAt: now,
+        );
+      default:
+        return null;
+    }
+  }
+
   /// 供上层判断网络层错误
   static String describeError(Object e) =>
       e is MarketException ? e.message : e.toString();

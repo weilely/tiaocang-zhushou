@@ -151,6 +151,96 @@ void main() {
     });
   });
 
+  group('基础数据代码表（meta/tickers/list）', () {
+    test('不满一页就停：一次请求拿完', () async {
+      final seen = <String>[];
+      final api = HithinkApi(MockClient((req) async {
+        seen.add('${req.url.queryParameters['asset_type']}'
+            '|${req.url.queryParameters['offset']}'
+            '|${req.url.queryParameters['limit']}');
+        expect(req.url.path, '/api/meta/tickers/list');
+        return http.Response(
+          jsonEncode({
+            'code': 0,
+            'data': {
+              'item': [
+                {
+                  'thscode': '600519.SH',
+                  'ticker': '600519',
+                  'name': '贵州茅台',
+                  'exchange': 'SH',
+                  'asset_type': 'a-share',
+                },
+              ],
+            },
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }));
+
+      final got = await api.tickersList('a-share', 'k', limit: 1000);
+      expect(seen, ['a-share|0|1000']);
+      expect(got.length, 1);
+      expect(got.first['ticker'], '600519');
+    });
+
+    test('满一页就继续翻，offset 递增，直到不满一页', () async {
+      final offsets = <String>[];
+      final api = HithinkApi(MockClient((req) async {
+        final off = int.parse(req.url.queryParameters['offset'] ?? '0');
+        offsets.add('$off');
+        // 第一页满（2 条 = limit），第二页只有 1 条 → 停
+        final n = off == 0 ? 2 : 1;
+        return http.Response(
+          jsonEncode({
+            'code': 0,
+            'data': {
+              'item': [
+                for (var i = 0; i < n; i++)
+                  {
+                    'thscode': '${off + i}.SH',
+                    'ticker': '${off + i}',
+                    'name': '标的${off + i}',
+                    'exchange': 'SH',
+                    'asset_type': 'a-share',
+                  },
+              ],
+            },
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }));
+
+      final got = await api.tickersList('a-share', 'k', limit: 2);
+      expect(offsets, ['0', '2']);
+      expect(got.length, 3);
+    });
+
+    test('业务错误要抛出去（调用方靠它决定回落原来的通道）', () async {
+      final api = HithinkApi(MockClient((req) async => http.Response(
+            jsonEncode({'code': 2003, 'message': 'Invalid API key', 'data': null}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          )));
+      await expectLater(
+        api.tickersList('a-share', 'bad'),
+        throwsA(isA<HithinkException>()),
+      );
+    });
+
+    test('未配置 Key：不发请求，返回空', () async {
+      var calls = 0;
+      final api = HithinkApi(MockClient((req) async {
+        calls++;
+        return http.Response('{}', 200);
+      }));
+      expect(await api.tickersList('a-share', '   '), isEmpty);
+      expect(calls, 0);
+    });
+  });
+
   group('场内基金快照解析（ETF/LOF 走基金接口，不是 A 股接口）', () {
     test('参数是单数 thscode、一次一个；价格为 0 的记录丢掉', () async {
       final seen = <String>[];

@@ -42,6 +42,40 @@ class HithinkApi {
   /// 未配置 Key 时调用方快速判定，避免白打请求
   bool enabled(String apiKey) => apiKey.trim().isNotEmpty;
 
+  /// 拉取**基础数据**（代码表）：`/api/meta/tickers/list`
+  ///
+  /// [assetType] 用官方枚举：`a-share` / `a-share-index` / `fund-otc` /
+  /// `fund-etf` / `fund-lof` / `fund-reits` / `forex` / `futures` / `options`，
+  /// 可用逗号合并多值（如 `fund-otc,fund-etf,fund-lof`）。
+  ///
+  /// 与快照类方法不同，这里**失败会抛** [HithinkException]：调用方要靠它决定
+  /// 「回落到原来的东财/新浪通道」，不能把失败当成"没有数据"（那就是静默降级了）。
+  /// 服务端单页上限 10000，内部按 offset 翻页直到不满一页。
+  Future<List<Map<String, dynamic>>> tickersList(
+    String assetType,
+    String apiKey, {
+    int limit = 10000,
+    int maxPages = 20,
+  }) async {
+    if (!enabled(apiKey)) return const [];
+    final out = <Map<String, dynamic>>[];
+    for (var page = 0; page < maxPages; page++) {
+      final item = await _get(
+        '/api/meta/tickers/list?asset_type=$assetType'
+        '&limit=$limit&offset=${page * limit}',
+        apiKey,
+      );
+      final data = item['data'];
+      final arr = (data is Map) ? data['item'] : null;
+      if (arr is! List) break;
+      for (final raw in arr) {
+        if (raw is Map) out.add(Map<String, dynamic>.from(raw));
+      }
+      if (arr.length < limit) break; // 不满一页 = 取尽了
+    }
+    return out;
+  }
+
   /// 把「带市场前缀的代码」规范化成同花顺 `thscode`（`600519.SH`）。
   ///
   /// 输入兼容 `sh000001` / `sz399001` / `bj899050` / `510300`（裸 6 位）等：

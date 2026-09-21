@@ -1094,7 +1094,7 @@ class _SettingsPageState extends State<SettingsPage> {
         content: const Text(
           '会依次更新两部分：\n'
           '· 基金：联网下载全量基金列表（约 3 MB，含 ETF / LOF）\n'
-          '· 股票：分页拉取全部 A 股（约 5,600 只，56 页）\n\n'
+          '· 股票：配了同花顺 Key 就一次拉全（约 5,600 只）；否则分页拉取（56 页）\n\n'
           '只在本次点击时联网，之后搜索都走本地。\n'
           '中途失败或退出会保留已写入的数据，再次点击从断点继续。',
           style: TextStyle(fontSize: 13),

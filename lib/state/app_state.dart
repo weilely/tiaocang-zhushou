@@ -2985,7 +2985,11 @@ class AppState extends ChangeNotifier {
   Future<Map<String, int>> securitiesSubCounts({String? classFilter}) =>
       db.securitiesSubCounts(classFilter: classFilter);
 
-  /// 更新基金基础数据：**单请求约 3 MB，27,845 条，自带首拼与全拼**
+  /// 更新基金基础数据：东财**单请求约 3 MB，27,845 条，自带首拼、全拼与类型**
+  ///
+  /// 基金**刻意不以同花顺为主**：同花顺代码表不带基金类型，换了会让设置页的
+  /// 分类筛选/统计全变「未分类」。所以东财是主力，同花顺只在东财不可用时兜底
+  /// （宁可有代码能搜，也不要整块空着）。
   Future<int> updateFundSecurities() async {
     if (securitiesBusy) return 0;
     securitiesBusy = true;
@@ -3000,6 +3004,12 @@ class AppState extends ChangeNotifier {
       lastError = null;
       return rows.length;
     } catch (e) {
+      // 东财挂了（格式变更 / 限流 / 断连）：有 Key 就用同花顺兜底
+      final viaHithink = await _fundSecuritiesViaHithink();
+      if (viaHithink > 0) {
+        lastError = null;
+        return viaHithink;
+      }
       lastError = '基金基础数据更新失败：$e';
       return 0;
     } finally {
@@ -3009,14 +3019,47 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// 更新股票基础数据：分页拉取，带节流、重试与**断点续传**
+  /// 用同花顺代码表兜底基金基础数据（只在东财不可用时走）
   ///
+  /// 代价：同花顺不给基金类型，这批会记成「未分类」（可搜索、可选，但分类筛选
+  /// 会归到「未分类」）。等东财恢复后再点一次更新即可覆盖回带类型的完整数据。
+  Future<int> _fundSecuritiesViaHithink() async {
+    final key = (await db.setting('hithinkApiKey'))?.trim() ?? '';
+    if (!hithink.enabled(key)) return 0;
+    try {
+      securitiesProgress = '东财不可用，改用同花顺下载基金代码表…';
+      notifyListeners();
+      final raw =
+          await hithink.tickersList('fund-otc,fund-etf,fund-lof', key);
+      final rows = SecuritiesSource.rowsFromHithink(raw);
+      if (rows.isEmpty) return 0;
+      securitiesProgress = '正在写入 ${rows.length} 条…';
+      notifyListeners();
+      await db.upsertSecurities(rows);
+      await loadSecuritiesStats();
+      return rows.length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 更新股票基础数据：**同花顺优先**，其次新浪分页（带节流、重试与断点续传）
+  ///
+  /// 同花顺那条一次请求就能拿全 A 股（服务端单页上限 10000，实测 5,575 只），
+  /// 而新浪要 100 条/页爬 56 页 —— 所以有 Key 且能用时优先走它。
+  /// 无 Key、Key 失效、限流、超时都会**静默掉回**新浪那条老路，功能不受影响。
   /// 中途失败/退出时已写入的数据保留，下次点击从断点继续。
   Future<int> updateStockSecurities() async {
     if (securitiesBusy) return 0;
     securitiesBusy = true;
     var written = 0;
     try {
+      final viaHithink = await _stockSecuritiesViaHithink();
+      if (viaHithink > 0) {
+        lastError = null;
+        return viaHithink;
+      }
+
       var total = 0;
       try {
         total = await securitiesSource.fetchStockTotal();
@@ -3069,6 +3112,29 @@ class AppState extends ChangeNotifier {
       securitiesBusy = false;
       securitiesProgress = '';
       notifyListeners();
+    }
+  }
+
+  /// 用同花顺代码表一次拿全 A 股；不可用（无 Key / 失败 / 空结果）返回 0
+  Future<int> _stockSecuritiesViaHithink() async {
+    final key = (await db.setting('hithinkApiKey'))?.trim() ?? '';
+    if (!hithink.enabled(key)) return 0;
+    try {
+      securitiesProgress = '正在从同花顺下载全部 A 股…';
+      notifyListeners();
+      final raw = await hithink.tickersList('a-share', key);
+      final rows = SecuritiesSource.rowsFromHithink(raw);
+      if (rows.isEmpty) return 0;
+      securitiesProgress = '正在写入 ${rows.length} 条…';
+      notifyListeners();
+      await db.upsertSecurities(rows);
+      // 全量已到位：把新浪那条老路的断点复位，日后真掉回去也不必从头爬
+      await db.setSetting('secStockNextPage', '1');
+      await loadSecuritiesStats();
+      return rows.length;
+    } catch (_) {
+      // Key 失效 / 限流 / 超时：静默掉回新浪分页，功能不受影响
+      return 0;
     }
   }
 
