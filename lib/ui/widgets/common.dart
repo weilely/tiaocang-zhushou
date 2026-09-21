@@ -335,15 +335,17 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
     setState(() => _open = !_open);
     // 存起来，下次启动保持不变
     AppDatabase.instance.setSetting(_key, _open ? '1' : '0');
-    // **收起会让这张卡片变矮**，当前的滚动位置可能超出新的可滚动范围 →
-    // 页面就卡住不动了（用户报「点击收起后就卡住了」）。
-    // 收起/展开后把这张卡片的标题滚进视野，滚动位置就一定是有效的。
+    // 收起会让卡片变矮、滚动位置可能越界。**用 keepVisibleAtStart 温和处理**：
+    // 卡片已经可见就什么都不做；不可见才最小幅度滚一下。
+    // （早先用默认的 explicit 强制"卡片顶对齐视口顶"，在收起后的短页面上做不到，
+    //   会被夹到页面底部 —— 用户看到的就是「点收起屏闪、只看见检查更新」。）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Scrollable.ensureVisible(
         context,
         alignment: 0,
-        duration: const Duration(milliseconds: 200),
+        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+        duration: const Duration(milliseconds: 180),
         curve: Curves.easeOut,
       );
     });
@@ -370,9 +372,13 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
             Row(
               children: [
                 Expanded(
-                  child: InkWell(
+                  // **用 GestureDetector 而不是 InkWell**：InkWell 带长按识别器，
+                  // 慢一点的拖动会被它抢走（长按阈值 500ms ≈ 慢慢滑的耗时），
+                  // 表现就是"慢慢滑滚不动"（用户报「展开后把标图滚出屏幕就滚回不去」）。
+                  // GestureDetector 只认点击，不跟滚动抢手势。
+                  child: GestureDetector(
                     onTap: _toggle,
-                    borderRadius: BorderRadius.circular(10),
+                    behavior: HitTestBehavior.opaque,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 4),
                       child: Row(
@@ -402,16 +408,20 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
                 const SizedBox(height: 4),
                 Align(
                   alignment: Alignment.center,
-                  child: TextButton.icon(
-                    onPressed: _toggle,
-                    icon: const Icon(Icons.expand_less, size: 18),
-                    label: const Text('收起'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: theme.hintColor,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 2),
-                      minimumSize: const Size(0, 32),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  // 这个按钮**不该抢焦点**：点它之后「把焦点控件拉回视野」
+                  // 会把视图拉到卡片底部 —— 用户看到的就是"只看见检查更新"
+                  child: ExcludeFocus(
+                    child: TextButton.icon(
+                      onPressed: _toggle,
+                      icon: const Icon(Icons.expand_less, size: 18),
+                      label: const Text('收起'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: theme.hintColor,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 2),
+                        minimumSize: const Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                     ),
                   ),
                 ),
