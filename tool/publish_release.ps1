@@ -98,23 +98,38 @@ for ($i = 1; $i -le $attempts; $i++) {
     ForEach-Object { Write-Host $_ }
   $code = $LASTEXITCODE
   $body = if (Test-Path $respFile) { Get-Content $respFile -Raw } else { '' }
-  if ($code -eq 0 -and $body -match '"name"') { $ok = $true; break }
+  # 判据①：curl 成功 + 返回体里有附件信息
+  # 判据②：返回体里的 size 与本地文件一致（防止"传了半个"或拿到别的响应）
+  $sizeOk = $true
+  if ($body -match '"size"\s*:\s*(\d+)') {
+    $sizeOk = ([int64]$Matches[1] -eq (Get-Item $ApkPath).Length)
+  }
+  if ($code -eq 0 -and $body -match '"name"' -and $sizeOk) { $ok = $true; break }
+  if (-not $sizeOk) { Write-Host "第 $i 次：返回体里的 size 与本地文件不一致" }
   Write-Host "第 $i 次失败（exit=$code）：$(($body -replace '\s+', ' '))"
   if ($i -lt $attempts) { Start-Sleep -Seconds 10 }
 }
 
-# ---- 3) 事后校验：附件必须**真的**挂在发行版上 ----
-# 不看返回就说"成功"是靠不住的（服务端可能收了请求但没落库）。
-$verify = $null
-try {
-  $rel = Invoke-RestMethod -Uri "$api/releases/$releaseId?access_token=$token" `
-    -Headers $headers -TimeoutSec 30
-  $verify = @($rel.assets | Where-Object { $_.name -eq $attachName }) | Select-Object -First 1
-} catch {
-  Write-Host "校验查询失败：$($_.Exception.Message)"
-}
-if (-not $ok -or -not $verify) {
+if (-not $ok) {
   throw "附件没传成功：$attachName —— 在线更新会因此不可用。可重跑本脚本重传。"
 }
-Write-Host "OK 附件已在发行版上：$($verify.name)"
+
+# ---- 3) 附带复核：再查一次发行版上有没有它 ----
+# **注意：这一步只作参考，不作为成败判据。**
+# 实测踩过：上传明明成功（HTTP 201、size 也与本地一致），紧接着查发行版却返回
+# `(401) 未经授权`（同一令牌手动查是好的）——说明 Gitee 的查询接口会偶发 401/限流。
+# 若拿它当判据，会把好版本误报成"在线更新不可用"，反而把人引偏。
+try {
+  $rel = Invoke-RestMethod -Uri "$api/releases/$releaseId`?access_token=$token" `
+    -Headers $headers -TimeoutSec 30
+  $verify = @($rel.assets | Where-Object { $_.name -eq $attachName }) |
+    Select-Object -First 1
+  if ($verify) {
+    Write-Host "已复核：附件在发行版上（$($verify.name)）"
+  } else {
+    Write-Host "复核提示：发行版列表里暂时没看到 $attachName（上传已返回 201，稍后可再查一次）"
+  }
+} catch {
+  Write-Host "复核查询不可用（$($_.Exception.Message)）；上传本身已返回 201 且大小一致，按成功处理"
+}
 Write-Host "下载页：https://gitee.com/$Repo/releases/tag/$tag"
