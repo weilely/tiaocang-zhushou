@@ -14,6 +14,18 @@ extension BackupStore on AppDatabase {
     };
   }
 
+  /// 金融基础数据的**原样表行**（全局备份用）
+  Future<List<Map<String, Object?>>> allSecuritiesRows() async {
+    final d = await database;
+    return await d.query('securities');
+  }
+
+  /// 历史净值的**原样表行**（全局备份用；可能几万行）
+  Future<List<Map<String, Object?>>> allNavRows() async {
+    final d = await database;
+    return await d.query('nav_history');
+  }
+
   /// 用备份内容整体替换本地数据（单事务，失败自动回滚）
   Future<void> replaceAllFromBackup(AppBackup b) async {
     final d = await database;
@@ -29,6 +41,10 @@ extension BackupStore on AppDatabase {
       await txn.delete('assets');
       await txn.delete('accounts');
       await txn.delete('settings');
+      // v4：金融基础数据与历史净值**只在备份里确实带了才覆盖** ——
+      // 老备份（v1~v3）这两段是空的，若照清不误会把本地数据白白清掉
+      if (b.securities.isNotEmpty) await txn.delete('securities');
+      if (b.navHistory.isNotEmpty) await txn.delete('nav_history');
 
       // 显式写入 id，保持账户 / 标的 / 流水 / 联动现金流水之间的引用关系
       for (final a in b.accounts) {
@@ -70,6 +86,28 @@ extension BackupStore on AppDatabase {
         await txn.insert('settings', {'key': e.key, 'value': e.value},
             conflictAlgorithm: ConflictAlgorithm.replace);
       }
+      // 大表分批插：sqflite 的 batch 一次几千行比逐行 await 快得多，
+      // 而且历史净值动辄几万行，逐行 insert 会明显卡住恢复
+      await _insertRows(txn, 'securities', b.securities);
+      await _insertRows(txn, 'nav_history', b.navHistory);
     });
+  }
+
+  /// 分批插入原样表行（列名与建表语句一致，直接 insert）
+  Future<void> _insertRows(
+    Transaction txn,
+    String table,
+    List<Map<String, Object?>> rows,
+  ) async {
+    const chunk = 500;
+    for (var i = 0; i < rows.length; i += chunk) {
+      final end = (i + chunk < rows.length) ? i + chunk : rows.length;
+      final batch = txn.batch();
+      for (var j = i; j < end; j++) {
+        batch.insert(table, rows[j],
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await batch.commit(noResult: true);
+    }
   }
 }

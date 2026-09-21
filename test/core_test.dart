@@ -513,9 +513,9 @@ void main() {
       expect(back.dcaPlans, isEmpty);
     });
 
-    test('当前版本号已升到 3（v3 增加关注列表与定投计划）', () {
-      expect(AppBackup.currentVersion, 3);
-      expect(sample().encode(), contains('"version": 3'));
+    test('当前版本号已升到 4（v4 增加金融基础数据与历史净值）', () {
+      expect(AppBackup.currentVersion, 4);
+      expect(sample().encode(), contains('"version": 4'));
     });
 
     test('现金流水也在备份里，且保留 src_txn_id（恢复后余额才对得上）', () {
@@ -544,9 +544,10 @@ void main() {
       expect(back.settings['threshold'], '0.05');
     });
 
-    test('当前版本号已升到 2（v1 备份不含现金流水）', () {
-      expect(AppBackup.currentVersion, 3);
-      expect(sample().encode(), contains('"version": 3'));
+    test('版本号单调递增：老备份的字段缺了也不报错', () {
+      expect(AppBackup.currentVersion, greaterThanOrEqualTo(4));
+      expect(sample().encode(),
+          contains('"version": ${AppBackup.currentVersion}'));
     });
 
     test('统计字段正确', () {
@@ -554,6 +555,93 @@ void main() {
       expect(b.accountCount, 1);
       expect(b.usedAssetCount, 1);
       expect(b.txns.length, 2);
+    });
+
+    // ---------------- 全局备份（v4）：金融基础数据 + 历史净值 ----------------
+    test('v4：金融基础数据与历史净值都进备份，且能原样解回来', () {
+      final b = AppBackup(
+        exportedAt: DateTime(2026, 9, 21),
+        accounts: const [],
+        assets: const [],
+        txns: const [],
+        targets: const [],
+        settings: const {},
+        securities: const [
+          {
+            'code': '000001',
+            'kind': 'fund',
+            'name': '华夏成长混合',
+            'pinyin': 'hxczhh',
+            'full_pinyin': '',
+            'sec_type': '混合型',
+            'sec_class': '',
+            'sec_sub': '',
+            'market': '',
+            'source': 'eastmoney',
+            'updated_at': 1758000000000,
+          },
+        ],
+        navHistory: const [
+          {
+            'code': '000001',
+            'date': '2026-09-18',
+            'nav': 1.728,
+            'acc_nav': 3.5,
+            'change_pct': 1.25,
+            'dividend': '',
+          },
+        ],
+      );
+      final back = AppBackup.decode(b.encode());
+      expect(back.securities.single['name'], '华夏成长混合');
+      expect(back.securities.single['updated_at'], 1758000000000);
+      expect(back.navHistory.single['date'], '2026-09-18');
+      expect(back.navHistory.single['nav'], 1.728);
+      expect(back.navHistoryCount, 1);
+    });
+
+    test('v3 老备份没有这两段 → 解码为空（恢复时不许拿它清空本地表）', () {
+      final v3 = AppBackup(
+        version: 3,
+        exportedAt: DateTime(2026, 9, 20),
+        accounts: const [],
+        assets: const [],
+        txns: const [],
+        targets: const [],
+        settings: const {},
+      );
+      final back = AppBackup.decode(v3.encode());
+      expect(back.version, 3);
+      expect(back.securities, isEmpty);
+      expect(back.navHistory, isEmpty);
+    });
+
+    test('大表用紧凑写法：几千行也不至于把文件撑大好几倍', () {
+      final rows = [
+        for (var i = 0; i < 500; i++)
+          {
+            'code': '000001',
+            'date': '2026-01-${(i % 28 + 1).toString().padLeft(2, '0')}',
+            'nav': 1.0 + i / 1000,
+            'acc_nav': 0.0,
+            'change_pct': 0.0,
+            'dividend': '',
+          },
+      ];
+      final b = AppBackup(
+        exportedAt: DateTime(2026, 9, 21),
+        accounts: const [],
+        assets: const [],
+        txns: const [],
+        targets: const [],
+        settings: const {},
+        navHistory: rows,
+      );
+      final text = b.encode();
+      // 500 行紧凑 JSON ≈ 每行 80 字节上下；带缩进会到 150+ 字节
+      expect(text.length / rows.length, lessThan(120),
+          reason: '历史净值那段应当是紧凑写法');
+      expect(AppBackup.decode(text).navHistory.length, 500);
     });
 
     test('拒绝其他应用的 JSON', () {

@@ -71,25 +71,6 @@ class FileStore {
     return out;
   }
 
-  /// 只保留最近 [keep] 份自动备份，避免无限堆积
-  static Future<void> pruneAutoBackups({int keep = 7}) async {
-    final dir = await exportDir();
-    if (!dir.existsSync()) return;
-    final files = dir
-        .listSync()
-        .whereType<File>()
-        .where((f) => p.basename(f.path).startsWith('自动备份_'))
-        .toList()
-      ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-    for (final f in files.skip(keep)) {
-      try {
-        f.deleteSync();
-      } catch (_) {
-        // 删除失败不影响主流程
-      }
-    }
-  }
-
   /// 便于展示的目录提示
   static Future<String> hint() async {
     final b = await _base();

@@ -9,7 +9,6 @@ import '../core/format.dart';
 import '../data/apk_updater.dart';
 import '../data/file_store.dart';
 import '../data/update_source.dart';
-import '../data/db_dump.dart';
 import '../data/models.dart';
 import '../data/nav_models.dart';
 import '../logic/backup.dart';
@@ -485,16 +484,12 @@ class _SettingsPageState extends State<SettingsPage> {
             dense: true,
             enabled: !st.securitiesBusy,
             leading: const Icon(Icons.menu_book_outlined, size: 20),
-            title: const Text('更新基金基础数据', style: TextStyle(fontSize: 14)),
-            onTap: () => _updateFundSecurities(st),
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            enabled: !st.securitiesBusy,
-            leading: const Icon(Icons.show_chart_outlined, size: 20),
-            title: const Text('更新股票基础数据', style: TextStyle(fontSize: 14)),
-            onTap: () => _updateStockSecurities(st),
+            title: const Text('更新金融基础数据', style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              '基金 ${st.securitiesFundCount} 条 · 股票 ${st.securitiesStockCount} 条',
+              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            onTap: () => _updateSecurities(st),
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -514,9 +509,10 @@ class _SettingsPageState extends State<SettingsPage> {
             contentPadding: EdgeInsets.zero,
             dense: true,
             leading: const Icon(Icons.shield_outlined, size: 20),
-            title: const Text('导出完整备份（推荐）', style: TextStyle(fontSize: 14)),
+            title: const Text('导出全局备份', style: TextStyle(fontSize: 14)),
             subtitle: Text(
-              '每天首次启动会自动备份一份',
+              '持仓与流水、关注与定投、金融基础数据（${st.securitiesFundCount + st.securitiesStockCount} 条）、'
+              '历史净值（${st.navRowCount} 条）全都包含',
               style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
             ),
             onTap: _exportBackup,
@@ -531,29 +527,6 @@ class _SettingsPageState extends State<SettingsPage> {
               style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
             ),
             onTap: _restoreBackup,
-          ),
-          // 6) 历史净值 / 基础数据库 的独立备份（SQLite 原样导出）
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            leading: const Icon(Icons.spa_outlined, size: 20),
-            title: const Text('备份历史净值（SQLite）', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '把 ${st.navRowCount} 条净值按表原样导成 .sqlite，可丢给 sqlite3 / 表格软件查看',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
-            onTap: _exportNavHistory,
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            leading: const Icon(Icons.storage_outlined, size: 20),
-            title: const Text('备份基础数据库（SQLite）', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '基金 / 股票基础数据（${st.securitiesFundCount + st.securitiesStockCount} 条）按表原样导出',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
-            onTap: _exportSecurities,
           ),
           const Divider(height: 22),
           _groupHeader(context, '导入导出'),
@@ -1029,14 +1002,18 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       );
 
-  Future<void> _updateFundSecurities(AppState st) async {
+  /// 更新金融基础数据 = 基金 + 股票，一次点完（用户要求合并成一项）
+  Future<void> _updateSecurities(AppState st) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('更新基金基础数据'),
+        title: const Text('更新金融基础数据'),
         content: const Text(
-          '将联网下载全量基金列表（约 3 MB，含 ETF / LOF）。\n'
-          '只在本次点击时联网，之后搜索都走本地。',
+          '会依次更新两部分：\n'
+          '· 基金：联网下载全量基金列表（约 3 MB，含 ETF / LOF）\n'
+          '· 股票：分页拉取全部 A 股（约 5,600 只，56 页）\n\n'
+          '只在本次点击时联网，之后搜索都走本地。\n'
+          '中途失败或退出会保留已写入的数据，再次点击从断点继续。',
           style: TextStyle(fontSize: 13),
         ),
         actions: [
@@ -1047,33 +1024,12 @@ class _SettingsPageState extends State<SettingsPage> {
     );
     if (ok != true || !mounted) return;
 
-    final n = await st.updateFundSecurities();
+    final fund = await st.updateFundSecurities();
     if (!mounted) return;
-    _snack(n > 0 ? '基金基础数据已更新：$n 条' : '更新失败或未获得数据');
-  }
-
-  Future<void> _updateStockSecurities(AppState st) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('更新股票基础数据'),
-        content: const Text(
-          '将联网分页拉取全部 A 股（约 5,600 只，56 页）。\n'
-          '中途失败或退出会保留已写入的数据，再次点击从断点继续。\n'
-          '首拼由本地字典生成，不需要额外联网。',
-          style: TextStyle(fontSize: 13),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('开始更新')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-
-    final n = await st.updateStockSecurities();
+    final stock = await st.updateStockSecurities();
     if (!mounted) return;
-    _snack(n > 0 ? '股票基础数据已更新：$n 条' : '更新失败或未获得数据');
+    _snack('基金 ${fund > 0 ? '+$fund' : '未更新'} 条 · '
+        '股票 ${stock > 0 ? '+$stock' : '未更新'} 条');
   }
 
   Future<void> _clearSecurities(AppState st) async {
@@ -1147,63 +1103,13 @@ class _SettingsPageState extends State<SettingsPage> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('完整备份已导出'),
+          title: const Text('全局备份已导出'),
           content: SingleChildScrollView(
             child: SelectableText(
               '文件路径：\n$path\n\n'
-              '包含：账户、标的与分类、全部交易流水、再平衡目标、设置。\n'
+              '包含：账户、标的与分类、全部交易流水、现金流水、再平衡目标、\n'
+              '关注列表、定投计划、设置，以及金融基础数据与历史净值。\n'
               '（不含行情缓存，恢复后会自动重新抓取）\n\n'
-              '取回电脑：\nadb pull "$path" .',
-              style: const TextStyle(fontSize: 12),
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-          ],
-        ),
-      );
-    } catch (e) {
-      _snack('备份失败：$e');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  /// 6) 单独导出「历史净值」/「基础数据库」两份 SQLite
-  Future<void> _exportNavHistory() => _dumpDb(
-        title: '历史净值已备份',
-        tables: ['nav_history'],
-        fileName: '历史净值_${_stamp()}.sqlite',
-        what: 'nav_history（全部历史净值）',
-      );
-
-  Future<void> _exportSecurities() => _dumpDb(
-        title: '基础数据库已备份',
-        tables: ['securities'],
-        fileName: '基础数据库_${_stamp()}.sqlite',
-        what: 'securities（基金 / 股票基础数据）',
-      );
-
-  Future<void> _dumpDb({
-    required String title,
-    required List<String> tables,
-    required String fileName,
-    required String what,
-  }) async {
-    setState(() => _busy = true);
-    try {
-      final path =
-          await DbDumper().dumpTables(tables: tables, fileName: fileName);
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(title),
-          content: SingleChildScrollView(
-            child: SelectableText(
-              '文件路径：\n$path\n\n'
-              '包含：$what\n'
-              '（独立 .sqlite 文件，可用 sqlite3 / 数据库工具直接打开；与完整 JSON 备份互相独立）\n\n'
               '取回电脑：\nadb pull "$path" .',
               style: const TextStyle(fontSize: 12),
             ),
@@ -1303,6 +1209,16 @@ class _SettingsPageState extends State<SettingsPage> {
                   '流水 ${preview.txns.length} 笔 · 再平衡目标 ${preview.targets.length} 项',
                   style: const TextStyle(fontSize: 13),
                 ),
+                // 全局备份（v4）还带这两块，得如实说 —— 它们也会被整体覆盖
+                if (preview.navHistoryCount > 0 ||
+                    preview.securities.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '另含 金融基础数据 ${preview.securities.length} 条 · '
+                    '历史净值 ${preview.navHistoryCount} 条（同样会被覆盖）',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 const Text(
                   '恢复会用备份内容整体覆盖当前数据，当前数据无法找回。',

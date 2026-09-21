@@ -239,12 +239,16 @@ class _WatchlistPageState extends State<WatchlistPage> {
         text: '没找到匹配的标的\n可先去「设置 → 数据维护中心」更新基础数据',
       );
     }
+    // 已经在关注列表里的，图标要变成「减号」——早先只看有没有搜到，
+    // 已关注的也照样给个加号，点下去还会重复关注 + 白刷一次行情
+    final watched = {for (final w in st.watchlist) w.code: w};
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
       itemCount: _results.length,
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (_, i) {
         final r = _results[i];
+        final already = watched[r.code];
         return ListTile(
           dense: true,
           title: Text(r.name.isEmpty ? r.code : r.name,
@@ -252,28 +256,55 @@ class _WatchlistPageState extends State<WatchlistPage> {
           subtitle: Text(r.subtitle,
               style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor)),
           trailing: IconButton(
-            tooltip: '加入关注',
-            icon: const Icon(Icons.add_circle_outline),
+            tooltip: already == null ? '加入关注' : '取消关注',
+            icon: Icon(already == null
+                ? Icons.add_circle_outline
+                : Icons.remove_circle_outline),
             onPressed: () async {
               // 先取好 messenger：await 之后就不能再用 context 了
               // （analyzer 的 use_build_context_synchronously 会拦，
               //   而且真的可能在不该用的时候用）
               final messenger = ScaffoldMessenger.of(context);
-              await st.addToWatch(Asset(
-                code: r.code,
-                name: r.name,
-                kind: r.assetKind,
-                market: r.market,
-                category: assetCategoryFor(r),
-              ));
-              if (!mounted) return;
-              setState(() {
-                _search.clear();
-                _results = const [];
-              });
-              messenger.showSnackBar(
-                SnackBar(content: Text('已加入关注：${r.name}'), duration: const Duration(seconds: 2)),
+              if (already == null) {
+                await st.addToWatch(Asset(
+                  code: r.code,
+                  name: r.name,
+                  kind: r.assetKind,
+                  market: r.market,
+                  category: assetCategoryFor(r),
+                ));
+                if (!mounted) return;
+                // 不清空搜索：列表留着，图标自己会翻成「−」，方便连着加好几只
+                setState(() {});
+                messenger.showSnackBar(SnackBar(
+                    content: Text('已加入关注：${r.name}'),
+                    duration: const Duration(seconds: 2)));
+                return;
+              }
+              // 取消关注要先确认 —— 确认了才做删除与后续刷新
+              final yes = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('取消关注？'),
+                  content: Text('「${r.name.isEmpty ? r.code : r.name}」将从关注列表移除。\n'
+                      '已记录的历史净值会保留。'),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('再想想')),
+                    FilledButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('取消关注')),
+                  ],
+                ),
               );
+              if (yes != true || !mounted) return;
+              await st.removeFromWatch(already.id!);
+              if (!mounted) return;
+              setState(() {});
+              messenger.showSnackBar(SnackBar(
+                  content: Text('已取消关注：${r.name}'),
+                  duration: const Duration(seconds: 2)));
             },
           ),
         );

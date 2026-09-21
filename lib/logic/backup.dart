@@ -11,18 +11,26 @@ class BackupException implements Exception {
   String toString() => message;
 }
 
-/// 完整数据备份：账户 + 标的（含分类）+ 交易流水 + **现金流水** + 再平衡目标 + 设置
+/// 全局备份：账户 + 标的（含分类）+ 交易流水 + **现金流水** + 再平衡目标 + 设置
+/// + 关注列表 + 定投计划 + **金融基础数据** + **历史净值**
 ///
 /// 行情缓存（quotes）刻意不备份——它是可随时重新抓取的临期数据，
 /// 备份它只会让文件变大且可能过期。
 ///
 /// `cash_txns` 从 **v2** 起进入备份：买入/卖出/分红/定投都会联动写一条现金流水，
 /// 不备份它的话，恢复后交易回来了、现金账本却是空的，余额与交易对不上。
+///
+/// `securities`（金融基础数据：基金/股票名录）与 `nav_history`（历史净值）
+/// 从 **v4** 起进入备份 —— 用户要求「备份改为全局备份，包括金融基础数据、历史净值」。
+/// 它们都是**可重抓但要花很久**的数据（净值要一只只补、基础数据要下全量），
+/// 所以值得进备份；存的是**原样的表行**（列名与建表语句一致），恢复时直接入表。
+/// 老备份（v1~v3）没有这两段，解码时按空处理、恢复时**不动**这两张表。
 class AppBackup {
   static const String appTag = 'invest_tracker';
 
-  /// v1：账户/标的/流水/目标/设置；v2：增加现金流水；v3：增加关注列表与定投计划
-  static const int currentVersion = 3;
+  /// v1：账户/标的/流水/目标/设置；v2：现金流水；v3：关注列表与定投计划；
+  /// v4：金融基础数据（securities）与历史净值（nav_history）
+  static const int currentVersion = 4;
 
   final int version;
   final DateTime exportedAt;
@@ -35,6 +43,12 @@ class AppBackup {
   final List<WatchItem> watchlist;
   final List<DcaPlan> dcaPlans;
 
+  /// 金融基础数据的表行（列名同 `securities` 建表语句）
+  final List<Map<String, Object?>> securities;
+
+  /// 历史净值的表行（列名同 `nav_history` 建表语句）
+  final List<Map<String, Object?>> navHistory;
+
   AppBackup({
     this.version = currentVersion,
     required this.exportedAt,
@@ -46,9 +60,13 @@ class AppBackup {
     required this.settings,
     this.watchlist = const [],
     this.dcaPlans = const [],
+    this.securities = const [],
+    this.navHistory = const [],
   });
 
   int get accountCount => accounts.length;
+
+  int get navHistoryCount => navHistory.length;
 
   /// 有交易记录的标的数
   int get usedAssetCount {
@@ -68,9 +86,35 @@ class AppBackup {
         'watchlist': watchlist.map((e) => e.toMap()).toList(),
         'dcaPlans': dcaPlans.map((e) => e.toMap()).toList(),
         'settings': settings,
+        // 这两段行数很多（历史净值可能几万行），**不加缩进** ——
+        // 否则文件会大出好几倍，而它们本来就是给程序读的
+        'securities': securities,
+        'navHistory': navHistory,
       };
 
-  String encode() => const JsonEncoder.withIndent('  ').convert(toJson());
+  /// 顶层保持缩进（便于人看），但两个大表用紧凑写法
+  String encode() {
+    final map = toJson();
+    final big = {
+      'securities': jsonEncode(map.remove('securities')),
+      'navHistory': jsonEncode(map.remove('navHistory')),
+    };
+    var text = const JsonEncoder.withIndent('  ').convert(map);
+    // 把紧凑的大表塞回顶层（去掉原 JSON 的收尾大括号再补上）
+    final trimmed = text.trimRight();
+    assert(trimmed.endsWith('}'));
+    final head = trimmed.substring(0, trimmed.length - 1).trimRight();
+    final sep = head.endsWith('{') ? '' : ',';
+    final buf = StringBuffer()
+      ..write(head)
+      ..write(sep)
+      ..write('\n  "securities": ')
+      ..write(big['securities'])
+      ..write(',\n  "navHistory": ')
+      ..write(big['navHistory'])
+      ..write('\n}');
+    return buf.toString();
+  }
 
   static AppBackup decode(String text) {
     final trimmed = text.trim();
@@ -110,6 +154,9 @@ class AppBackup {
       watchlist: _list(map['watchlist']).map(WatchItem.fromMap).toList(),
       dcaPlans: _list(map['dcaPlans']).map(DcaPlan.fromMap).toList(),
       settings: _stringMap(map['settings']),
+      // v4 起才有；老备份为空 → 恢复时不动这两张表
+      securities: _list(map['securities']),
+      navHistory: _list(map['navHistory']),
     );
   }
 

@@ -713,7 +713,6 @@ class AppState extends ChangeNotifier {
     // 把缓存里的指标覆盖成「只有上证」，跑马灯就空了
     unawaited(loadMarketIndices().then((_) => refreshIndexQuotes()));
     unawaited(refreshQuotes(silent: true));
-    unawaited(autoBackupIfNeeded());
     unawaited(runDueDca());
     // 先读简称，再读现金；若一条现金都没有而交易不少，说明是老数据，按交易补一次联动。
     // 简称**必须**排在重建之前：rebuildCashFromTxns 用 displayShortOf 写备注，
@@ -2647,7 +2646,10 @@ class AppState extends ChangeNotifier {
 
   // ---------------- 备份与恢复 ----------------
 
-  /// 构造完整备份的 JSON 文本
+  /// 构造全局备份的 JSON 文本
+  ///
+  /// **包含金融基础数据与历史净值**（v4 起）—— 这两块是「可重抓但很费时」的数据
+  /// （净值要一只只补、基础数据要下全量），丢了恢复代价高，所以进备份。
   Future<String> buildBackupJson() async {
     final backup = AppBackup(
       exportedAt: DateTime.now(),
@@ -2663,40 +2665,25 @@ class AppState extends ChangeNotifier {
       watchlist: watchlist,
       dcaPlans: dcaPlans,
       settings: await db.allSettings(),
+      // v4 起：金融基础数据 + 历史净值（原样的表行，恢复时直接入表）
+      securities: await db.allSecuritiesRows(),
+      navHistory: await db.allNavRows(),
     );
     return backup.encode();
   }
 
-  /// 导出完整备份到文件，返回文件路径
+  /// 导出**全局备份**到文件，返回文件路径
   Future<String> exportBackupToFile() async {
     final dir = await FileStore.exportDir();
     final f = await FileStore.writeJson(
       dir,
-      '完整备份_${_timeStamp()}.json',
+      '全局备份_${_timeStamp()}.json',
       await buildBackupJson(),
     );
     lastBackupAt = DateTime.now();
     await db.setSetting('lastBackupAt', lastBackupAt!.millisecondsSinceEpoch.toString());
     notifyListeners();
     return f.path;
-  }
-
-  /// 每天首次启动自动备份一份（保留最近 7 份），失败静默不打扰用户
-  Future<void> autoBackupIfNeeded() async {
-    if (txns.isEmpty) return;
-    try {
-      final today = _dayStamp();
-      if (await db.setting('lastAutoBackupDay') == today) return;
-      final dir = await FileStore.exportDir();
-      await FileStore.writeJson(dir, '自动备份_$today.json', await buildBackupJson());
-      await FileStore.pruneAutoBackups(keep: 7);
-      await db.setSetting('lastAutoBackupDay', today);
-      lastBackupAt = DateTime.now();
-      await db.setSetting('lastBackupAt', lastBackupAt!.millisecondsSinceEpoch.toString());
-      notifyListeners();
-    } catch (_) {
-      // 自动备份失败不打扰用户
-    }
   }
 
   /// 从备份文本恢复（整体覆盖本地数据），返回恢复的交易笔数

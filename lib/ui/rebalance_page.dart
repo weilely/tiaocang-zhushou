@@ -811,17 +811,18 @@ class _RebalancePageState extends State<RebalancePage> {
 Color _markerColor(BuildContext context) =>
     Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
 
-/// 目标位置下方的小三角（▼）—— 自绘，避免用 Icon 时被行高裁掉
+/// 目标位置下方的小三角（**尖角朝上 ▲**）—— 自绘，避免用 Icon 时被行高裁掉
 class _TargetTriangle extends CustomPainter {
   _TargetTriangle(this.color);
   final Color color;
 
   @override
   void paint(Canvas canvas, Size size) {
+    // 尖角朝上：从条子下方指着那条刻度线
     final p = Path()
-      ..moveTo(0, 0)
-      ..lineTo(size.width, 0)
-      ..lineTo(size.width / 2, size.height)
+      ..moveTo(size.width / 2, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
       ..close();
     canvas.drawPath(p, Paint()..color = color);
   }
