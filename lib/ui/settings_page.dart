@@ -69,6 +69,9 @@ class _SettingsPageState extends State<SettingsPage> {
     return s;
   }
 
+  /// 「同花顺数据源」API Key 输入框（值由 AppState 持久化，这里只做展示）
+  final _hithinkKeyCtrl = TextEditingController();
+
   @override
   Widget build(BuildContext context) {
     final st = context.watch<AppState>();
@@ -85,6 +88,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _targetSection(context, st),
         _dataSection(context, st),
         _marketSection(context, st),
+        _hithinkSection(context, st),
           _securitySection(context, st),
         _appearanceSection(context, st),
         _aboutSection(context),
@@ -599,6 +603,52 @@ class _SettingsPageState extends State<SettingsPage> {
   ///
   /// 池子里分两档：**已显示**（on=true）和**待选**（加了但没勾）。
   /// 点一下在两档之间来回，右侧 × 删除。
+  /// 「同花顺数据源」：行情第三路备用源，需填 API Key 才启用；不填不影响东财/新浪。
+  Widget _hithinkSection(BuildContext context, AppState st) {
+    final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
+    // 首次构建把库里存的 Key 回填进输入框（obscure，不明文回显）。
+    // 只在**输入框为空**时回填：否则边打字边回填会把光标顶回开头。
+    final currentKey = st.hithinkApiKey ?? '';
+    if (_hithinkKeyCtrl.text.isEmpty && currentKey.isNotEmpty) {
+      _hithinkKeyCtrl.text = currentKey;
+    }
+    return CollapsibleSectionCard(
+      title: '同花顺数据源（备用）',
+      initiallyExpanded: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('行情兜底第三路：东财、新浪都取不到时用它补。需填入 API Key（fuyao.aicubes.cn/admin 申请）；留空则不启用，行情照旧走东财/新浪。',
+              style: hint),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _hithinkKeyCtrl,
+            obscureText: true,
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: '留空 = 不启用同花顺',
+              hintStyle: TextStyle(
+                  fontSize: 13,
+                  color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.6)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(kBoxRadius),
+                borderSide: BorderSide(color: boxBorderColor(context)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(kBoxRadius),
+                borderSide: BorderSide(color: boxBorderColor(context)),
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+            onChanged: (v) => st.setHithinkApiKey(v),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 「安全设置」：生物识别解锁（可折叠，折叠状态会记住）
   Widget _securitySection(BuildContext context, AppState st) {
     final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);

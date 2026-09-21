@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:local_auth/local_auth.dart';
 import 'package:local_auth_android/local_auth_android.dart';
 
@@ -11,6 +12,7 @@ import '../data/dca_models.dart';
 import '../data/dca_repo.dart';
 import '../data/dca_source.dart';
 import '../data/file_store.dart';
+import '../data/hithink_api.dart';
 import '../data/macro_source.dart';
 import '../data/market_api.dart';
 import '../data/models.dart';
@@ -42,6 +44,10 @@ enum StatsView { calendar, trend, flow }
 class AppState extends ChangeNotifier {
   final AppDatabase db = AppDatabase.instance;
   final MarketService market = MarketService();
+
+  /// 同花顺行情「第三路」备用源：用户需在设置里自填 API Key 才启用，
+  /// 未配置时所有方法返回空 Map，行情照旧走东财/新浪。
+  final HithinkApi hithink = HithinkApi(http.Client());
 
   bool loading = true;
   bool refreshing = false;
@@ -723,6 +729,7 @@ class AppState extends ChangeNotifier {
     unawaited(loadMacroHistory().then((_) => refreshMacro()));
     unawaited(loadBiometric());
     unawaited(loadThemeMode());
+    unawaited(loadHithinkApiKey());
     // 分红方式先就位、再读净值样本，最后按分红标志自动补记
     unawaited(loadDividendModes()
         .then((_) => loadNavSamples())
@@ -1019,10 +1026,29 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 同花顺行情「第三路」API Key（设置页自填，存 settings 表）
+  /// 设置页 UI 直接读它回填输入框；未填/留空 = 不启用。
+  String? hithinkApiKey;
+
+  Future<void> loadHithinkApiKey() async {
+    hithinkApiKey = (await db.setting('hithinkApiKey'))?.trim();
+    notifyListeners();
+  }
+
   Future<void> setThemeMode(String v) async {
     themeMode = v;
     await db.setSetting('themeMode', v);
     notifyListeners();
+  }
+
+  /// 同花顺行情「第三路」的 API Key（留空 = 不启用，东财/新浪照旧）
+  ///
+  /// 存到 settings 表（与行情指标池、主题等其它设置同库同表）。
+  /// **不 notifyListeners**：输入框边打字边重建会把光标顶回去；
+  /// 取数侧每次刷新都是现读 `db.setting`，不依赖这个字段。
+  Future<void> setHithinkApiKey(String v) async {
+    hithinkApiKey = v.trim();
+    await db.setSetting('hithinkApiKey', v.trim());
   }
 
   Future<void> setBiometric(bool v) async {
@@ -1572,6 +1598,38 @@ class AppState extends ChangeNotifier {
       return mapped;
     }
 
+    // 同花顺「第三路」备用源（用户自填 API Key 才启用；未配置返回空 Map，
+    // 东财/新浪照旧）。放在东财、新浪都失败后接管，避免与已有可靠源抢请求。
+    final hithinkKey = (await db.setting('hithinkApiKey'))?.trim() ?? '';
+    final hithinkOn = hithink.enabled(hithinkKey);
+    if (hithinkOn) marks.add('同花顺已启用');
+    Future<Map<String, Quote>> viaHithink(List<String> codes,
+        {required bool isIndex}) async {
+      if (!hithinkOn || codes.isEmpty) return const {};
+      final got = isIndex
+          ? await hithink.indexSnapshots(codes, hithinkKey)
+          : await hithink.aShareSnapshots(codes, hithinkKey);
+      // 两个接口的返回都以**完整 thscode**为键，这里按同一个规则换算后对齐，
+      // 避免 sh000001（上证指数）与 sz000001（平安银行）退化成同一个 6 位码
+      final mapped = <String, Quote>{};
+      for (final c in codes) {
+        final t = HithinkApi.thscodeFor(c);
+        if (t == null) continue;
+        final dyn = got[t];
+        if (dyn is! Map) continue;
+        mapped[c] = Quote(
+          code: c.replaceFirst(RegExp(r'^[a-z]{2}'), ''),
+          kind: AssetKind.etf,
+          name: label(c),
+          price: (dyn['price'] as num).toDouble(),
+          prevClose: ((dyn['prevPrice'] as num?)?.toDouble()) ?? 0,
+          changePct: ((dyn['changePct'] as num?)?.toDouble()) ?? 0,
+          priceType: 'price',
+        );
+      }
+      return mapped;
+    }
+
     // 1) 指数（大盘 + 行业）
     final idx = [...broad, ...sector];
     if (idx.isNotEmpty) {
@@ -1611,7 +1669,29 @@ class AppState extends ChangeNotifier {
             ok++;
           }
         } catch (_) {
-          // 两路都失败：下面沿用旧值
+          // 下面还有同花顺兜底
+        }
+      }
+      // 同花顺「第三路」：东财、新浪都失败时接管（仅用户配置了 Key 才生效）
+      final hLeft = [for (final c in idx) if (!out.any((q) => q.code == c)) c];
+      if (hLeft.isNotEmpty) {
+        try {
+          final got = await viaHithink(hLeft, isIndex: true);
+          for (final c in hLeft) {
+            final q = got[c];
+            if (q == null) continue;
+            out.add(IndexQuote(
+              code: c,
+              name: label(c),
+              price: q.price,
+              change: 0,
+              changePct: q.changePct,
+              priceDigits: 2,
+            ));
+            ok++;
+          }
+        } catch (_) {
+          // 第三路也失败：沿用旧值
         }
       }
       marks.add('指数 $ok/${idx.length}');
@@ -1656,7 +1736,29 @@ class AppState extends ChangeNotifier {
             ok++;
           }
         } catch (_) {
-          // 两路都失败就沿用旧值
+          // 下面还有同花顺兜底
+        }
+      }
+      // 同花顺「第三路」：ETF/LOF 场内行情（仅用户配置了 Key 才生效）
+      final etfHLeft = [for (final c in etf) if (!out.any((q) => q.code == c)) c];
+      if (etfHLeft.isNotEmpty) {
+        try {
+          final got = await viaHithink(etfHLeft, isIndex: false);
+          for (final c in etfHLeft) {
+            final q = got[c];
+            if (q == null) continue;
+            out.add(IndexQuote(
+              code: c,
+              name: label(c),
+              price: q.price,
+              change: 0,
+              changePct: q.changePct,
+              priceDigits: 4,
+            ));
+            ok++;
+          }
+        } catch (_) {
+          // 第三路也失败：沿用旧值
         }
       }
       marks.add('场内 $ok/${etf.length}');
@@ -2947,6 +3049,7 @@ class AppState extends ChangeNotifier {
     securitiesSource.dispose();
     dcaSource.dispose();
     navSource.dispose();
+    hithink.dispose();
     super.dispose();
   }
 }
