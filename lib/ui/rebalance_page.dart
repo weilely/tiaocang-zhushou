@@ -426,6 +426,8 @@ class _RebalancePageState extends State<RebalancePage> {
                     )
                   else
                     Text(
+                      // fmtPct 自带 %，所以下面那个单位只在输入框时才补 ——
+                      // 早先无条件补，净值模式下就成了「-1.75% %」
                       fmtPct(t.pct),
                       style: TextStyle(
                         fontSize: 14,
@@ -433,8 +435,10 @@ class _RebalancePageState extends State<RebalancePage> {
                         color: pnlColor(t.pct),
                       ),
                     ),
-                  const SizedBox(width: 6),
-                  Text('%', style: hint),
+                  if (t.estMode) ...[
+                    const SizedBox(width: 6),
+                    Text('%', style: hint),
+                  ],
                   if (!isFund) ...[
                     const SizedBox(width: 8),
                     Text(t.realtimePct ? '实时' : '无行情',
@@ -498,42 +502,74 @@ class _RebalancePageState extends State<RebalancePage> {
           ),
           const SizedBox(height: 8),
           // 进度条 = 该标的预估市值占全部预估市值的比；刻度 = 目标占比落在哪
-          ClipRRect(
-            borderRadius: BorderRadius.circular(5),
-            child: SizedBox(
-              height: 9,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  // 轨道也跟着主题，深色下不能是写死的浅灰
-                  Container(
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest),
-                  FractionallySizedBox(
-                    widthFactor: line.weight.clamp(0.0, 1.0),
-                    child: Container(
-                      color: t.hasTarget ? color : const Color(0xFF9CA3AF),
-                    ),
-                  ),
-                  // 目标刻度线：同一根条、同一分母 ——
-                  // 位置 = 目标市值 ÷ Σ预估市值 = 当前占比 × (目标市值 ÷ 预估市值)
-                  if (targetPos != null)
-                    Align(
-                      alignment: Alignment(targetPos * 2 - 1, 0),
-                      child: Container(
-                        width: 2,
-                        height: 15,
-                        decoration: BoxDecoration(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(5),
+                child: SizedBox(
+                  height: 9,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      // 轨道也跟着主题，深色下不能是写死的浅灰
+                      Container(
                           color: Theme.of(context)
                               .colorScheme
-                              .onSurface
-                              .withValues(alpha: 0.65),
-                          borderRadius: BorderRadius.circular(1),
+                              .surfaceContainerHighest),
+                      FractionallySizedBox(
+                        widthFactor: line.weight.clamp(0.0, 1.0),
+                        child: Container(
+                          color:
+                              t.hasTarget ? color : const Color(0xFF9CA3AF),
                         ),
                       ),
-                    ),
-                ],
+                      // 目标刻度线：同一根条、同一分母 ——
+                      // 位置 = 目标市值 ÷ Σ预估市值 = 当前占比 × (目标市值 ÷ 预估市值)
+                      if (targetPos != null)
+                        Align(
+                          alignment: Alignment(targetPos * 2 - 1, 0),
+                          child: Container(
+                            width: 2,
+                            height: 15,
+                            decoration: BoxDecoration(
+                              color: _markerColor(context),
+                              borderRadius: BorderRadius.circular(1),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
-            ),
+              // 刻度线只有 2px 宽、又压在条子上，数字一多就不容易找到目标在哪 ——
+              // 在它正下方补一个三角，指向目标占比的位置
+              if (targetPos != null)
+                SizedBox(
+                  height: 6,
+                  child: LayoutBuilder(
+                    builder: (ctx, c) {
+                      const w = 9.0;
+                      final maxLeft =
+                          (c.maxWidth - w).clamp(0.0, double.infinity);
+                      final left =
+                          (targetPos * c.maxWidth - w / 2).clamp(0.0, maxLeft);
+                      return Stack(
+                        children: [
+                          Positioned(
+                            left: left,
+                            top: 0,
+                            child: CustomPaint(
+                              size: const Size(w, 5),
+                              painter: _TargetTriangle(_markerColor(context)),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+            ],
           ),
         ],
       ),
@@ -768,4 +804,28 @@ class _RebalancePageState extends State<RebalancePage> {
     await st.setAssetLink(t.assetId!, picked);
     await _recalc();
   }
+}
+
+
+/// 目标刻度/三角的共用颜色（跟着主题走，深色下不能是写死的灰）
+Color _markerColor(BuildContext context) =>
+    Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
+
+/// 目标位置下方的小三角（▼）—— 自绘，避免用 Icon 时被行高裁掉
+class _TargetTriangle extends CustomPainter {
+  _TargetTriangle(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width / 2, size.height)
+      ..close();
+    canvas.drawPath(p, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TargetTriangle old) => old.color != color;
 }

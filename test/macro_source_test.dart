@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/data/macro_source.dart';
 
+import 'net_helpers.dart';
+
 /// 股债利差的取数与计算
 void main() {
   group('分位计算', () {
@@ -52,6 +54,10 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 40)));
 
     test('东财能取到10年国债收益率，且落在合理区间', () async {
+      if (!await push2Available()) {
+        markTestSkipped('push2 网关当前不可用（实测会整站 502），跳过');
+        return;
+      }
       final b = await fetchCn10y();
       expect(b, isNotNull, reason: '东财 171.CN10Y 取不到');
       // f43÷10000 的缩放若写错，这里会明显越界
@@ -60,6 +66,10 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 40)));
 
     test('合成一次股债利差，各段关系自洽', () async {
+      if (!await push2Available()) {
+        markTestSkipped('push2 网关当前不可用，跳过');
+        return;
+      }
       final p = await fetchMacroPoint();
       expect(p, isNotNull);
       expect(p!.hs300Pe, greaterThan(0));
@@ -69,6 +79,10 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('能回填历史，且点数是「周频 × 三年多」的量级', () async {
+      if (!await push2HisAvailable()) {
+        markTestSkipped('push2his 网关当前不可用，跳过');
+        return;
+      }
       final hist = await fetchMacroBackfill();
       expect(hist, isNotEmpty, reason: '回填拿不到数据，新装用户就没有曲线和分位');
       // 国债历史只有 2023-05 起，PE 是周频 → 大约 170 上下

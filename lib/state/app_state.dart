@@ -1538,6 +1538,8 @@ class AppState extends ChangeNotifier {
     ];
     final sector = [for (final e in pool) if (e.group == 'sector') e.code];
     final etf = [for (final e in pool) if (e.group == 'etf') e.code];
+    // 其他市场（上金所黄金 / 期货）：代码是 `em:<东财 secid>`，单独一路
+    final other = [for (final e in pool) if (e.group == 'other') e.code];
     final prev = {for (final q in indexQuotes) q.code: q};
     final out = <IndexQuote>[];
     final marks = <String>[];
@@ -1640,9 +1642,51 @@ class AppState extends ChangeNotifier {
       marks.add('场内 $ok/${etf.length}');
     }
 
-    // 3) 这次没取到的沿用上一次的值
+    // 3) 其他市场：上金所黄金 / 期货（`em:<东财 secid>`）
+    //
+    // 走**和持仓同一条** fetchExchangeQuotes：它内部是「批量 ulist → 失败逐只 stock/get」
+    // 两级。早先这里只调了批量那一条，于是批量接口一被限流/断连，黄金就永远是 `--`
+    // （同一轮的普通指数却能靠逐只兜底拿到 2/2）。
+    if (other.isNotEmpty) {
+      var ok = 0;
+      try {
+        // 池子里的代码是 `em:118.AU9999`；Asset.code 给去掉前缀的完整 secid，
+        // market='EM' 让 secidFor 原样返回。响应里的键是 secid 末段（`AU9999`）。
+        final bySuffix = <String, String>{
+          for (final c in other) c.split('.').last: c,
+        };
+        final assets = [
+          for (final c in other)
+            Asset(
+              code: c.substring(3),
+              name: '',
+              kind: AssetKind.etf,
+              market: 'EM',
+            ),
+        ];
+        final got = await market.fetchExchangeQuotes(assets);
+        for (final e in bySuffix.entries) {
+          final q = got[e.key];
+          if (q == null) continue;
+          out.add(IndexQuote(
+            code: e.value,
+            name: label(e.value),
+            price: q.price,
+            change: 0,
+            changePct: q.changePct,
+            priceDigits: 2, // 黄金按元/克，两位小数
+          ));
+          ok++;
+        }
+      } catch (_) {
+        // 沿用旧值
+      }
+      marks.add('黄金 $ok/${other.length}');
+    }
+
+    // 4) 这次没取到的沿用上一次的值
     final seen = {for (final q in out) q.code};
-    for (final c in [...broad, ...sector, ...etf]) {
+    for (final c in [...broad, ...sector, ...etf, ...other]) {
       if (seen.contains(c)) continue;
       final was = prev[c];
       if (was != null) out.add(was);

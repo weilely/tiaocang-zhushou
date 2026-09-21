@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/core/format.dart';
 import 'package:invest_tracker/data/market_api.dart';
+
+import 'net_helpers.dart';
 import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/data/dca_models.dart';
 import 'package:invest_tracker/data/nav_models.dart';
@@ -326,6 +328,13 @@ void main() {
 
   group('行情接口（联网）', () {
     test('批量拉取股票 / ETF / 场外基金行情', () async {
+      // 东财 push2 网关会整站 502（2026-09-21 实测过一次），
+      // 那时依赖它的用例全红、看着像代码坏了 —— 先探活，不通就跳过。
+      // 数据断言一条不放松，只是不把"上游挂了"算成自己的回归。
+      if (!await push2Available()) {
+        markTestSkipped('push2 网关当前不可用，跳过');
+        return;
+      }
       final svc = MarketService();
       try {
         final assets = [
@@ -352,6 +361,10 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('按代码解析名称', () async {
+      if (!await push2Available()) {
+        markTestSkipped('push2 网关当前不可用，跳过');
+        return;
+      }
       final svc = MarketService();
       try {
         final stock = await svc.resolveByCode('600519', AssetKind.stock);

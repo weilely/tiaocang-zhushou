@@ -208,6 +208,11 @@ class MarketIndex {
   const MarketIndex(this.code, this.name);
 
   /// 预设的 A 股指数；默认只显示前 3 个
+  ///
+  /// `em:` 前缀表示「直接给东财的 secid」—— 上金所黄金、期货这类品种不属于
+  /// 沪深两市，`sh/sz/bj` 那套推不出它们的 secid（黄金9999 是 `118.AU9999`，
+  /// 沪金主连是 `113.aum`）。实测 `118.SHAU`（上海金基准价）**没有实时行情**
+  /// （返回 0），所以这里用有连续报价的上金所现货 Au99.99。
   static const List<MarketIndex> presets = [
     MarketIndex('sh000001', '上证指数'),
     MarketIndex('sz399001', '深证成指'),
@@ -217,6 +222,8 @@ class MarketIndex {
     MarketIndex('bj899050', '北证50'),
     MarketIndex('sh000905', '中证500'),
     MarketIndex('sh000016', '上证50'),
+    MarketIndex('em:118.AU9999', '黄金9999'),
+    MarketIndex('em:113.aum', '沪金主连'),
   ];
 
   static const List<String> defaultCodes = ['sh000001', 'sz399001', 'sz399006'];
@@ -311,11 +318,15 @@ class IndexEntry {
     this.kind = '',
   });
 
-  /// 指标大类：`broad` 大盘指数 / `sector` 行业指数 / `etf` 场内基金
+  /// 指标大类：`broad` 大盘指数 / `sector` 行业指数 / `etf` 场内基金 /
+  /// `other` 其他市场（上金所黄金、期货…）
   ///
   /// 由 `kind` 与预设表推出来，不必额外存字段：
-  /// 三类各走各的行情通道（指数走新浪大盘指数、场内基金走东财）。
+  /// 各类各走各的行情通道（指数走新浪大盘指数、场内基金走东财）。
+  /// `em:` 开头的必须单独一类 —— 它们的 secid 不是 `1.`/`0.` 开头，
+  /// 混进沪深那两条路会被拼成错的市场号。
   String get group {
+    if (code.startsWith('em:')) return 'other';
     if (kind == 'etf' || kind == 'stock' || kind == 'fund') return 'etf';
     for (final p in MarketIndex.presets) {
       if (p.code == code) return 'broad';

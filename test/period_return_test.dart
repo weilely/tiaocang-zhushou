@@ -118,8 +118,16 @@ void main() {
     test('默认显示前 3 个', () {
       expect(MarketIndex.defaultCodes,
           ['sh000001', 'sz399001', 'sz399006']);
-      expect(MarketIndex.presets.length, 8);
+      // 8 个 A 股指数 + 2 个黄金（上金所现货 / 沪金期货）
+      expect(MarketIndex.presets.length, 10);
       expect(MarketIndex.byCode('sh000001')!.name, '上证指数');
+      // 非沪深品种用 `em:<东财 secid>` 直连：黄金9999 = 118.AU9999、沪金主连 = 113.aum
+      expect(MarketIndex.byCode('em:118.AU9999')!.name, '黄金9999');
+      expect(MarketIndex.byCode('em:113.aum')!.name, '沪金主连');
+      // `em:` 代码必须单独一类，否则会被拼成 0.em:... 这种错的市场号
+      expect(const IndexEntry(code: 'em:118.AU9999').group, 'other');
+      expect(const IndexEntry(code: 'sh000001').group, 'broad');
+      expect(const IndexEntry(code: 'sz399006').group, 'broad');
     });
   });
 
