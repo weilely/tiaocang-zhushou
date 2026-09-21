@@ -298,7 +298,7 @@ class _RebalancePageState extends State<RebalancePage> {
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
         color: theme.cardColor,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
@@ -342,7 +342,7 @@ class _RebalancePageState extends State<RebalancePage> {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
         color: theme.cardColor,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -461,7 +461,7 @@ class _RebalancePageState extends State<RebalancePage> {
                       const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: 0.10),
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
                     '${line.isBuy ? '需追加买入' : '需减仓卖出'} '
@@ -587,7 +587,7 @@ class _RebalancePageState extends State<RebalancePage> {
     final linked = t.linkCode.isNotEmpty;
     return InkWell(
       onTap: () => _pickLink(st, t),
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(10),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(

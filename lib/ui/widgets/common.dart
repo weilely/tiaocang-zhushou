@@ -244,7 +244,7 @@ class SectionCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       elevation: 0,
       color: Theme.of(context).cardColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       child: Padding(
         padding: padding,
         child: Column(
@@ -344,7 +344,7 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       elevation: 0,
       color: theme.cardColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       child: Padding(
         padding: EdgeInsets.fromLTRB(
           widget.padding.left,
@@ -360,7 +360,7 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
                 Expanded(
                   child: InkWell(
                     onTap: _toggle,
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(10),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 4),
                       child: Row(

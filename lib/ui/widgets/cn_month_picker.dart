@@ -145,12 +145,12 @@ class _YearMonthPanelState extends State<YearMonthPanel> {
         width: 56,
         height: 32,
         child: InkWell(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(10),
           onTap: enabled ? () => widget.onMonthSelected?.call(month) : null,
           child: Container(
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(10),
               color: selected ? primary.withValues(alpha: 0.14) : null,
               border: selected ? Border.all(color: primary, width: 1) : null,
             ),

@@ -238,7 +238,7 @@ class _CnDatePickerDialogState extends State<_CnDatePickerDialog> {
         Expanded(
           child: InkWell(
             onTap: () => setState(() => _quick = !_quick),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(10),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Row(

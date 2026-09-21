@@ -81,7 +81,7 @@ class _CashManagePageState extends State<CashManagePage> {
       margin: EdgeInsets.zero,
       elevation: 0,
       color: Theme.of(context).cardColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
         child: Column(
@@ -172,10 +172,10 @@ class _CashManagePageState extends State<CashManagePage> {
     return Expanded(
       child: Material(
         color: enabled ? color.withValues(alpha: 0.10) : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         child: InkWell(
           onTap: enabled ? () => _record(st: context.read<AppState>(), type: type) : null,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 11),
             child: Column(
@@ -289,7 +289,7 @@ class _CashManagePageState extends State<CashManagePage> {
               margin: const EdgeInsets.only(left: 18, bottom: 8),
               elevation: 0,
               color: Theme.of(context).cardColor,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               child: Column(
                 children: [for (final t in list) _row(context, st, t, isAll)],
               ),

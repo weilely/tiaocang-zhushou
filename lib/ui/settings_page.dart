@@ -32,6 +32,9 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 调仓目标：标的代码 → 目标占比输入框
   final Map<String, TextEditingController> _targetCtrl = {};
 
+  /// 行情指标筹码的 key（按下拉菜单要对着它弹）
+  final Map<String, GlobalKey> _chipKeys = {};
+
   @override
   void initState() {
     super.initState();
@@ -94,11 +97,6 @@ class _SettingsPageState extends State<SettingsPage> {
       title: '账户管理（${st.accounts.length}）',
       // 默认展开：加账户 / 改备注是常用操作
       initiallyExpanded: true,
-      trailing: TextButton.icon(
-        onPressed: _addAccount,
-        icon: const Icon(Icons.add, size: 18),
-        label: const Text('新增'),
-      ),
       child: Column(
         children: [
           for (final a in st.accounts)
@@ -123,6 +121,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
             ),
+          // 「新增」放到卡片**里面**（用户要求）——原先挂在卡片标题行右侧，看着像卡片外的操作
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: const Icon(Icons.add_circle_outline, size: 20),
+            title: const Text('新增账户', style: TextStyle(fontSize: 14)),
+            onTap: _addAccount,
+          ),
         ],
       ),
     );
@@ -672,6 +678,8 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget _indexChip(BuildContext context, AppState st, IndexEntry e,
       {required bool on}) {
     final chip = InputChip(
+      // 给每个筹码一个 key：下拉菜单要靠它对准位置（页面 context 算不准）
+      key: _chipKeys.putIfAbsent(e.code, () => GlobalKey()),
       avatar: Icon(on ? Icons.check_circle : Icons.radio_button_unchecked,
           size: 16),
       label: Text(e.label, style: const TextStyle(fontSize: 12)),
@@ -681,64 +689,63 @@ class _SettingsPageState extends State<SettingsPage> {
         borderRadius: BorderRadius.circular(kBoxRadius),
         side: BorderSide(color: boxBorderColor(context)),
       ),
-      // 末尾是个「⋯」而不是删除叉：点它或长按都打开操作卡片，
-      // 删除要在卡片里再确认一次，避免误删
-      onDeleted: () => _indexActionSheet(context, st, e),
-      deleteIcon: const Icon(Icons.more_horiz, size: 15),
+      // 末尾是个「⋮」（**竖向**，和账户管理那边的更多操作一致；用户要求从横向改过来）
+      // 点它或长按都打开操作菜单；删除要在菜单里再确认一次，避免误删
+      onDeleted: () => _indexMenu(context, st, e),
+      deleteIcon: const Icon(Icons.more_vert, size: 15),
       deleteButtonTooltipMessage: '更多操作',
     );
     return GestureDetector(
-      onLongPress: () => _indexActionSheet(context, st, e),
+      onLongPress: () => _indexMenu(context, st, e),
       child: chip,
     );
   }
 
-  /// 长按指标弹出的操作卡片：显示 / 隐藏、删除
-  Future<void> _indexActionSheet(
+  /// 点指标末尾的 ⋮ 弹出的操作菜单
+  ///
+  /// 用**下拉卡片**（`showMenu`）而不是底部弹窗 —— 和账户管理的 ⋮ 是同一套样子（用户要求）。
+  /// 位置要**对准这个筹码**：`_indexChip` 收到的 context 是设置页的，不是筹码的，
+  /// 拿它算位置菜单会飘到页面右下角，所以按代码存一个 GlobalKey 来定位。
+  Future<void> _indexMenu(
       BuildContext context, AppState st, IndexEntry e) async {
-    final act = await showModalBottomSheet<String>(
+    const red = Color(0xFFD93A3A);
+    final act = await showMenu<String>(
       context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(e.label,
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w700)),
-                  ),
-                  Text(e.code,
-                      style: TextStyle(
-                          fontSize: 12, color: Theme.of(ctx).hintColor)),
-                ],
-              ),
-            ),
-            ListTile(
-              dense: true,
-              leading: Icon(e.on
-                  ? Icons.visibility_off_outlined
-                  : Icons.visibility_outlined),
-              title: Text(e.on ? '从跑马灯移除（保留在待选）' : '加到跑马灯'),
-              onTap: () => Navigator.pop(ctx, 'toggle'),
-            ),
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.delete_outline, color: Color(0xFFD93A3A)),
-              title: const Text('删除', style: TextStyle(color: Color(0xFFD93A3A))),
-              onTap: () => Navigator.pop(ctx, 'delete'),
-            ),
-            const SizedBox(height: 8),
-          ],
+      position: _menuPositionFor(_chipKeys[e.code]?.currentContext),
+      items: [
+        PopupMenuItem(
+          value: 'toggle',
+          child: Text(e.on ? '从跑马灯移除' : '加到跑马灯'),
         ),
-      ),
+        const PopupMenuItem(
+          value: 'delete',
+          child: Text('删除', style: TextStyle(color: red)),
+        ),
+      ],
     );
     if (act == 'toggle') await st.toggleIndexEntry(e.code);
     if (act == 'delete') await st.removeIndexEntry(e.code);
+  }
+
+  /// 把下拉菜单对齐到某个筹码的右下角；拿不到就退回原来的位置
+  RelativeRect _menuPositionFor(BuildContext? anchor) {
+    final ctx = anchor;
+    if (ctx == null) return const RelativeRect.fromLTRB(0, 0, 0, 0);
+    final box = ctx.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(ctx).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) {
+      return const RelativeRect.fromLTRB(0, 0, 0, 0);
+    }
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final bottomRight =
+        box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay);
+    return RelativeRect.fromLTRB(
+      topLeft.dx,
+      bottomRight.dy,
+      overlay.size.width - bottomRight.dx,
+      0,
+    );
   }
 
   Widget _marketSection(BuildContext context, AppState st) {
@@ -1410,7 +1417,7 @@ class _SettingsPageState extends State<SettingsPage> {
         children: [
           InkWell(
             onTap: () => _showAboutDetail(context),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(10),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Row(

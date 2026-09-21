@@ -215,7 +215,7 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
       margin: const EdgeInsets.symmetric(vertical: 5),
       elevation: 0,
       color: Theme.of(context).cardColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
         child: Column(
@@ -231,7 +231,7 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
                         }
                       })
                   : null,
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(10),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Row(

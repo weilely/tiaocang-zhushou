@@ -114,7 +114,7 @@ class _WatchlistPageState extends State<WatchlistPage> {
               elevation: 0,
               color: Theme.of(context).cardColor,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
+                  borderRadius: BorderRadius.circular(10)),
               clipBehavior: Clip.antiAlias,
               child: Column(
                 children: [

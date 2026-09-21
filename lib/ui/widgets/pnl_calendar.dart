@@ -80,7 +80,7 @@ class PnlCalendar extends StatelessWidget {
       decoration: BoxDecoration(
         color:
             amount == null ? null : pnlColor(amount).withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
       child: Column(

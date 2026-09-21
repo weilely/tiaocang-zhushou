@@ -131,10 +131,10 @@ class AssetDetailPage extends StatelessWidget {
     return Expanded(
       child: Material(
         color: enabled ? color.withValues(alpha: 0.10) : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 12),
             child: Column(

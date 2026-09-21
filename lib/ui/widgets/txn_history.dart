@@ -185,7 +185,7 @@ Widget txnTile(
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Text(
               t.type.label.substring(0, 1),
@@ -211,7 +211,7 @@ Widget txnTile(
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
             decoration: BoxDecoration(
               color: const Color(0xFF1F6FEB).withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: const Text('定投',
                 style: TextStyle(fontSize: 10, color: Color(0xFF1F6FEB))),

@@ -48,7 +48,7 @@ class SegmentedPills<T> extends StatelessWidget {
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: pillTrackColor(theme),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
@@ -75,13 +75,13 @@ class SegmentedPills<T> extends StatelessWidget {
       button: true,
       child: Material(
         color: on ? pillThumbColor(theme) : Colors.transparent,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(10),
         elevation: on ? 0.5 : 0,
         shadowColor: Colors.black26,
         child: InkWell(
           // 整段可点，不只是文字
           onTap: () => onChanged(value),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(10),
           child: Container(
             alignment: Alignment.center,
             padding: itemPadding,
@@ -119,7 +119,7 @@ class PillGroup extends StatelessWidget {
       padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         color: pillTrackColor(theme),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Wrap(
         spacing: 4,
@@ -128,12 +128,12 @@ class PillGroup extends StatelessWidget {
           for (final it in items)
             Material(
               color: it.selected ? pillThumbColor(theme) : Colors.transparent,
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(10),
               elevation: it.selected ? 0.5 : 0,
               shadowColor: Colors.black26,
               child: InkWell(
                 onTap: it.onTap,
-                borderRadius: BorderRadius.circular(18),
+                borderRadius: BorderRadius.circular(10),
                 child: Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 7),

@@ -87,7 +87,7 @@ class DcaManagePage extends StatelessWidget {
         decoration: BoxDecoration(
           color: (p.enabled ? const Color(0xFF1A9C5B) : Theme.of(context).hintColor)
               .withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(10),
         ),
         child: Text(
           p.enabled ? '启用中' : '已暂停',

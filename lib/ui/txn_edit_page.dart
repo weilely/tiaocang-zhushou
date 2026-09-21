@@ -660,7 +660,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
       margin: EdgeInsets.zero,
       elevation: 0,
       color: Theme.of(context).cardColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
         child: Row(
@@ -669,7 +669,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                 color: _typeColor.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(10),
               ),
               child: Text(_type.label,
                   style: TextStyle(
@@ -793,7 +793,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
       margin: const EdgeInsets.only(top: 8),
       elevation: 0,
       color: Theme.of(context).cardColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
         child: Column(
