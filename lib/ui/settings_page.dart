@@ -695,9 +695,15 @@ class _SettingsPageState extends State<SettingsPage> {
       deleteIcon: const Icon(Icons.more_vert, size: 15),
       deleteButtonTooltipMessage: '更多操作',
     );
-    return GestureDetector(
-      onLongPress: () => _indexMenu(context, st, e),
-      child: chip,
+    // **必须 ExcludeFocus**：筹码是可聚焦控件，点过它（或点过它末尾的 ⋮）之后，
+    // 每次滚动都会被焦点触发的 ensureVisible 拉回筹码原位 —— 表现就是
+    // 「设置页再也滚不动了」（实测：点过筹码后下滑/上滑各 3 次，截图完全没变）。
+    // 让筹码不参与焦点，问题就没了。
+    return ExcludeFocus(
+      child: GestureDetector(
+        onLongPress: () => _indexMenu(context, st, e),
+        child: chip,
+      ),
     );
   }
 
@@ -725,6 +731,10 @@ class _SettingsPageState extends State<SettingsPage> {
     );
     if (act == 'toggle') await st.toggleIndexEntry(e.code);
     if (act == 'delete') await st.removeIndexEntry(e.code);
+    // **关掉菜单后要主动把焦点交还**：否则那个控件一直持有焦点，
+    // 之后每次滚动都会被"把焦点控件拉进视野"拽回去 ——
+    // 表现就是设置页整个滚不动（实测：点过筹码的 ⋮ 之后，下滑/上滑画面完全不变）。
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   /// 把下拉菜单对齐到某个筹码的右下角；拿不到就退回原来的位置
