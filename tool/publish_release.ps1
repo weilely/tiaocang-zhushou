@@ -77,22 +77,44 @@ if (-not $releaseId) {
   Write-Host "已创建（id=$releaseId）"
 }
 
-# ---- 2) 传附件：用 curl ----
+# ---- 2) 传附件：用 curl（**带重试**）----
 # 为什么不用 .NET 的 HttpClient：同样的 multipart，.NET 会被 Gitee 判
 # 「登录失效 401」（令牌放在 StringContent 体里它不认），而 curl 的 -F 是好的。
-# 另外本机上行很慢（实测 ~31KB/s），所以 max-time 给足、并关掉 Expect: 100-continue
-# （大文件带 Expect 容易被服务端晾住）。
+# 本机上行很慢（实测 20~107KB/s），36.9MB 在慢的时候要 30 分钟、连接会被重置，
+# 所以**必须重试**：单次失败不代表传不上去。
 $url = "$api/releases/$releaseId/attach_files?access_token=$token"
-$respFile = Join-Path $env:TEMP "gitee_attach_resp.json"
-Write-Host "正在上传 $attachName（$sizeMb MB）…"
-& curl.exe -sS --max-time 3600 -H "Expect:" `
-  -X POST $url `
-  -F "file=@$ApkPath;type=application/vnd.android.package-archive;filename=$attachName" `
-  -o $respFile -w "HTTP=%{http_code} 上传=%{size_upload}字节 耗时=%{time_total}s`n"
-$code = $LASTEXITCODE
-$body = if (Test-Path $respFile) { Get-Content $respFile -Raw } else { '' }
-if ($code -ne 0) { throw "curl 失败（exit=$code）：$body" }
-if ($body -notmatch '"name"') { throw "上传未成功，服务端返回：$body" }
-Write-Host "上传成功：$($body.Trim())"
+$attempts = if ($env:GITEE_UPLOAD_RETRIES) { [int]$env:GITEE_UPLOAD_RETRIES } else { 3 }
+$ok = $false
+for ($i = 1; $i -le $attempts; $i++) {
+  # 每次用**独立**的响应文件：固定路径会读到上一次的残留响应，
+  # 出错时打印的是别的版本的附件信息（我因此被误导过一次）
+  $respFile = Join-Path $env:TEMP "gitee_attach_resp_$PID`_$i.json"
+  if (Test-Path $respFile) { Remove-Item $respFile -Force }
+  Write-Host "上传 $attachName（$sizeMb MB）第 $i/$attempts 次…"
+  & curl.exe -sS --max-time 3600 -H "Expect:" `
+    -X POST $url `
+    -F "file=@$ApkPath;type=application/vnd.android.package-archive;filename=$attachName" `
+    -o $respFile -w "HTTP=%{http_code} 上传=%{size_upload}字节 耗时=%{time_total}s 速度=%{speed_upload}B/s`n" 2>&1 |
+    ForEach-Object { Write-Host $_ }
+  $code = $LASTEXITCODE
+  $body = if (Test-Path $respFile) { Get-Content $respFile -Raw } else { '' }
+  if ($code -eq 0 -and $body -match '"name"') { $ok = $true; break }
+  Write-Host "第 $i 次失败（exit=$code）：$(($body -replace '\s+', ' '))"
+  if ($i -lt $attempts) { Start-Sleep -Seconds 10 }
+}
 
+# ---- 3) 事后校验：附件必须**真的**挂在发行版上 ----
+# 不看返回就说"成功"是靠不住的（服务端可能收了请求但没落库）。
+$verify = $null
+try {
+  $rel = Invoke-RestMethod -Uri "$api/releases/$releaseId?access_token=$token" `
+    -Headers $headers -TimeoutSec 30
+  $verify = @($rel.assets | Where-Object { $_.name -eq $attachName }) | Select-Object -First 1
+} catch {
+  Write-Host "校验查询失败：$($_.Exception.Message)"
+}
+if (-not $ok -or -not $verify) {
+  throw "附件没传成功：$attachName —— 在线更新会因此不可用。可重跑本脚本重传。"
+}
+Write-Host "OK 附件已在发行版上：$($verify.name)"
 Write-Host "下载页：https://gitee.com/$Repo/releases/tag/$tag"

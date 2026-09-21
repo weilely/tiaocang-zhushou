@@ -279,6 +279,32 @@ bool isFundEstMode({
   return estPct.abs() > 1e-9;
 }
 
+/// 实时行情里带的是不是**今天已公布的净值**（不是盘中估值）。
+bool quoteHasTodaysNav(Quote? q, [DateTime? now]) =>
+    q != null && q.priceType == 'nav' && q.isTradeDayToday(now) && q.price > 0;
+
+/// 今天是否已有**真实净值** —— 决定调仓页写「净值」还是「预估净值」。
+///
+/// 两个来源都要认：
+/// ① 历史库最后一条净值就是今天（[lastNavDate]）；
+/// ② **实时行情本身就是今天已公布的净值**（[quoteHasTodaysNav]）。
+///
+/// 只看 ① 会漏掉一个常见情形：实时行情已经拿到当日净值（持仓页/关注页显示的就是它），
+/// 但历史库还没落这一天的行 —— 那时调仓页会误判成"净值未公布"、继续显示估值模式，
+/// 用户看到的就是「**当日净值已经更新，调仓页还是估值模式**」。
+bool navPublishedToday({
+  required Quote? quote,
+  required String? lastNavDate,
+  DateTime? now,
+}) {
+  final n = now ?? DateTime.now();
+  final key = '${n.year.toString().padLeft(4, '0')}-'
+      '${n.month.toString().padLeft(2, '0')}-'
+      '${n.day.toString().padLeft(2, '0')}';
+  if (lastNavDate == key) return true;
+  return quoteHasTodaysNav(quote, n);
+}
+
 /// 拼方案
 RebalancePlan buildRebalancePlan({
   required List<PlanTarget> targets,

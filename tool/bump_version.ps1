@@ -1,9 +1,10 @@
 ﻿<#
-升版本号 + 同步到 GitHub 一条龙。
+升版本号 + 推双仓库（GitHub + Gitee）一条龙。
 
 用法（在仓库根目录；本机执行策略禁止直接跑 .ps1，所以要带 Bypass）：
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool\bump_version.ps1 -Version 1.0.2
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool\bump_version.ps1 -Version 1.1.0 -Message "新增 xxx"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool\bump_version.ps1 -Version 1.1.1
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool\bump_version.ps1 -Version 1.1.1 -Message "修 xxx"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool\bump_version.ps1 -Version 1.2.0 -Publish
 
 注意：本文件必须存成 **UTF-8 with BOM**，否则 Windows PowerShell 5.1 会按 GBK 读中文，
 把字符串引号吃掉、整个脚本语法报错。
@@ -11,16 +12,20 @@
 做的事：
   1. 改 pubspec.yaml 的 `version: X+Y`（build 号自动 +1）
   2. 改 lib/core/app_info.dart 的 appVersion
-  3. flutter analyze + flutter test
-  4. git add / commit / tag vX / push（含 tag）
+  3. flutter analyze（零错误零告警 + info 不许超基线）+ flutter test
+  4. git add / commit / tag vX / **推 GitHub 与 Gitee 两边**（含 tag）
+  5. 带 -Publish 时：出拆分包并传到 Gitee 发行版附件
 
-版本号约定（和用户商定）：每次改动 +1 patch（1.0.1、1.0.2…），
-攒到一定量或加了成体系的功能再跳 minor（1.1.0）。
+**发布节奏（用户 2026-09-20 明确要求）**：
+「以后不要修一次就发布，累计个5次以上，或者等我通知」
+→ **默认不要跑这个脚本**。改动留在工作区攒着（`git status` 看得见），
+   攒够约 5 项、或用户明确说"发吧"再跑一次。一个版本号对应**一批**改动。
 
-**发布附件的约定**：默认**不传 APK 附件**（本机上行只有 ~31KB/s，传一次要 7 分钟）。
-只在"值得的版本"加 -Publish 才出包并上传，界面上的应用内更新就以
-最近一次带附件的版本为目标。平时 `git push` 推代码即可。
-事后再补传某一版：publish_release.ps1 -Version X -ApkPath <该版 APK>。
+**-Publish 的语义 = 必须把 APK 附件传成功**（在线更新能不能用全看发行版上有没有包）：
+缺 GITEE_TOKEN 直接中止、构建失败中止、子脚本失败中止、传完还要回查附件在不在 ——
+四道都不许"静默放过"，否则会出现"脚本说发布了、用户点检查更新却说没有适配机型的包"。
+只传拆分包（arm64-v8a + armeabi-v7a）；通用包 97.7MB 在本机上行下传不动。
+事后单独补传某一版：`publish_release.ps1 -Version X -ApkPath <该版 APK>`（带重试，可重复跑）。
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Version,
@@ -122,24 +127,60 @@ if (-not $SkipPush) {
   }
 }
 
-# ---- 5) 出包并上传发行版附件（应用内更新靠它；-Publish 才做）----
-# 只传**拆分包**：通用包 97.7MB，本机上行实测只有 ~31KB/s，传不动；
-# 拆成 ABI 后 arm64 才 36.7MB。App 端按设备 ABI 挑对应附件
-# （见 lib/data/update_source.dart 的 pickApkAssetForAbi）。
+# ---- 5) 出包并上传发行版附件（-Publish 才做）----
+#
+# **-Publish 的语义 = 必须把附件传成功**，因为"在线更新能不能用"全看发行版上有没有包。
+# 早先这里只是"顺手试一下"：缺令牌静默跳过、构建失败不拦、子脚本失败不拦、传完不校验 ——
+# 结果就是"脚本说发布了，用户点检查更新却提示没有适配机型的包"。
+# 现在四道都拦：缺令牌中止 / 构建失败中止 / 子脚本非 0 中止 / 最后确认附件真的在。
+#
+# 只传**拆分包**：通用包 97.7MB 在这种上行下传不动；拆成 ABI 后 arm64 才 36.9MB。
+# App 端按设备 ABI 挑对应附件（见 lib/data/update_source.dart 的 pickApkAssetForAbi）。
 if ($Publish) {
   if (-not $env:GITEE_TOKEN) {
-    Write-Host "跳过上传：没有 GITEE_TOKEN"
-  } else {
-    & 'E:\flutter\bin\flutter.bat' build apk --release --split-per-abi | Out-Host
-    foreach ($abi in @('arm64-v8a', 'armeabi-v7a')) {
-      $src = Join-Path $root "build\app\outputs\flutter-apk\app-$abi-release.apk"
-      if (-not (Test-Path $src)) { Write-Host "没有 $abi 的产物，跳过"; continue }
-      $dst = Join-Path (Split-Path -Parent $root) "tiaocang-zhushou-v$Version-$abi.apk"
-      Copy-Item $src $dst -Force
+    throw "带了 -Publish 但没有 GITEE_TOKEN：附件传不上去，在线更新会断。请先设置令牌，或去掉 -Publish。"
+  }
+
+  # 构建：**必须看退出码** —— 否则构建失败会拿上一次的旧包去传（静默传错产物）
+  $prevEap2 = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & 'E:\flutter\bin\flutter.bat' build apk --release --split-per-abi 2>&1 |
+      ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { throw "flutter build 失败，没有产出可发布的包" }
+  } finally {
+    $ErrorActionPreference = $prevEap2
+  }
+
+  $failed = @()
+  foreach ($abi in @('arm64-v8a', 'armeabi-v7a')) {
+    $src = Join-Path $root "build\app\outputs\flutter-apk\app-$abi-release.apk"
+    if (-not (Test-Path $src)) {
+      Write-Host "没有 $abi 的产物"
+      $failed += $abi
+      continue
+    }
+    $dst = Join-Path (Split-Path -Parent $root) "tiaocang-zhushou-v$Version-$abi.apk"
+    Copy-Item $src $dst -Force
+    # 子脚本的 stderr 也要接进来、并**检查退出码**：不带 2>&1 时它的失败
+    # 只写到控制台、父脚本完全感知不到，于是两个附件都没传上去也照样"成功"
+    $prevEap3 = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
       & powershell.exe -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $PSScriptRoot 'publish_release.ps1') `
         -Version $Version -ApkPath $dst `
-        -AssetName "tiaocang-zhushou-v$Version-$abi.apk"
+        -AssetName "tiaocang-zhushou-v$Version-$abi.apk" 2>&1 |
+        ForEach-Object { Write-Host $_ }
+      if ($LASTEXITCODE -ne 0) { $failed += $abi }
+    } finally {
+      $ErrorActionPreference = $prevEap3
     }
   }
+
+  if ($failed.Count -gt 0) {
+    throw "这些架构的附件没传成功：$($failed -join '、') —— 对应机型在线更新会不可用。" +
+      "补救（可重复跑，只重传）：publish_release.ps1 -Version $Version -ApkPath E:\DSH\tiaocang-zhushou-v$Version-<abi>.apk"
+  }
+  Write-Host "在线更新已就绪：v$Version 的 APK 附件已在 Gitee 发行版上"
 }

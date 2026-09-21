@@ -1990,11 +1990,10 @@ class AppState extends ChangeNotifier {
       final base = (navSamples[a.code]?.isNotEmpty ?? false)
           ? navSamples[a.code]!.last
           : null;
-      final navOfToday = base != null &&
-          base.date ==
-              '${DateTime.now().year.toString().padLeft(4, '0')}-'
-                  '${DateTime.now().month.toString().padLeft(2, '0')}-'
-                  '${DateTime.now().day.toString().padLeft(2, '0')}';
+      // 实时行情里若是**今天已公布的净值**，就用它（它就是要展示的那一份）
+      final Quote? liveNav = quoteHasTodaysNav(q) ? q : null;
+      final navOfToday =
+          navPublishedToday(quote: q, lastNavDate: base?.date);
       final ratio = targets
           .where((t) => t.key == TargetAlloc.assetKey(a.code))
           .fold<double>(0, (acc, t) => acc + t.ratio);
@@ -2011,8 +2010,9 @@ class AppState extends ChangeNotifier {
             ? q.changePct
             : null;
         final fq = resolveFundQuote(
-          baseNav: base?.nav,
-          baseChangePct: base?.changePct ?? 0,
+          // 实时净值优先：它就是要展示的那一份当日净值
+          baseNav: liveNav?.price ?? base?.nav,
+          baseChangePct: liveNav?.changePct ?? (base?.changePct ?? 0),
           navPublishedToday: navOfToday,
           linkChangePct: linkToday,
           ownEstPct: ownEstToday,
@@ -2031,8 +2031,10 @@ class AppState extends ChangeNotifier {
           kind: a.kind,
           shares: shares,
           nav: fq.nav,
-          baseNav: base?.nav,
-          navDate: base?.date,
+          baseNav: liveNav?.price ?? base?.nav,
+          navDate: (liveNav != null && liveNav.infoDate.isNotEmpty)
+              ? liveNav.infoDate
+              : base?.date,
           pct: fq.pct,
           navIsActual: fq.actual,
           realtimePct: estMode,
