@@ -1638,6 +1638,27 @@ class AppState extends ChangeNotifier {
       } catch (_) {
         // 沿用旧值
       }
+      // 新浪兜底：东财 push2 会整站 502（实测一天内两次），那时 ETF 全是占位符；
+      // 新浪的 s_ 精简格式对 ETF 一样有价格和涨幅
+      final etfLeft = [for (final c in etf) if (!out.any((q) => q.code == c)) c];
+      if (etfLeft.isNotEmpty) {
+        try {
+          final got = await navSource.indexQuotes(etfLeft);
+          for (final q in got) {
+            out.add(IndexQuote(
+              code: q.code,
+              name: label(q.code),
+              price: q.price,
+              change: q.change,
+              changePct: q.changePct,
+              priceDigits: 4,
+            ));
+            ok++;
+          }
+        } catch (_) {
+          // 两路都失败就沿用旧值
+        }
+      }
       marks.add('场内 $ok/${etf.length}');
     }
 
@@ -1679,6 +1700,27 @@ class AppState extends ChangeNotifier {
         }
       } catch (_) {
         // 沿用旧值
+      }
+      // 新浪兜底（上金所黄金）：东财挂了也能拿到 Au99.99（实测与东财一致）
+      final goldLeft = [for (final c in other) if (!out.any((q) => q.code == c)) c];
+      if (goldLeft.isNotEmpty) {
+        try {
+          final got = await navSource.sinaCommodityQuotes(goldLeft);
+          for (final e in got.entries) {
+            final q = e.value;
+            out.add(IndexQuote(
+              code: e.key,
+              name: label(e.key),
+              price: q.price,
+              change: 0,
+              changePct: q.changePct,
+              priceDigits: 2,
+            ));
+            ok++;
+          }
+        } catch (_) {
+          // 沿用旧值
+        }
       }
       marks.add('黄金 $ok/${other.length}');
     }

@@ -226,6 +226,60 @@ class NavSource {
 
   // ---------------- 大盘指数 ----------------
 
+  /// 上金所黄金的**新浪备用行情**（东财 `push2` 整站 502 时用）
+  ///
+  /// 实测背景：2026-09-21/22 东财 `push2.eastmoney.com` 两次整站 502（连最普通的
+  /// 指数都取不到），跑马灯全是占位符；而新浪一直可用。
+  /// 代码映射：`em:118.AU9999` → `gds_AU9999`（上金所 Au99.99）。
+  /// **腾讯没有上金所黄金**（只返回 `v_pv_none_match`），所以只能走新浪。
+  ///
+  /// 商品格式的字段与股票不同：`0=现价 7=昨收`（`gds_AU9999` 实测
+  /// `938.00,...,938.09` → 与东财的 -0.01% 完全一致），涨跌幅要自己算。
+  Future<Map<String, Quote>> sinaCommodityQuotes(List<String> codes) async {
+    final sinaToCode = <String, String>{};
+    for (final c in codes) {
+      final sid = c.startsWith('em:') ? c.substring(3) : c;
+      final sina = switch (sid) {
+        '118.AU9999' => 'gds_AU9999',
+        '118.AUTD' => 'gds_AUTD',
+        _ => null,
+      };
+      if (sina != null) sinaToCode[sina] = c;
+    }
+    if (sinaToCode.isEmpty) return const {};
+
+    final text = await _text(
+      'https://hq.sinajs.cn/list=${sinaToCode.keys.join(',')}',
+      referer: 'https://finance.sina.com.cn/',
+      timeout: const Duration(seconds: 12),
+    );
+
+    final out = <String, Quote>{};
+    final re = RegExp(r'hq_str_(\w+)="([^"]*)"');
+    for (final m in re.allMatches(text)) {
+      final sina = m.group(1)!;
+      final code = sinaToCode[sina];
+      if (code == null) continue;
+      final parts = m.group(2)!.split(',');
+      if (parts.length < 8) continue;
+      final price = double.tryParse(parts[0]) ?? 0;
+      final prevClose = double.tryParse(parts[7]) ?? 0;
+      if (price <= 0) continue;
+      final pct = prevClose > 0 ? (price - prevClose) / prevClose * 100 : 0.0;
+      out[code] = Quote(
+        code: code,
+        kind: AssetKind.etf,
+        name: '',
+        price: price,
+        prevClose: prevClose,
+        changePct: pct,
+        priceType: 'price',
+        updatedAt: DateTime.now(),
+      );
+    }
+    return out;
+  }
+
   /// 新浪精简指数行情：`名称,现价,涨跌额,涨跌%,成交量,成交额`
   ///
   /// 指数、ETF、股票都走这个接口（`s_sh510300` 一样有价格和涨幅）；
