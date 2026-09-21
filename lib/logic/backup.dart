@@ -25,6 +25,11 @@ class BackupException implements Exception {
 /// 它们都是**可重抓但要花很久**的数据（净值要一只只补、基础数据要下全量），
 /// 所以值得进备份；存的是**原样的表行**（列名与建表语句一致），恢复时直接入表。
 /// 老备份（v1~v3）没有这两段，解码时按空处理、恢复时**不动**这两张表。
+/// **不进备份的密钥类设置**（备份文件会被人拷来拷去、也可能被工具打印出来）
+///
+/// 目前只有同花顺的 API Key。恢复时本机原有的值会被保留（见 BackupStore）。
+const List<String> kSecretSettingKeys = ['hithinkApiKey'];
+
 class AppBackup {
   static const String appTag = 'invest_tracker';
 

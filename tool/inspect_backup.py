@@ -137,9 +137,14 @@ def main(argv):
 
     st = d.get('settings') or {}
     emit("\n=== 关键设置 ===")
+    # 密钥类一律打码：老备份里可能已经带着 API Key，报告是要给人看的
+    secret = ('apikey', 'api_key', 'token', 'secret', 'password', 'passwd')
     for k in sorted(st):
-        v = st[k]
-        emit(f"  {k} = {('（%d 字符，略）' % len(v)) if len(str(v)) > 200 else v}")
+        v = str(st[k])
+        if any(s in k.lower() for s in secret):
+            emit(f"  {k} = （已打码，{len(v)} 字符）")
+        else:
+            emit(f"  {k} = {('（%d 字符，略）' % len(v)) if len(v) > 200 else v}")
 
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(buf) + '\n')

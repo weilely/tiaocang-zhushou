@@ -2909,7 +2909,11 @@ class AppState extends ChangeNotifier {
       // 否则恢复后自选和定投全丢
       watchlist: watchlist,
       dcaPlans: dcaPlans,
-      settings: await db.allSettings(),
+      // **密钥不进备份**：同花顺 API Key 存在 settings 表里，而备份会把整张表
+      // 带走 —— 那样 Key 就会跟着备份文件到处跑（还会被对账脚本明文打印）。
+      // 恢复时由 BackupStore 把本机原有的 Key 再放回去，所以不会丢。
+      settings: (await db.allSettings())
+        ..removeWhere((k, v) => kSecretSettingKeys.contains(k)),
       // v4 起：金融基础数据 + 历史净值（原样的表行，恢复时直接入表）
       securities: await db.allSecuritiesRows(),
       navHistory: await db.allNavRows(),
