@@ -599,10 +599,6 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  /// 「行情指标」：跑马灯显示什么，可以按代码加指数 / ETF / 股票
-  ///
-  /// 池子里分两档：**已显示**（on=true）和**待选**（加了但没勾）。
-  /// 点一下在两档之间来回，右侧 × 删除。
   /// 「同花顺数据源」：行情第三路备用源，需填 API Key 才启用；不填不影响东财/新浪。
   Widget _hithinkSection(BuildContext context, AppState st) {
     final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
@@ -806,6 +802,10 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// 「行情指标」：跑马灯显示什么，可以按代码加指数 / ETF / 股票
+  ///
+  /// 池子里分两档：**已显示**（on=true）和**待选**（加了但没勾）。
+  /// 点一下在两档之间来回，右侧 × 删除。
   Widget _marketSection(BuildContext context, AppState st) {
     final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
     final active = [for (final e in st.indexPool) if (e.on) e];
