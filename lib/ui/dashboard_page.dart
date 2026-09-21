@@ -35,6 +35,9 @@ class DashboardPage extends StatelessWidget {
     return RefreshIndicator(
       onRefresh: () => state.refreshQuotes(),
       child: ListView(
+        // 断开共用的 PrimaryScrollController：IndexedStack 下 5 个页面同时活着，
+        // 都挂到同一个 controller 上会互相污染滚动位置（滚动会莫名卡住/跳走）
+        primary: false,
         padding: const EdgeInsets.only(bottom: 32),
         children: [
           _summaryCard(context, state, summary),

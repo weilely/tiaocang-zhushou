@@ -113,6 +113,9 @@ class _RebalancePageState extends State<RebalancePage> {
     return RefreshIndicator(
       onRefresh: _recalc,
       child: ListView(
+        // 断开共用的 PrimaryScrollController：IndexedStack 下 5 个页面同时活着，
+        // 都挂到同一个 controller 上会互相污染滚动位置（滚动会莫名卡住/跳走）
+        primary: false,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.only(bottom: 28),
         children: [

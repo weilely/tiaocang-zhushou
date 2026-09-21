@@ -485,6 +485,9 @@ class _WatchlistPageState extends State<WatchlistPage> {
               else
                 Flexible(
                   child: ListView(
+        // 断开共用的 PrimaryScrollController：IndexedStack 下 5 个页面同时活着，
+        // 都挂到同一个 controller 上会互相污染滚动位置（滚动会莫名卡住/跳走）
+        primary: false,
                     shrinkWrap: true,
                     children: [
                       for (final p in tail.reversed)

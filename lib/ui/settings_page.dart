@@ -76,6 +76,8 @@ class _SettingsPageState extends State<SettingsPage> {
     // 设置已是底部第 5 个页签，标题栏由外壳提供，所以这里不再自带 Scaffold/AppBar。
     // 忙碌进度条内联到列表顶部，保留「正在处理」的反馈。
     return ListView(
+      // 同上：不要和别的页签共用 PrimaryScrollController
+      primary: false,
       padding: const EdgeInsets.only(bottom: 32),
       children: [
         if (_busy) const LinearProgressIndicator(minHeight: 2),
