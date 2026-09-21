@@ -279,6 +279,12 @@ class CollapsibleSectionCard extends StatefulWidget {
   final bool initiallyExpanded;
   final EdgeInsets padding;
 
+  /// 展开时在内容**底部**再给一个「收起」按钮
+  ///
+  /// 内容长的卡片（数据维护中心、行情指标）展开后，顶部的收起箭头会被滚出屏幕，
+  /// 用户反映"进了卡片出不来" —— 底部留个出口。
+  final bool showCollapseAtBottom;
+
   /// 折叠状态持久化用的键；不传就按标题（去掉「（2）」这种计数）自动取
   final String? storageKey;
 
@@ -290,6 +296,7 @@ class CollapsibleSectionCard extends StatefulWidget {
     this.initiallyExpanded = true,
     this.padding = const EdgeInsets.fromLTRB(16, 4, 16, 16),
     this.storageKey,
+    this.showCollapseAtBottom = false,
   });
 
   @override
@@ -299,10 +306,12 @@ class CollapsibleSectionCard extends StatefulWidget {
 class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
   late bool _open = widget.initiallyExpanded;
 
-  /// 折叠记忆的键：card:账户管理（标题里的「（2）」这类计数不算）
-  String get _key =>
-      widget.storageKey ??
-      'card:';
+  /// 折叠记忆的键：`card:账户管理`（标题里的「（2）」这类计数不算）
+  ///
+  /// 早先这个 getter 里标题那一段丢了（`'card:'`），于是**所有没传 storageKey
+  /// 的卡片共用同一个键** —— 收起一张，重启后别的卡片也跟着变。
+  String get _key => widget.storageKey ??
+      'card:${widget.title.replaceAll(RegExp(r'（\d+）'), '').trim()}';
 
   @override
   void initState() {
@@ -375,12 +384,68 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
             if (_open) ...[
               const SizedBox(height: 6),
               widget.child,
+              // 卡片内容一长，顶部的收起箭头就滚出屏幕了 —— 底部再给一个出口，
+              // 免得"进了卡片出不来"
+              if (widget.showCollapseAtBottom) ...[
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.center,
+                  child: TextButton.icon(
+                    onPressed: _toggle,
+                    icon: const Icon(Icons.expand_less, size: 18),
+                    label: const Text('收起'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: theme.hintColor,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 2),
+                      minimumSize: const Size(0, 32),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ],
         ),
       ),
     );
   }
+}
+
+/// 全局统一的圆角：**和关注页的基金搜索框一致**
+///
+/// 用户要求「所有带边框的圆角样式都和基金搜索框一样」，所以把半径收到一处，
+/// 别再各处写 8/10/12/24 各一套。
+const double kBoxRadius = 10;
+
+/// 统一边框色 —— 搜索框用的是 `OutlineInputBorder` 默认色，即 `colorScheme.outline`
+Color boxBorderColor(BuildContext context) =>
+    Theme.of(context).colorScheme.outline;
+
+/// 统一的「带边框圆角盒子」（细边框、不填充）
+BoxDecoration boxOutlineDecoration(BuildContext context,
+        {bool selected = false, Color? selectedColor}) =>
+    BoxDecoration(
+      borderRadius: BorderRadius.circular(kBoxRadius),
+      border: Border.all(
+        color: selected
+            ? (selectedColor ?? Theme.of(context).colorScheme.primary)
+            : boxBorderColor(context),
+      ),
+    );
+
+/// 统一的输入框装饰：细边框 + 圆角 10（与搜索框同一套）
+///
+/// 取代原先那种"填充色块、没有边框"的写法 —— 和搜索框摆在一起时明显两套风格。
+InputDecoration boxInputDecoration(BuildContext context) {
+  final r = BorderRadius.circular(kBoxRadius);
+  final side = BorderSide(color: boxBorderColor(context));
+  return InputDecoration(
+    isDense: true,
+    border: OutlineInputBorder(borderRadius: r, borderSide: side),
+    enabledBorder: OutlineInputBorder(borderRadius: r, borderSide: side),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+  );
 }
 
 /// 空状态提示

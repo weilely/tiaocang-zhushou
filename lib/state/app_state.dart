@@ -2714,12 +2714,19 @@ class AppState extends ChangeNotifier {
   // ---------------- 基础数据库（代码 / 名称 / 首拼 / 类型 / 板块） ----------------
 
   /// 刷新本地统计（条数、更新时间）。不联网。
+  ///
+  /// **失败不影响任何事**：这只是个显示用的计数，拿不到就沿用旧值。
+  /// （widget 测试里没有 sqflite 的 databaseFactory，这里不兜住会直接把测试带红。）
   Future<void> loadSecuritiesStats() async {
-    securitiesFundCount = await db.securitiesCount(kind: 'fund') +
-        await db.securitiesCount(kind: 'etf');
-    securitiesStockCount = await db.securitiesCount(kind: 'stock');
-    securitiesUpdatedAt = await db.securitiesUpdatedAt();
-    notifyListeners();
+    try {
+      securitiesFundCount = await db.securitiesCount(kind: 'fund') +
+          await db.securitiesCount(kind: 'etf');
+      securitiesStockCount = await db.securitiesCount(kind: 'stock');
+      securitiesUpdatedAt = await db.securitiesUpdatedAt();
+      notifyListeners();
+    } catch (_) {
+      // 读不到就保持原样
+    }
   }
 
   Future<Map<String, int>> securitiesClassCounts() => db.securitiesClassCounts();

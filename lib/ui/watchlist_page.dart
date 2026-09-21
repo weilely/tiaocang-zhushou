@@ -106,35 +106,51 @@ class _WatchlistPageState extends State<WatchlistPage> {
           _statsBar(context, st, rows),
           // 市场估值（股债利差）：一天一个点，本地累积历史
           const MacroCard(),
-          if (allRows.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: SegmentedPills<AssetKind?>(
-                  expand: false,
-                  selected: kind,
-                  onChanged: (v) => setState(() => _kind = v),
-                  items: [
-                    (value: null, label: '全部 ${allRows.length}'),
-                    for (final k in kindTabs)
-                      (
-                        value: k,
-                        label:
-                            '${kindLabel(k)} ${allRows.where((r) => r.item.kind == k).length}'
-                      ),
-                  ],
-                ),
-              ),
-            ),
+          // 分类标签 + 标的列表**合成一张卡**（用户要求）：
+          // 标签就是这张表的"表头"，原先飘在表格外面，看着是两块东西
           Expanded(
-            child: ReturnTable(
-              rows: rows,
-              emptyText: kind == null
-                  ? '还没有关注的标的'
-                  : '这个分类下还没有标的',
-              onTap: _showNavHistory,
-              onMenu: (r) => _itemMenu(st, r),
+            child: Card(
+              margin: const EdgeInsets.fromLTRB(12, 2, 12, 8),
+              elevation: 0,
+              color: Theme.of(context).cardColor,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  if (allRows.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: SegmentedPills<AssetKind?>(
+                          expand: false,
+                          selected: kind,
+                          onChanged: (v) => setState(() => _kind = v),
+                          items: [
+                            (value: null, label: '全部 ${allRows.length}'),
+                            for (final k in kindTabs)
+                              (
+                                value: k,
+                                label:
+                                    '${kindLabel(k)} ${allRows.where((r) => r.item.kind == k).length}'
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  Expanded(
+                    child: ReturnTable(
+                      rows: rows,
+                      emptyText: kind == null
+                          ? '还没有关注的标的'
+                          : '这个分类下还没有标的',
+                      onTap: _showNavHistory,
+                      onMenu: (r) => _itemMenu(st, r),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

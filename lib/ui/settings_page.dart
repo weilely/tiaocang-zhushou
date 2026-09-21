@@ -33,6 +33,17 @@ class _SettingsPageState extends State<SettingsPage> {
   final Map<String, TextEditingController> _targetCtrl = {};
 
   @override
+  void initState() {
+    super.initState();
+    // 基础数据库的条数只在启动时算过一次，之后搜一次就多缓存几条 ——
+    // 进设置页重新算一遍，免得显示"基金 31 条"而库里其实有 69 条
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<AppState>().loadSecuritiesStats();
+    });
+  }
+
+  @override
   void dispose() {
     for (final c in _targetCtrl.values) {
       c.dispose();
@@ -401,6 +412,7 @@ class _SettingsPageState extends State<SettingsPage> {
       title: '数据维护中心',
       // 默认展开：这里是常用入口（全部交易 / 备份 / 重建净值）
       initiallyExpanded: true,
+      showCollapseAtBottom: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -664,6 +676,11 @@ class _SettingsPageState extends State<SettingsPage> {
           size: 16),
       label: Text(e.label, style: const TextStyle(fontSize: 12)),
       onPressed: () => st.toggleIndexEntry(e.code),
+      // 圆角与边框统一跟搜索框（InputChip 默认是胶囊形，和搜索框不是一套）
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(kBoxRadius),
+        side: BorderSide(color: boxBorderColor(context)),
+      ),
       // 末尾是个「⋯」而不是删除叉：点它或长按都打开操作卡片，
       // 删除要在卡片里再确认一次，避免误删
       onDeleted: () => _indexActionSheet(context, st, e),
@@ -732,6 +749,7 @@ class _SettingsPageState extends State<SettingsPage> {
     return CollapsibleSectionCard(
       title: '行情指标（显示 ${active.length}）',
       initiallyExpanded: true,
+      showCollapseAtBottom: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

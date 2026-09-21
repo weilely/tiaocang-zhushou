@@ -194,7 +194,7 @@ class _RebalancePageState extends State<RebalancePage> {
                       ],
                       style: const TextStyle(
                           fontSize: 18, fontWeight: FontWeight.w600),
-                      decoration: _filledBox(),
+                      decoration: _boxedInput(),
                       onChanged: (v) => setState(() {
                         _extra = double.tryParse(v.trim()) ?? 0;
                       }),
@@ -417,7 +417,7 @@ class _RebalancePageState extends State<RebalancePage> {
                           FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
                         ],
                         style: const TextStyle(fontSize: 14),
-                        decoration: _filledBox(),
+                        decoration: _boxedInput(),
                         onChanged: (v) => setState(() {
                           // 空输入按 0 算：所见即所得，想回到自动就下拉刷新
                           _pctOverride[t.code] = double.tryParse(v.trim()) ?? 0;
@@ -660,20 +660,16 @@ class _RebalancePageState extends State<RebalancePage> {
     );
   }
 
-  /// 输入框底色跟主题走：写死浅灰在深色主题下会让数字看不见
-  InputDecoration _filledBox() {
+  /// 输入框统一成**和关注页搜索框一样**的样式：细边框 + 圆角 10、不填充
+  ///
+  /// 早先是"填充色块 + 没有边框"，和搜索框摆在同一屏里明显两套风格（用户指出）。
+  InputDecoration _boxedInput() {
     final scheme = Theme.of(context).colorScheme;
-    final radius = BorderRadius.circular(6);
-    return InputDecoration(
-      isDense: true,
-      filled: true,
-      fillColor: scheme.surfaceContainerHighest,
+    final d = boxInputDecoration(context);
+    return d.copyWith(
       contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      border: OutlineInputBorder(borderRadius: radius, borderSide: BorderSide.none),
-      enabledBorder:
-          OutlineInputBorder(borderRadius: radius, borderSide: BorderSide.none),
       focusedBorder: OutlineInputBorder(
-        borderRadius: radius,
+        borderRadius: BorderRadius.circular(kBoxRadius),
         borderSide: BorderSide(color: scheme.primary, width: 1.2),
       ),
     );

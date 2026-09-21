@@ -598,11 +598,12 @@ class _BenchmarkSheetState extends State<_BenchmarkSheet> {
     final primary = theme.colorScheme.primary;
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
+        // 圆角与边框统一跟搜索框（见 common.dart 的 kBoxRadius / boxBorderColor）
+        borderRadius: BorderRadius.circular(kBoxRadius),
         color: selected ? primary.withValues(alpha: 0.08) : null,
         border: Border.all(
-          color: selected ? primary : theme.dividerColor,
-          width: selected ? 1.3 : 0.8,
+          color: selected ? primary : boxBorderColor(context),
+          width: selected ? 1.3 : 1.0,
         ),
       ),
       child: ListTile(
