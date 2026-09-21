@@ -1602,7 +1602,9 @@ class AppState extends ChangeNotifier {
     // 东财/新浪照旧）。放在东财、新浪都失败后接管，避免与已有可靠源抢请求。
     final hithinkKey = (await db.setting('hithinkApiKey'))?.trim() ?? '';
     final hithinkOn = hithink.enabled(hithinkKey);
-    if (hithinkOn) marks.add('同花顺已启用');
+    // 这一轮实际补了几条：诊断行要报「补了几条」而不是「已启用」——
+    // Key 无效或品种不覆盖时"已启用"会让人以为它在起作用
+    var hithinkFilled = 0;
     Future<Map<String, Quote>> viaHithink(List<String> codes,
         {required bool isIndex}) async {
       if (!hithinkOn || codes.isEmpty) return const {};
@@ -1610,7 +1612,8 @@ class AppState extends ChangeNotifier {
           ? await hithink.indexSnapshots(codes, hithinkKey)
           : await hithink.aShareSnapshots(codes, hithinkKey);
       // 两个接口的返回都以**完整 thscode**为键，这里按同一个规则换算后对齐，
-      // 避免 sh000001（上证指数）与 sz000001（平安银行）退化成同一个 6 位码
+      // 避免 sh000001（上证指数）与 sz000001（平安银行）退化成同一个 6 位码。
+      // 实测指数响应的 `ticker` 是 `1A0001` 这种，所以只能按 thscode 对。
       final mapped = <String, Quote>{};
       for (final c in codes) {
         final t = HithinkApi.thscodeFor(c);
@@ -1627,6 +1630,7 @@ class AppState extends ChangeNotifier {
           priceType: 'price',
         );
       }
+      hithinkFilled += mapped.length;
       return mapped;
     }
 
@@ -1826,6 +1830,8 @@ class AppState extends ChangeNotifier {
       }
       marks.add('黄金 $ok/${other.length}');
     }
+
+    if (hithinkOn) marks.add('同花顺补 $hithinkFilled');
 
     // 4) 这次没取到的沿用上一次的值
     final seen = {for (final q in out) q.code};
