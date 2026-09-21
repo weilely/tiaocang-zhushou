@@ -70,9 +70,9 @@ void main() {
       expect(const IndexEntry(code: 'sz399006').group, 'broad');
     });
 
-    test('预设表里有黄金，能查到名字', () {
+    test('预设表里有黄金9999；沪金主连已按用户要求删除', () {
       expect(MarketIndex.byCode('em:118.AU9999')?.name, '黄金9999');
-      expect(MarketIndex.byCode('em:113.aum')?.name, '沪金主连');
+      expect(MarketIndex.byCode('em:113.aum'), isNull);
     });
 
     test('normalizeIndexCode 不改动 em: 代码', () {

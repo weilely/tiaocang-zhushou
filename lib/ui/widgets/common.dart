@@ -335,6 +335,18 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
     setState(() => _open = !_open);
     // 存起来，下次启动保持不变
     AppDatabase.instance.setSetting(_key, _open ? '1' : '0');
+    // **收起会让这张卡片变矮**，当前的滚动位置可能超出新的可滚动范围 →
+    // 页面就卡住不动了（用户报「点击收起后就卡住了」）。
+    // 收起/展开后把这张卡片的标题滚进视野，滚动位置就一定是有效的。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   @override

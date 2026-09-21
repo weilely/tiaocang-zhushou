@@ -209,10 +209,13 @@ class MarketIndex {
 
   /// 预设的 A 股指数；默认只显示前 3 个
   ///
-  /// `em:` 前缀表示「直接给东财的 secid」—— 上金所黄金、期货这类品种不属于
-  /// 沪深两市，`sh/sz/bj` 那套推不出它们的 secid（黄金9999 是 `118.AU9999`，
-  /// 沪金主连是 `113.aum`）。实测 `118.SHAU`（上海金基准价）**没有实时行情**
-  /// （返回 0），所以这里用有连续报价的上金所现货 Au99.99。
+  /// `em:` 前缀表示「直接给东财的 secid」—— 上金所黄金这类品种不属于沪深两市，
+  /// `sh/sz/bj` 那套推不出它们的 secid（黄金9999 是 `118.AU9999`）。
+  /// 实测 `118.SHAU`（上海金基准价）**没有实时行情**（返回 0），所以用有连续报价的
+  /// 上金所现货 Au99.99。
+  ///
+  /// **沪金主连（`113.aum`）已按用户要求删除**：东财 push2 挂掉时它没有备用源
+  /// （新浪 `nf_AU0` 是期货格式、字段位置没把握，不猜），跑马灯里只会显示 `--`。
   static const List<MarketIndex> presets = [
     MarketIndex('sh000001', '上证指数'),
     MarketIndex('sz399001', '深证成指'),
@@ -223,7 +226,6 @@ class MarketIndex {
     MarketIndex('sh000905', '中证500'),
     MarketIndex('sh000016', '上证50'),
     MarketIndex('em:118.AU9999', '黄金9999'),
-    MarketIndex('em:113.aum', '沪金主连'),
   ];
 
   static const List<String> defaultCodes = ['sh000001', 'sz399001', 'sz399006'];

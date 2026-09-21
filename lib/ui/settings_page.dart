@@ -695,16 +695,12 @@ class _SettingsPageState extends State<SettingsPage> {
       deleteIcon: const Icon(Icons.more_vert, size: 15),
       deleteButtonTooltipMessage: '更多操作',
     );
-    // **必须 ExcludeFocus**：筹码是可聚焦控件，点过它（或点过它末尾的 ⋮）之后，
-    // 每次滚动都会被焦点触发的 ensureVisible 拉回筹码原位 —— 表现就是
-    // 「设置页再也滚不动了」（实测：点过筹码后下滑/上滑各 3 次，截图完全没变）。
-    // 让筹码不参与焦点，问题就没了。
-    return ExcludeFocus(
-      child: GestureDetector(
-        onLongPress: () => _indexMenu(context, st, e),
-        child: chip,
-      ),
-    );
+    // **不要再给筹码套 GestureDetector(onLongPress:)**：
+    // 那个长按识别器会让"手指落在筹码上滑动"的拖动被吃掉 —— 页面滚不动
+    // （实测：从左边空白滑页面会动，从筹码上滑完全不动）。
+    // 打开操作菜单用末尾的 ⋮ 就够了，长按是多余的。
+    // 筹码本身也不该抢焦点（点过它之后焦点会一直留着，滚动会被拽回去）。
+    return ExcludeFocus(child: chip);
   }
 
   /// 点指标末尾的 ⋮ 弹出的操作菜单
