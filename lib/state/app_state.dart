@@ -34,6 +34,7 @@ import '../logic/pinyin_util.dart';
 import '../logic/portfolio.dart';
 import '../logic/quote_sync.dart';
 import '../logic/range_preset.dart';
+import '../logic/nav_freshness.dart';
 import '../logic/rebalance_plan.dart';
 import '../logic/returns_calendar.dart';
 
@@ -863,6 +864,11 @@ class AppState extends ChangeNotifier {
       if (fresh.isNotEmpty) {
         quotes = {...quotes, ...fresh};
         await db.saveQuotes(fresh.values);
+
+        // 自愈：行情里已经有更新的**已公布净值**、而历史净值表还没跟上 → 补一次。
+        // （净值历史更新是"一天只跑一次、错过不补"，不补就会出现
+        //   「某天的收益统计没有数据」—— 用户 2026-09-22 报的就是这个。）
+        _backfillNavIfStale();
 
         // 顺手把标的名称补齐/更新（只认库里有 id 的标的，见 logic/quote_sync.dart）
         final renames = assetRenames(assets: need, fresh: fresh);
@@ -2496,6 +2502,31 @@ class AppState extends ChangeNotifier {
   /// 更新历史净值：无数据全量、有数据增量
   ///
   /// 逐个串行 + 200ms 节流（比并发更不容易被限流）；失败只记账不写半截。
+  /// 行情已公布净值比历史表新 → 补一次历史净值（**自愈**）
+  ///
+  /// 判断用纯函数 [staleNavCodes]（有单测）。没落后就**什么都不做**，
+  /// 不给刷新增加多余的网络请求；失败也静默，下次刷新还会再试。
+  void _backfillNavIfStale() {
+    try {
+      final stale = staleNavCodes(
+        historyLastDate: {
+          for (final e in quotes.entries)
+            e.key: (navSamples[e.key]?.isNotEmpty ?? false)
+                ? navSamples[e.key]!.last.date
+                : null,
+        },
+        quotes: {
+          for (final e in quotes.entries)
+            e.key: (priceType: e.value.priceType, infoDate: e.value.infoDate),
+        },
+      );
+      if (stale.isEmpty) return;
+      // 复用既有更新入口：它自己会跳过"今天已抓到"的标的
+      unawaited(updateNavHistory().then((_) => loadNavSamples()));
+    } catch (_) {
+      // 自愈失败静默（下次刷新再试）
+    }
+  }
   Future<int> updateNavHistory({bool manual = false}) async {
     if (navUpdating) return 0;
     // 与 `latestNavDate` 同为 yyyy-MM-dd 字符串才能直接比较
