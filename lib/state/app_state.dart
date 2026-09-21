@@ -859,7 +859,7 @@ class AppState extends ChangeNotifier {
     if (!silent) notifyListeners();
 
     try {
-      final fresh = await market.fetchAll(need);
+      final fresh = await _fetchQuotesPreferringHithink(need);
       if (fresh.isNotEmpty) {
         quotes = {...quotes, ...fresh};
         await db.saveQuotes(fresh.values);
@@ -887,6 +887,86 @@ class AppState extends ChangeNotifier {
       refreshing = false;
       _recompute();
     }
+  }
+
+  /// 同花顺返回的「完整 thscode → 价格记录」按调用方的代码列表对齐。
+  ///
+  /// 返回的键与传入的 [codes] 一致；对不上的直接丢掉（品种不被同花顺覆盖是常态）。
+  /// 必须按完整 thscode 对齐：`000001.SH`（上证指数）和 `000001.SZ`（平安银行）
+  /// 都是 `000001`；且实测指数响应的 `ticker` 是 `1A0001` 这种，按 ticker 也对不上。
+  static Map<String, ({double price, double prevClose, double changePct})>
+      _alignHithink(List<String> codes, Map<String, dynamic> got) {
+    final out = <String, ({double price, double prevClose, double changePct})>{};
+    for (final c in codes) {
+      final t = HithinkApi.thscodeFor(c);
+      if (t == null) continue; // 黄金/期货这类非沪深品种：同花顺不覆盖
+      final dyn = got[t];
+      if (dyn is! Map) continue;
+      final price = (dyn['price'] as num?)?.toDouble() ?? 0;
+      if (price <= 0) continue;
+      out[c] = (
+        price: price,
+        prevClose: (dyn['prevPrice'] as num?)?.toDouble() ?? 0,
+        changePct: (dyn['changePct'] as num?)?.toDouble() ?? 0,
+      );
+    }
+    return out;
+  }
+
+  /// 取行情：**同花顺可用时先用它**（用户要求），其余照旧走原来的多源兜底。
+  ///
+  /// 只把「已经有名字的场内标的」交给同花顺优先：同花顺快照**不返回中文名**，
+  /// 而下面 `assetRenames` 要靠行情里的名字回填本地标的 —— 全交给它的话，
+  /// 用代码加进来、名字还空着的标的就永远补不上名了。
+  /// 场外基金暂不在同花顺覆盖内（要走基金域净值，见待办第 2 层），仍走原路。
+  Future<Map<String, Quote>> _fetchQuotesPreferringHithink(
+      List<Asset> need) async {
+    final key = (await db.setting('hithinkApiKey'))?.trim() ?? '';
+    if (!hithink.enabled(key)) return market.fetchAll(need);
+    final exch = [
+      for (final a in need)
+        if (a.kind.isExchange && a.name.trim().isNotEmpty) a,
+    ];
+    if (exch.isEmpty) return market.fetchAll(need);
+
+    final out = <String, Quote>{};
+    // ETF/LOF 与股票在 A 股快照里是**两个接口**（ETF 丢给 A 股快照会
+    // 1002 Unknown A-share thscode），所以要分开请求。
+    Future<void> pull(List<Asset> list, HithinkKind kind) async {
+      if (list.isEmpty) return;
+      final codes = [for (final a in list) a.code];
+      try {
+        final got = kind == HithinkKind.fundQuote
+            ? await hithink.fundSnapshots(codes, key)
+            : await hithink.aShareSnapshots(codes, key);
+        final aligned = _alignHithink(codes, got);
+        for (final a in list) {
+          final r = aligned[a.code];
+          if (r == null) continue;
+          out[a.code] = Quote(
+            code: a.code,
+            kind: a.kind,
+            name: a.name,
+            price: r.price,
+            prevClose: r.prevClose,
+            changePct: r.changePct,
+            priceType: 'price',
+          );
+        }
+      } catch (_) {
+        // 同花顺失败：这些标的下面全部交给原有多源兜底
+      }
+    }
+
+    await pull(
+        [for (final a in exch) if (a.kind == AssetKind.etf) a],
+        HithinkKind.fundQuote);
+    await pull([for (final a in exch) if (a.kind == AssetKind.stock) a],
+        HithinkKind.stockQuote);
+
+    final rest = [for (final a in need) if (!out.containsKey(a.code)) a];
+    if (rest.isNotEmpty) out.addAll(await market.fetchAll(rest));
+    return out;
   }
 
   // ============================================================
@@ -1563,6 +1643,13 @@ class AppState extends ChangeNotifier {
     ];
     final sector = [for (final e in pool) if (e.group == 'sector') e.code];
     final etf = [for (final e in pool) if (e.group == 'etf') e.code];
+    // 场外基金（kind='fund'）也会落进 etf 这一路（`IndexEntry.group` 把 fund 归成 etf），
+    // 但它们不是交易所标的：场内基金快照接口对它们只会回 `3001 Fund not found`
+    // （实测 020602 如此）。**别为它们白打请求**，留在原路上等东财/新浪。
+    final isExchangeEntry = {
+      for (final e in pool)
+        if (e.group == 'etf') e.code: (e.kind == 'etf' || e.kind == 'stock'),
+    };
     // 其他市场（上金所黄金 / 期货）：代码是 `em:<东财 secid>`，单独一路
     final other = [for (final e in pool) if (e.group == 'other') e.code];
     final prev = {for (final q in indexQuotes) q.code: q};
@@ -1598,90 +1685,69 @@ class AppState extends ChangeNotifier {
       return mapped;
     }
 
-    // 同花顺「第三路」备用源（用户自填 API Key 才启用；未配置返回空 Map，
-    // 东财/新浪照旧）。放在东财、新浪都失败后接管，避免与已有可靠源抢请求。
+    // 同花顺（用户自填 API Key 才启用）：**配了就优先用它**（用户要求），
+    // 它拿不到、或不覆盖的品种（如上金所黄金）再由东财、新浪补。
+    // 未配置 Key 时一次请求都不发，行为与接入前完全一致。
     final hithinkKey = (await db.setting('hithinkApiKey'))?.trim() ?? '';
     final hithinkOn = hithink.enabled(hithinkKey);
-    // 这一轮实际补了几条：诊断行要报「补了几条」而不是「已启用」——
-    // Key 无效或品种不覆盖时"已启用"会让人以为它在起作用
-    var hithinkFilled = 0;
     Future<Map<String, Quote>> viaHithink(List<String> codes,
-        {required bool isIndex}) async {
+        {required HithinkKind kind}) async {
       if (!hithinkOn || codes.isEmpty) return const {};
-      final got = isIndex
-          ? await hithink.indexSnapshots(codes, hithinkKey)
-          : await hithink.aShareSnapshots(codes, hithinkKey);
-      // 两个接口的返回都以**完整 thscode**为键，这里按同一个规则换算后对齐，
-      // 避免 sh000001（上证指数）与 sz000001（平安银行）退化成同一个 6 位码。
-      // 实测指数响应的 `ticker` 是 `1A0001` 这种，所以只能按 thscode 对。
-      final mapped = <String, Quote>{};
-      for (final c in codes) {
-        final t = HithinkApi.thscodeFor(c);
-        if (t == null) continue;
-        final dyn = got[t];
-        if (dyn is! Map) continue;
-        mapped[c] = Quote(
-          code: c.replaceFirst(RegExp(r'^[a-z]{2}'), ''),
-          kind: AssetKind.etf,
-          name: label(c),
-          price: (dyn['price'] as num).toDouble(),
-          prevClose: ((dyn['prevPrice'] as num?)?.toDouble()) ?? 0,
-          changePct: ((dyn['changePct'] as num?)?.toDouble()) ?? 0,
-          priceType: 'price',
-        );
-      }
-      hithinkFilled += mapped.length;
-      return mapped;
+      final got = switch (kind) {
+        HithinkKind.indexQuote =>
+          await hithink.indexSnapshots(codes, hithinkKey),
+        HithinkKind.stockQuote =>
+          await hithink.aShareSnapshots(codes, hithinkKey),
+        HithinkKind.fundQuote => await hithink.fundSnapshots(codes, hithinkKey),
+      };
+      final aligned = _alignHithink(codes, got);
+      return {
+        for (final e in aligned.entries)
+          e.key: Quote(
+            code: e.key.replaceFirst(RegExp(r'^[a-z]{2}'), ''),
+            kind: AssetKind.etf,
+            name: label(e.key),
+            price: e.value.price,
+            prevClose: e.value.prevClose,
+            changePct: e.value.changePct,
+            priceType: 'price',
+          ),
+      };
     }
 
-    // 1) 指数（大盘 + 行业）
+    // 1) 指数（大盘 + 行业）：同花顺（若启用）→ 东财 push2 → 新浪
     final idx = [...broad, ...sector];
     if (idx.isNotEmpty) {
       var ok = 0;
-      try {
-        final got = await viaHoldingsPath(idx);
-        for (final c in idx) {
-          final q = got[c];
-          if (q == null) continue;
-          out.add(IndexQuote(
-            code: c,
-            name: label(c),
-            price: q.price,
-            change: 0,
-            changePct: q.changePct,
-            priceDigits: 2,
-          ));
-          ok++;
-        }
-      } catch (_) {
-        // 下面还有新浪兜底
-      }
-      // 新浪大盘指数通道兜底（上证这类指数它一向可用）
-      final left = [for (final c in idx) if (!out.any((q) => q.code == c)) c];
-      if (left.isNotEmpty) {
+      var viaH = 0;
+      // 同花顺优先（用户要求：配了 Key 就先用它）
+      if (hithinkOn) {
         try {
-          final got = await navSource.indexQuotes(left);
-          for (final q in got) {
+          final got = await viaHithink(idx, kind: HithinkKind.indexQuote);
+          for (final c in idx) {
+            final q = got[c];
+            if (q == null) continue;
             out.add(IndexQuote(
-              code: q.code,
-              name: label(q.code),
+              code: c,
+              name: label(c),
               price: q.price,
-              change: q.change,
+              change: 0,
               changePct: q.changePct,
               priceDigits: 2,
             ));
             ok++;
+            viaH++;
           }
         } catch (_) {
-          // 下面还有同花顺兜底
+          // 掉下去用东财、新浪补
         }
       }
-      // 同花顺「第三路」：东财、新浪都失败时接管（仅用户配置了 Key 才生效）
-      final hLeft = [for (final c in idx) if (!out.any((q) => q.code == c)) c];
-      if (hLeft.isNotEmpty) {
+      // 东财 push2 补缺
+      final idxLeft = [for (final c in idx) if (!out.any((q) => q.code == c)) c];
+      if (idxLeft.isNotEmpty) {
         try {
-          final got = await viaHithink(hLeft, isIndex: true);
-          for (final c in hLeft) {
+          final got = await viaHoldingsPath(idxLeft);
+          for (final c in idxLeft) {
             final q = got[c];
             if (q == null) continue;
             out.add(IndexQuote(
@@ -1695,60 +1761,69 @@ class AppState extends ChangeNotifier {
             ok++;
           }
         } catch (_) {
-          // 第三路也失败：沿用旧值
+          // 下面还有新浪兜底
         }
       }
-      marks.add('指数 $ok/${idx.length}');
+      // 新浪大盘指数通道补缺（上证这类指数它一向可用）
+      final idxLeft2 = [for (final c in idx) if (!out.any((q) => q.code == c)) c];
+      if (idxLeft2.isNotEmpty) {
+        try {
+          final got = await navSource.indexQuotes(idxLeft2);
+          for (final q in got) {
+            out.add(IndexQuote(
+              code: q.code,
+              name: label(q.code),
+              price: q.price,
+              change: q.change,
+              changePct: q.changePct,
+              priceDigits: 2,
+            ));
+            ok++;
+          }
+        } catch (_) {
+          // 三路都失败：下面沿用旧值
+        }
+      }
+      marks.add(
+          viaH > 0 ? '指数 $ok/${idx.length}·同花顺$viaH' : '指数 $ok/${idx.length}');
     }
 
-    // 2) 场内基金（ETF / LOF）
+    // 2) 场内基金（ETF / LOF）：同花顺（若启用）→ 东财 push2 → 新浪
     if (etf.isNotEmpty) {
       var ok = 0;
-      try {
-        final got = await viaHoldingsPath(etf);
-        for (final c in etf) {
-          final q = got[c];
-          if (q == null) continue;
-          out.add(IndexQuote(
-            code: c,
-            name: label(c),
-            price: q.price,
-            change: 0,
-            changePct: q.changePct,
-            priceDigits: 4,
-          ));
-          ok++;
+      var viaH = 0;
+      if (hithinkOn) {
+        // 只对交易所标的（ETF/股票）用同花顺，场外基金代码不上这条路
+        final hCodes = [
+          for (final c in etf)
+            if (isExchangeEntry[c] ?? false) c,
+        ];
+        try {
+          final got = await viaHithink(hCodes, kind: HithinkKind.fundQuote);
+          for (final c in hCodes) {
+            final q = got[c];
+            if (q == null) continue;
+            out.add(IndexQuote(
+              code: c,
+              name: label(c),
+              price: q.price,
+              change: 0,
+              changePct: q.changePct,
+              priceDigits: 4,
+            ));
+            ok++;
+            viaH++;
+          }
+        } catch (_) {
+          // 掉下去用东财、新浪补
         }
-      } catch (_) {
-        // 沿用旧值
       }
-      // 新浪兜底：东财 push2 会整站 502（实测一天内两次），那时 ETF 全是占位符；
-      // 新浪的 s_ 精简格式对 ETF 一样有价格和涨幅
+      // 东财 push2 补缺
       final etfLeft = [for (final c in etf) if (!out.any((q) => q.code == c)) c];
       if (etfLeft.isNotEmpty) {
         try {
-          final got = await navSource.indexQuotes(etfLeft);
-          for (final q in got) {
-            out.add(IndexQuote(
-              code: q.code,
-              name: label(q.code),
-              price: q.price,
-              change: q.change,
-              changePct: q.changePct,
-              priceDigits: 4,
-            ));
-            ok++;
-          }
-        } catch (_) {
-          // 下面还有同花顺兜底
-        }
-      }
-      // 同花顺「第三路」：ETF/LOF 场内行情（仅用户配置了 Key 才生效）
-      final etfHLeft = [for (final c in etf) if (!out.any((q) => q.code == c)) c];
-      if (etfHLeft.isNotEmpty) {
-        try {
-          final got = await viaHithink(etfHLeft, isIndex: false);
-          for (final c in etfHLeft) {
+          final got = await viaHoldingsPath(etfLeft);
+          for (final c in etfLeft) {
             final q = got[c];
             if (q == null) continue;
             out.add(IndexQuote(
@@ -1762,10 +1837,32 @@ class AppState extends ChangeNotifier {
             ok++;
           }
         } catch (_) {
-          // 第三路也失败：沿用旧值
+          // 下面还有新浪兜底
         }
       }
-      marks.add('场内 $ok/${etf.length}');
+      // 新浪兜底：东财 push2 会整站 502（实测一天内两次），那时 ETF 全是占位符；
+      // 新浪的 s_ 精简格式对 ETF 一样有价格和涨幅
+      final etfLeft2 = [for (final c in etf) if (!out.any((q) => q.code == c)) c];
+      if (etfLeft2.isNotEmpty) {
+        try {
+          final got = await navSource.indexQuotes(etfLeft2);
+          for (final q in got) {
+            out.add(IndexQuote(
+              code: q.code,
+              name: label(q.code),
+              price: q.price,
+              change: q.change,
+              changePct: q.changePct,
+              priceDigits: 4,
+            ));
+            ok++;
+          }
+        } catch (_) {
+          // 三路都失败：下面沿用旧值
+        }
+      }
+      marks.add(
+          viaH > 0 ? '场内 $ok/${etf.length}·同花顺$viaH' : '场内 $ok/${etf.length}');
     }
 
     // 3) 其他市场：上金所黄金 / 期货（`em:<东财 secid>`）
@@ -1830,8 +1927,6 @@ class AppState extends ChangeNotifier {
       }
       marks.add('黄金 $ok/${other.length}');
     }
-
-    if (hithinkOn) marks.add('同花顺补 $hithinkFilled');
 
     // 4) 这次没取到的沿用上一次的值
     final seen = {for (final q in out) q.code};
