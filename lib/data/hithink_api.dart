@@ -105,6 +105,50 @@ class HithinkApi {
     return t?.group(0);
   }
 
+  /// 基金**详情**接口的 thscode：**场外基金是 `<6位代码>.OF`**。
+  ///
+  /// 实测 `021362.OF` 才查得到；沿用股票那套号段规则会把 `021362` 判成
+  /// `021362.SZ`（深市），同花顺直接查不到这只基金。所以场外显式加 `.OF`，
+  /// 场内 ETF/LOF 仍复用 [thscodeFor] 的市场后缀。
+  /// 返回 null = 认不出来（调用方放弃，不猜）。
+  static String? fundThscodeFor(String raw, {required bool otc}) {
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+    final upper = s.toUpperCase();
+    if (RegExp(r'^\d{6}\.(OF|SH|SZ|BJ)$').hasMatch(upper)) return upper;
+    if (otc) {
+      // 场外基金：带上 sh/sz 前缀也认（本地库里的代码两种形态都出现过）
+      final m = RegExp(r'^(?:SH|SZ|BJ)?(\d{6})$').firstMatch(upper);
+      return m == null ? null : '${m.group(1)}.OF';
+    }
+    return thscodeFor(s);
+  }
+
+  /// 拉取**基金详情类**接口的信封（`{code,message,data}`）。
+  ///
+  /// [path] 目前用三条：`/api/fund/profile/detail`（档案）、
+  /// `/api/fund/portfolio/holdings`（重仓股）、
+  /// `/api/fund/corporate-actions/dividends`（分红）。
+  ///
+  /// 与快照类不同，这里**失败会抛** [HithinkException]：详情是用户点进去主动要的，
+  /// 得把"为什么没有"如实说出来，不能静默显示成"没有数据"。
+  /// 而且这是**按需**接口（同花顺有 `/api/quota/*` 配额），调用方要缓存，
+  /// 别把它塞进 60 秒一轮的行情刷新。
+  Future<Map<String, dynamic>> fundDetail(
+    String path,
+    String thscode,
+    String apiKey,
+  ) async {
+    if (!enabled(apiKey)) {
+      throw HithinkException('未配置同花顺 API Key');
+    }
+    final item = await _get(
+      '$path?thscode=${Uri.encodeQueryComponent(thscode)}',
+      apiKey,
+    );
+    return Map<String, dynamic>.from(item);
+  }
+
   /// 拉取一批**场内基金**（ETF / LOF）行情快照。
   ///
   /// **跟股票不是同一个接口**：把 ETF 代码丢给 A 股快照会得到

@@ -12,6 +12,7 @@ import '../data/dca_models.dart';
 import '../data/dca_repo.dart';
 import '../data/dca_source.dart';
 import '../data/file_store.dart';
+import '../data/fund_detail.dart';
 import '../data/hithink_api.dart';
 import '../data/macro_source.dart';
 import '../data/market_api.dart';
@@ -1202,6 +1203,91 @@ class AppState extends ChangeNotifier {
   Future<void> setHithinkApiKey(String v) async {
     hithinkApiKey = v.trim();
     await db.setSetting('hithinkApiKey', v.trim());
+  }
+
+  /// 基金档案缓存（键 = 6 位代码）：**点进去才拉、拉过就留着**。
+  ///
+  /// 不进 60 秒一轮的行情刷新 —— 同花顺的详情类接口有配额（`/api/quota/*`）。
+  /// 只存内存：进程重启后第一次进档案页会重新拉一次（详情数据本来就是日频的）。
+  final Map<String, FundDetailBundle> _fundDetails = {};
+
+  /// 已缓存的基金档案（null = 这次进程里还没拉过）
+  FundDetailBundle? fundDetailOf(String code) => _fundDetails[code.trim()];
+
+  /// 清掉某只基金（不传 = 全部）的档案缓存
+  void clearFundDetail([String? code]) {
+    if (code == null) {
+      _fundDetails.clear();
+    } else {
+      _fundDetails.remove(code.trim());
+    }
+  }
+
+  /// 拉一只基金的「档案 / 重仓股 / 分红」（同花顺详情接口，**按需**调用）
+  ///
+  /// - 档案是**必须**的：取不到就抛 [HithinkException]，页面如实说原因
+  ///   （没配 Key / Key 无效 / 同花顺没有这只基金）。
+  /// - 重仓股与分红各自失败**不影响**档案，原因单独挂在 bundle 上、界面分开说明
+  ///   —— 不能把"没取到"画成"这只基金没分红"。
+  /// - [otc] 为 true（场外基金）时 thscode 用 `.OF` 后缀，与场内 ETF/LOF 不同。
+  /// - 结果按代码缓存，[force] = true 时强制重拉（下拉刷新用）。
+  Future<FundDetailBundle> loadFundDetail(
+    String code, {
+    required bool otc,
+    bool force = false,
+  }) async {
+    final key = (await db.setting('hithinkApiKey'))?.trim() ?? '';
+    if (!hithink.enabled(key)) {
+      throw HithinkException('未配置同花顺 API Key（设置 → 同花顺数据源）');
+    }
+    final cached = _fundDetails[code.trim()];
+    if (!force && cached != null) return cached;
+
+    final thscode = HithinkApi.fundThscodeFor(code, otc: otc);
+    if (thscode == null) {
+      throw HithinkException('认不出这只基金的代码：$code');
+    }
+
+    // ① 档案：这条失败就没得看了，直接抛
+    final profileJson =
+        await hithink.fundDetail('/api/fund/profile/detail', thscode, key);
+
+    // ② 重仓股：失败只记原因
+    FundPortfolio? portfolio;
+    String? portfolioError;
+    try {
+      final p = FundPortfolio.fromJson(await hithink.fundDetail(
+          '/api/fund/portfolio/holdings', thscode, key));
+      if (p.isEmpty) {
+        portfolioError = '这只基金没有重仓股数据（可能是债基/货基）';
+      } else {
+        portfolio = p;
+      }
+    } on HithinkException catch (e) {
+      portfolioError = e.message;
+    }
+
+    // ③ 分红：失败只记原因
+    FundDividends? dividends;
+    String? dividendsError;
+    try {
+      dividends = FundDividends.fromJson(await hithink.fundDetail(
+          '/api/fund/corporate-actions/dividends', thscode, key));
+    } on HithinkException catch (e) {
+      dividendsError = e.message;
+    }
+
+    final bundle = FundDetailBundle(
+      profile: FundProfile.fromJson(profileJson),
+      portfolio: portfolio,
+      dividends: dividends,
+      portfolioError: portfolioError,
+      dividendsError: dividendsError,
+      fetchedAt: DateTime.now(),
+    );
+    _fundDetails[code.trim()] = bundle;
+    notifyListeners();
+    return bundle;
   }
 
   Future<void> setBiometric(bool v) async {

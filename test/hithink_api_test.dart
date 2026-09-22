@@ -437,4 +437,88 @@ void main() {
       expect(got.containsKey('399888.SZ'), isFalse);
     });
   });
+
+  group('基金详情 thscode：场外基金是 .OF，不按号段猜', () {
+    test('场外基金加 .OF（021362 按股票规则会判成 .SZ，同花顺查不到）', () {
+      expect(HithinkApi.fundThscodeFor('021362', otc: true), '021362.OF');
+      expect(HithinkApi.fundThscodeFor('sh021362', otc: true), '021362.OF');
+      expect(HithinkApi.fundThscodeFor(' 021362 ', otc: true), '021362.OF');
+    });
+
+    test('场内 ETF/LOF 仍走市场后缀', () {
+      expect(HithinkApi.fundThscodeFor('510300', otc: false), '510300.SH');
+      expect(HithinkApi.fundThscodeFor('sz159915', otc: false), '159915.SZ');
+      expect(HithinkApi.fundThscodeFor('501029', otc: false), '501029.SH');
+    });
+
+    test('已经是 thscode 的原样返回（.OF 也认，大写）', () {
+      expect(HithinkApi.fundThscodeFor('021362.of', otc: true), '021362.OF');
+      expect(HithinkApi.fundThscodeFor('600519.SH', otc: false), '600519.SH');
+    });
+
+    test('认不出来的返回 null —— 宁可放弃，也不猜一个后缀', () {
+      expect(HithinkApi.fundThscodeFor('em:118.AU9999', otc: false), isNull);
+      expect(HithinkApi.fundThscodeFor('', otc: true), isNull);
+      expect(HithinkApi.fundThscodeFor('1234567', otc: true), isNull);
+      expect(HithinkApi.fundThscodeFor('abcdef', otc: true), isNull);
+    });
+  });
+
+  group('基金详情接口 fundDetail（按需拉取，失败要抛）', () {
+    test('GET + X-api-key + thscode 查询参数，返回整个信封', () async {
+      final api = HithinkApi(MockClient((req) async {
+        expect(req.method, 'GET');
+        expect(req.url.path, '/api/fund/profile/detail');
+        expect(req.url.queryParameters['thscode'], '021362.OF');
+        expect(req.headers['X-api-key'], 'k');
+        return http.Response(
+          jsonEncode({
+            'code': 0,
+            'message': 'success',
+            'data': {
+              'item': [
+                {'ticker': '021362'}
+              ],
+            },
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }));
+
+      final got =
+          await api.fundDetail('/api/fund/profile/detail', '021362.OF', 'k');
+      expect(got['code'], 0);
+      final data = got['data'] as Map;
+      expect(data['item'], isA<List>());
+    });
+
+    test('业务错误（code != 0）必须抛 —— 页面靠它说清"为什么没有数据"', () async {
+      final api = HithinkApi(MockClient((req) async => http.Response(
+            jsonEncode(
+                {'code': 2003, 'message': 'Missing X-api-key', 'data': null}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          )));
+
+      await expectLater(
+        api.fundDetail('/api/fund/profile/detail', '021362.OF', 'bad'),
+        throwsA(isA<HithinkException>()),
+      );
+    });
+
+    test('未配置 Key：直接抛，一次请求都不发', () async {
+      var calls = 0;
+      final api = HithinkApi(MockClient((req) async {
+        calls++;
+        return http.Response('{}', 200);
+      }));
+
+      await expectLater(
+        api.fundDetail('/api/fund/profile/detail', '021362.OF', '   '),
+        throwsA(isA<HithinkException>()),
+      );
+      expect(calls, 0);
+    });
+  });
 }

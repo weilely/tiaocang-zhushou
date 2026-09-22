@@ -12,6 +12,7 @@ import '../data/securities_source.dart';
 import '../logic/holding_import.dart';
 import '../logic/period_return.dart';
 import '../state/app_state.dart';
+import 'fund_profile_page.dart';
 import 'holding_import_page.dart';
 import 'widgets/common.dart';
 import 'widgets/macro_card.dart';
@@ -414,6 +415,14 @@ class _WatchlistPageState extends State<WatchlistPage> {
               title: const Text('查看历史净值'),
               onTap: () => Navigator.pop(ctx, 'nav'),
             ),
+            // 基金档案走同花顺的基金详情接口：股票/黄金没有这一项
+            if (r.item.kind == AssetKind.fund || r.item.kind == AssetKind.etf)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.description_outlined),
+                title: const Text('基金档案（重仓股 / 分红）'),
+                onTap: () => Navigator.pop(ctx, 'profile'),
+              ),
             ListTile(
               dense: true,
               leading: const Icon(Icons.savings_outlined),
@@ -438,6 +447,8 @@ class _WatchlistPageState extends State<WatchlistPage> {
         await st.toggleWatchPin(r.item);
       case 'nav':
         await _showNavHistory(r);
+      case 'profile':
+        await _showFundProfile(r);
       case 'move':
         final row = HoldingImportRow(
           code: r.item.code,
@@ -456,6 +467,17 @@ class _WatchlistPageState extends State<WatchlistPage> {
       case 'delete':
         await st.removeFromWatch(r.item.id!);
     }
+  }
+
+  /// 打开基金档案页（同花顺详情接口：档案 / 重仓股 / 分红）
+  Future<void> _showFundProfile(WatchRow r) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => FundProfilePage(
+        code: r.item.code,
+        name: r.item.displayName,
+        kind: r.item.kind,
+      ),
+    ));
   }
 
   Future<void> _showNavHistory(WatchRow r) async {

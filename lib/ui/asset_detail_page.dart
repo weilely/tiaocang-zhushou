@@ -6,6 +6,7 @@ import '../data/models.dart';
 import '../logic/portfolio.dart';
 import '../state/app_state.dart';
 import 'dca_plan_sheet.dart';
+import 'fund_profile_page.dart';
 import 'txn_edit_page.dart';
 import 'asset_edit_page.dart';
 import 'widgets/common.dart';
@@ -70,9 +71,55 @@ class AssetDetailPage extends StatelessWidget {
         padding: const EdgeInsets.only(bottom: 32),
         children: [
           _actionBar(context, asset, p),
+          // 基金档案（同花顺详情接口，点进去才拉）：场外基金与场内 ETF/LOF 都有
+          if (asset.kind == AssetKind.fund || asset.kind == AssetKind.etf)
+            _fundProfileEntry(context, asset),
           _metricsCard(context, p),
           _historyCard(context, p),
         ],
+      ),
+    );
+  }
+
+  /// 基金档案入口：档案 / 重仓股 / 分红三块都在那一页（同花顺详情接口，按需拉取）
+  ///
+  /// 只在基金与场内 ETF/LOF 上出现 —— 同花顺的基金详情接口只认基金，
+  /// 股票/黄金点进去只会得到「标的不存在」。
+  Widget _fundProfileEntry(BuildContext context, Asset asset) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Material(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => FundProfilePage(
+              code: asset.code,
+              name: asset.name,
+              kind: asset.kind,
+            ),
+          )),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            child: Row(
+              children: [
+                Icon(Icons.description_outlined,
+                    size: 20, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('基金档案 · 重仓股 · 分红',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                ),
+                Icon(Icons.chevron_right, size: 20, color: theme.hintColor),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
