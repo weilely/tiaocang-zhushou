@@ -159,30 +159,30 @@ class _MacroCardState extends State<MacroCard> {
     );
   }
 
-  /// 展开后的说明文字：利差口径 + **按 10 年分位折算的股债比** + 免责
+  /// 展开后的说明文字：利差口径 + **按分位折算的股债比** + 免责
   ///
-  /// 股债比是用户 2026-09-22 要的（**10 年口径**）：用「沪深300 PE 长周期分位」
-  /// （蛋卷长窗口，周频、约 10 年、500+ 个点）折算 —— 它是当前**唯一真正覆盖
-  /// 10 年**的分位来源。
-  ///
-  /// ⚠️ 为什么不是"利差自己的 10 年分位"：那需要 10 年的 10 年期国债收益率序列，
-  /// 而免费可得的两条路都断了 —— 东财 `171.CN10Y` 的 K 线**硬性从 2023-05-08 起**，
-  /// 中债（ChinaBond）的 `queryYz` 历史序列接口**没能打通**（返回值恒为空数组）。
-  /// 所以这里降级成"PE 长周期分位"，**并且把用的是哪个口径写在脸上**，不混着说。
-  /// 口径链：长周期分位（10 年）→ 本地利差分位（样本天数）→ 不折算。
+  /// 股债比是用户 2026-09-22 要的，口径指定 **10 年**。所以优先用**本地利差分位**
+  /// —— 回填已经把本地历史补到约 10 年（东财数据中心的中美国债收益率 +
+  /// 中证官网日频 PE），这才是"股债利差本身"的 10 年分位。
+  /// 本地样本还不够长（回填失败/新装）时才退到蛋卷的长窗口 PE 分位，
+  /// 再不行就不折算 —— **每一条都把自己的口径与样本写出来**，不混着说。
   String _explain(AppState st) {
     final buf = StringBuffer(
         '利差 = 沪深300盈利收益率(1/PE) − 10年国债收益率；越大说明股票相对债券越便宜。');
 
-    final lp = st.macroPePercentileLong;
     final ep = st.macroErpPercentile;
-    if (lp != null) {
+    final lp = st.macroPePercentileLong;
+    final days = st.macroHistory.length;
+    if (ep != null && days >= _minDaysForSplit) {
+      buf.write('按本地利差分位（$days 天：${st.macroSampleRange}）折算：'
+          '${equityBondSplitText(ep)}'
+          '（＝分位×100 给权益、其余给债券，纯机械折算）。');
+    } else if (lp != null) {
       final win = _ym(st.macroPeWindowStart);
       buf.write('按沪深300 PE 长窗口分位${win.isEmpty ? '' : '（$win 起）'}折算：'
-          '${equityBondSplitText(lp)}'
-          '（＝分位×100 给权益、其余给债券，纯机械折算）。');
+          '${equityBondSplitText(lp)}（纯机械折算）。');
     } else if (ep != null) {
-      buf.write('长周期分位暂时取不到，改用本地利差分位（${st.macroHistory.length} 天）折算：'
+      buf.write('分位样本只有 $days 天，先按本地利差分位折算：'
           '${equityBondSplitText(ep)}（纯机械折算）。');
     } else {
       buf.write('分位样本不足，暂不折算股债比。');
@@ -190,6 +190,11 @@ class _MacroCardState extends State<MacroCard> {
     buf.write('仅为市场估值参考，不构成投资建议。');
     return buf.toString();
   }
+
+  /// 用本地利差分位折算所需的最少天数（约 1 年）。
+  ///
+  /// 低于这个数就不拿它当"10 年口径"用：要么退到蛋卷长窗口，要么如实说样本太短。
+  static const int _minDaysForSplit = 250;
 
   /// 副标题：分位 + **样本区间**（必须写年限，否则容易被当成长周期分位）
   String _subtitle(AppState st, MacroRow latest) {

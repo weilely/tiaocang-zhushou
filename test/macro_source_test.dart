@@ -43,6 +43,53 @@ void main() {
     });
   });
 
+  group('alignMacroSeries：PE 与国债按日期对齐（10 年回填的核心规则）', () {
+    test('PE 的每一天取"该日或之前最近"的国债值（周末/节假日顺延）', () {
+      final rows = alignMacroSeries(
+        pe: {'2026-09-17': 13.5, '2026-09-18': 13.6, '2026-09-19': 13.7},
+        // 国债只有 17 号和 19 号有（18 号缺，19 号是周六）
+        bond: {'2026-09-17': 1.70, '2026-09-19': 1.72},
+      );
+      expect(rows.length, 3);
+      expect(rows[0].date, '2026-09-17');
+      expect(rows[0].cn10y, 1.70);
+      expect(rows[1].date, '2026-09-18');
+      expect(rows[1].cn10y, 1.70, reason: '18 号没有国债 → 用 17 号的');
+      expect(rows[2].cn10y, 1.72);
+    });
+
+    test('PE 早于最早一条国债的日期要丢掉（不能拿未来的国债去凑）', () {
+      final rows = alignMacroSeries(
+        pe: {'2016-01-04': 12.0, '2016-06-16': 13.0},
+        bond: {'2016-06-15': 2.95},
+      );
+      expect(rows.length, 1);
+      expect(rows.single.date, '2016-06-16');
+      expect(rows.single.cn10y, 2.95);
+    });
+
+    test('输出按日期升序，且丢掉非正/缺失的一腿', () {
+      final rows = alignMacroSeries(
+        pe: {'2026-09-19': 13.7, '2026-09-17': 13.5},
+        bond: {'2026-09-17': 1.70, '2026-09-19': 0},
+      );
+      expect([for (final r in rows) r.date], ['2026-09-17']);
+    });
+
+    test('利差 = 1/PE − 国债（自洽）', () {
+      final rows = alignMacroSeries(
+        pe: {'2026-09-22': 13.5011},
+        bond: {'2026-09-22': 1.6791},
+      );
+      expect(rows.single.erp, closeTo(100 / 13.5011 - 1.6791, 1e-9));
+    });
+
+    test('空输入不炸', () {
+      expect(alignMacroSeries(pe: const {}, bond: const {'x': 1.0}), isEmpty);
+      expect(alignMacroSeries(pe: const {'x': 1.0}, bond: const {}), isEmpty);
+    });
+  });
+
   // 直连中证官网 / 东财，网络不通时会红（与 core_test 的联网组同性质）
   group('宏观估值（联网）', () {
     test('中证官网能取到沪深300 PE，且数值合理', () async {

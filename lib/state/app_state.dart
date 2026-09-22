@@ -1095,6 +1095,20 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 宏观历史是否需要回填：库里空，或最早一天距今还不到 10 年（留 1 个月余量）
+  ///
+  /// 用"够不够长"当判据而不是"空不空"：老用户库里只有 3.4 年（179 天），
+  /// 用户要的 10 年口径就得把这些人的历史一并补齐。`saveMacroRow` 是按日期
+  /// 覆盖写（PK=date），所以重复回填是幂等的。
+  bool _macroHistoryNeedsBackfill() {
+    if (macroHistory.isEmpty) return true;
+    final first = DateTime.tryParse(macroHistory.first.date);
+    if (first == null) return true;
+    final target =
+        DateTime.now().subtract(const Duration(days: 365 * 10 - 30));
+    return first.isAfter(target);
+  }
+
   /// 取今天的宏观估值并落库。
   ///
   /// [force] 为 false 时，**同一天只取一次**（手动下拉刷新不会反复打接口）；
@@ -1103,10 +1117,11 @@ class AppState extends ChangeNotifier {
     final today = _dayKey(DateTime.now());
     if (!force && macroLatest?.date == today) return;
     try {
-      // 首次（库里空）先回填历史：股债利差的价值全在历史分位上，
-      // 不回填的话新装用户要等 20 天才有分位、很久才有一条像样的曲线。
-      // 拿得到约 3.4 年（受"国债历史只有 2023-05 起"的硬限制）。
-      if (macroHistory.isEmpty) {
+      // 历史回填：库里空（新装）**或样本还不够 10 年**时补齐。
+      // 股债利差的价值全在历史分位上，而用户 2026-09-22 要的是"**10 年口径**"，
+      // 所以判据不是"空不空"、而是"够不够长" —— 老库里只有 3.4 年（179 天）
+      // 也要补到 10 年，否则分位口径一直偏短。
+      if (_macroHistoryNeedsBackfill()) {
         final hist = await fetchMacroBackfill();
         for (final h in hist) {
           await db.saveMacroRow(MacroRow(

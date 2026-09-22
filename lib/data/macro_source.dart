@@ -203,94 +203,210 @@ class MacroBackfillPoint {
 
 /// 回填历史：把「沪深300 PE 历史」与「10年期国债收益率历史」按日期对齐。
 ///
-/// 为什么要回填：股债利差的价值全在"历史分位"上，而免费可得的数据里
-/// 国债收益率只有 **2023-05 起**（东财 171 市场的硬限制），PE 却有 2016 起。
-/// 不回填的话，新装的用户要等 20 天才有分位、等很多天才有一条像样的曲线。
-/// 对齐后能一次性拿到约 3.4 年的周频点。
+/// 为什么要回填：股债利差的价值全在"历史分位"上，不回填的话新装用户要等
+/// 20 天才有分位。**用户 2026-09-22 要的是"10 年口径"**，所以两个源都换成了
+/// 能覆盖 10 年的：
+/// - 国债：东财数据中心「中美国债收益率」（`EMM00166466`＝中国10年期，2002 起）
+///   —— 原来用的 `push2his 171.CN10Y` **硬性只有 2023-05-08 起**，撑不起 10 年；
+/// - PE：中证指数官网 `index-perf` 的 `peg`（日频，2015 起）
+///   —— 原来用的蛋卷 `pe_history` 是**周频**且 2016-09 起。
 ///
 /// 两个源任意一个失败就返回空 —— 回填失败不该影响主流程（当天那一点仍会入库）。
 Future<List<MacroBackfillPoint>> fetchMacroBackfill({
-  Duration timeout = const Duration(seconds: 25),
+  int years = 10,
+  Duration timeout = const Duration(seconds: 30),
 }) async {
   try {
-    final bond = await _fetchCn10yHistory(timeout: timeout);
+    final bond = await _fetchCn10yHistory(years: years, timeout: timeout);
     if (bond.isEmpty) return const [];
-    final pe = await _fetchHs300PeHistory(timeout: timeout);
+    final pe = await _fetchHs300PeHistory(years: years, timeout: timeout);
     if (pe.isEmpty) return const [];
-
-    final bondDates = bond.keys.toList()..sort();
-    final out = <MacroBackfillPoint>[];
-    for (final entry in pe.entries) {
-      final d = entry.key;
-      // 取该日或之前最近的一个国债收益率
-      String? pick;
-      for (final bd in bondDates) {
-        if (bd.compareTo(d) <= 0) {
-          pick = bd;
-        } else {
-          break;
-        }
-      }
-      if (pick == null) continue;
-      final y = bond[pick]!;
-      if (entry.value <= 0 || y <= 0) continue;
-      out.add(MacroBackfillPoint(d, entry.value, y));
-    }
-    out.sort((a, b) => a.date.compareTo(b.date));
-    return out;
+    return alignMacroSeries(pe: pe, bond: bond);
   } catch (_) {
     return const [];
   }
 }
 
-/// 10年期国债收益率历史（日频）—— 东财 push2his，`171.CN10Y`
-Future<Map<String, double>> _fetchCn10yHistory(
-    {Duration timeout = const Duration(seconds: 25)}) async {
-  final url = Uri.parse('https://push2his.eastmoney.com/api/qt/stock/kline/get'
-      '?secid=171.CN10Y&klt=101&fqt=1&beg=20050101&end=20500101'
-      '&fields1=f1,f2,f3&fields2=f51,f53');
-  final res = await http.get(url).timeout(timeout);
-  if (res.statusCode != 200) return const {};
-  final body = jsonDecode(res.body);
-  if (body is! Map) return const {};
-  final data = body['data'];
-  if (data is! Map) return const {};
-  final klines = data['klines'];
-  if (klines is! List) return const {};
-  final out = <String, double>{};
-  for (final k in klines) {
-    final parts = '$k'.split(',');
-    if (parts.length < 2) continue;
-    final v = double.tryParse(parts[1]);
-    if (v == null || v <= 0 || v > 20) continue;
-    out[_iso(parts[0])] = v;
+/// 把「PE 序列」与「国债序列」按日期对齐：PE 的每一天取**该日或之前最近**的国债值。
+///
+/// 抽成纯函数是为了能单测（对齐规则错一天，分位就整体偏，肉眼看不出来）。
+/// 输入不要求有序；输出按日期升序，且**丢掉任一腿缺失/非正**的点。
+List<MacroBackfillPoint> alignMacroSeries({
+  required Map<String, double> pe,
+  required Map<String, double> bond,
+}) {
+  final bondDates = bond.keys.toList()..sort();
+  final out = <MacroBackfillPoint>[];
+  var bi = -1; // 当前已扫描到的"最后一个 ≤ 当前日期"的国债下标
+  for (final d in (pe.keys.toList()..sort())) {
+    while (bi + 1 < bondDates.length && bondDates[bi + 1].compareTo(d) <= 0) {
+      bi++;
+    }
+    if (bi < 0) continue; // 这天还没有国债数据
+    final peV = pe[d]!;
+    final y = bond[bondDates[bi]]!;
+    if (peV <= 0 || y <= 0) continue;
+    out.add(MacroBackfillPoint(d, peV, y));
   }
   return out;
 }
 
-/// 沪深300 PE 历史（周频，2016 起）—— 蛋卷 `pe_history`
-Future<Map<String, double>> _fetchHs300PeHistory(
-    {Duration timeout = const Duration(seconds: 25)}) async {
-  final url = Uri.parse(
-      'https://danjuanfunds.com/djapi/index_eva/pe_history/SH000300?day=all');
-  final res = await http.get(url).timeout(timeout);
-  if (res.statusCode != 200) return const {};
-  final body = jsonDecode(res.body);
-  if (body is! Map) return const {};
-  final data = body['data'];
-  if (data is! Map) return const {};
-  final list = data['index_eva_pe_growths'];
-  if (list is! List) return const {};
+/// 10年期国债收益率历史（日频）—— **东财数据中心「中美国债收益率」**（长历史）
+///
+/// 为什么换源：`push2his` 的 `171.CN10Y` K 线**硬性从 2023-05-08 才有**（实测
+/// `beg=20050101` 首条就是它），算不了 10 年分位。东财数据中心是同一个标的、
+/// 同一家厂商：`EMM00166466` = 中国国债收益率10年，实测可回溯到 2002 年。
+/// **两源对数**：2026-09-22 数据中心给 1.6791，中债官网（中国债券信息网）当天
+/// 也是 1.6791 —— 独立来源互验通过。
+/// 失败/空则回落到原来的 `push2his`。
+Future<Map<String, double>> _fetchCn10yHistory({
+  int years = 10,
+  Duration timeout = const Duration(seconds: 30),
+}) async {
   final out = <String, double>{};
-  for (final e in list) {
-    if (e is! Map) continue;
-    final pe = e['pe'];
-    final v = pe is num ? pe.toDouble() : double.tryParse('$pe');
-    final ts = e['ts'];
-    if (v == null || v <= 0 || ts is! num || ts <= 0) continue;
-    final d = DateTime.fromMillisecondsSinceEpoch(ts.toInt(), isUtc: true);
-    out['${d.year}-${d.month.toString().padLeft(2, '0')}'
-        '-${d.day.toString().padLeft(2, '0')}'] = v;
+  try {
+    // 数据中心页面自带的公开 token（`data.eastmoney.com/cjsj/zmgzsyl.html`）
+    const token = '894050c76af8597a853f5b408b759f5d';
+    final since =
+        DateTime.now().subtract(Duration(days: 365 * years + 40));
+    for (var page = 1; page <= 8; page++) {
+      final url = Uri.parse('https://datacenter.eastmoney.com/api/data/get'
+          '?type=RPTA_WEB_TREASURYYIELD&sty=ALL&st=SOLAR_DATE&sr=-1'
+          '&token=$token&ps=500&p=$page&pageNo=$page&pageNum=$page');
+      final res = await http.get(url).timeout(timeout);
+      if (res.statusCode != 200) break;
+      final body = jsonDecode(res.body);
+      if (body is! Map) break;
+      final result = body['result'];
+      if (result is! Map) break;
+      final list = result['data'];
+      if (list is! List || list.isEmpty) break;
+
+      var oldest = '';
+      for (final e in list) {
+        if (e is! Map) continue;
+        final d = _iso('${e['SOLAR_DATE']}'.split(' ').first);
+        if (d.length != 10) continue;
+        final raw = e['EMM00166466'];
+        final v = raw is num ? raw.toDouble() : double.tryParse('$raw');
+        if (v == null || v <= 0 || v > 20) continue;
+        out[d] = v;
+        if (oldest.isEmpty || d.compareTo(oldest) < 0) oldest = d;
+      }
+      if (oldest.isNotEmpty && DateTime.parse(oldest).isBefore(since)) break;
+      final pages = result['pages'];
+      if (pages is num && page >= pages) break;
+    }
+  } catch (_) {
+    // 掉到下面的旧通道
   }
-  return out;
+  if (out.isNotEmpty) return out;
+  return _fetchCn10yHistoryViaKline(timeout: timeout);
 }
+
+/// 旧的国债历史通道：东财 push2his（**只有 2023-05 起**，仅作兜底）
+Future<Map<String, double>> _fetchCn10yHistoryViaKline(
+    {Duration timeout = const Duration(seconds: 25)}) async {
+  try {
+    final url =
+        Uri.parse('https://push2his.eastmoney.com/api/qt/stock/kline/get'
+            '?secid=171.CN10Y&klt=101&fqt=1&beg=20050101&end=20500101'
+            '&fields1=f1,f2,f3&fields2=f51,f53');
+    final res = await http.get(url).timeout(timeout);
+    if (res.statusCode != 200) return const {};
+    final body = jsonDecode(res.body);
+    if (body is! Map) return const {};
+    final data = body['data'];
+    if (data is! Map) return const {};
+    final klines = data['klines'];
+    if (klines is! List) return const {};
+    final out = <String, double>{};
+    for (final k in klines) {
+      final parts = '$k'.split(',');
+      if (parts.length < 2) continue;
+      final v = double.tryParse(parts[1]);
+      if (v == null || v <= 0 || v > 20) continue;
+      out[_iso(parts[0])] = v;
+    }
+    return out;
+  } catch (_) {
+    return const {};
+  }
+}
+
+/// 沪深300 PE 历史（**日频，2015 起**）—— 中证指数官网 `index-perf` 的 `peg`
+///
+/// 为什么换源：蛋卷 `pe_history` 是**周频**且要过它的风控（本机出口 IP 已被
+/// 蛋卷 403 拉黑过）。中证官网是官方口径、日频、能到 2015，实测一次请求就有
+/// 全部数据。失败则回落到蛋卷周频。
+Future<Map<String, double>> _fetchHs300PeHistory({
+  int years = 10,
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  final out = <String, double>{};
+  try {
+    final end = DateTime.now();
+    final start = end.subtract(Duration(days: 365 * years + 40));
+    final url = Uri.parse('https://www.csindex.com.cn/csindex-home/perf/'
+        'index-perf?indexCode=000300'
+        '&startDate=${_ymd(start)}&endDate=${_ymd(end)}');
+    final res = await http.get(url).timeout(timeout);
+    if (res.statusCode == 200) {
+      final body = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true));
+      if (body is Map) {
+        final list = body['data'];
+        if (list is List) {
+          for (final e in list) {
+            if (e is! Map) continue;
+            final d = _iso('${e['tradeDate']}');
+            if (d.length != 10) continue;
+            final raw = e['peg'];
+            final v = raw is num ? raw.toDouble() : double.tryParse('$raw');
+            if (v == null || v <= 0) continue;
+            out[d] = v;
+          }
+        }
+      }
+    }
+  } catch (_) {
+    // 掉到下面的蛋卷周频
+  }
+  if (out.isNotEmpty) return out;
+  return _fetchHs300PeHistoryViaDanjuan(timeout: timeout);
+}
+
+/// 旧的 PE 历史通道：蛋卷 `pe_history`（周频，2016-09 起，仅作兜底）
+Future<Map<String, double>> _fetchHs300PeHistoryViaDanjuan(
+    {Duration timeout = const Duration(seconds: 25)}) async {
+  try {
+    final url = Uri.parse(
+        'https://danjuanfunds.com/djapi/index_eva/pe_history/SH000300?day=all');
+    final res = await http.get(url).timeout(timeout);
+    if (res.statusCode != 200) return const {};
+    final body = jsonDecode(res.body);
+    if (body is! Map) return const {};
+    final data = body['data'];
+    if (data is! Map) return const {};
+    final list = data['index_eva_pe_growths'];
+    if (list is! List) return const {};
+    final out = <String, double>{};
+    for (final e in list) {
+      if (e is! Map) continue;
+      final pe = e['pe'];
+      final v = pe is num ? pe.toDouble() : double.tryParse('$pe');
+      final ts = e['ts'];
+      if (v == null || v <= 0 || ts is! num || ts <= 0) continue;
+      final d = DateTime.fromMillisecondsSinceEpoch(ts.toInt(), isUtc: true);
+      out['${d.year}-${d.month.toString().padLeft(2, '0')}'
+          '-${d.day.toString().padLeft(2, '0')}'] = v;
+    }
+    return out;
+  } catch (_) {
+    return const {};
+  }
+}
+
+/// `2026-09-22` → `20260922`（中证官网要这种格式）
+String _ymd(DateTime d) =>
+    '${d.year}${d.month.toString().padLeft(2, '0')}'
+    '${d.day.toString().padLeft(2, '0')}';
