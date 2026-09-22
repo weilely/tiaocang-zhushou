@@ -273,6 +273,8 @@ class _TrendViewState extends State<_TrendView> {
             refs2: custom,
             // 「参考」就是基准设置里当前选的那条：大盘指数 or 预期收益
             refIsMarketIndex: st.benchmark.kind == BenchmarkKind.marketIndex,
+            // 图内浮窗开关（在「参考基准」面板里改）
+            showCallout: st.showTrendCallout,
             onActiveChanged: (i) => setState(() => _active = i),
           ),
           const SizedBox(height: 10),
@@ -368,6 +370,14 @@ class _TrendViewState extends State<_TrendView> {
     final picked = await showModalBottomSheet<Benchmark>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
+      // 用户要求「弹窗界面太不好看了，以卡片弹出更好」→ 圆角卡片 + 限高可滚
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.78,
+      ),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (ctx) => _BenchmarkSheet(
         current: st.benchmark,
         // 面板里补一句"当前区间折算多少"，免得框里的区间值和填的年化值对不上
@@ -503,6 +513,14 @@ class _BenchmarkSheetState extends State<_BenchmarkSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cur = widget.current;
+    // **沪深300 排最前**（用户口径：「大盘指数默认沪深300」）；
+    // `em:` 前缀（黄金类）只有实时报价、没有历史 K 线，不能当基准，一律排除
+    final presets = [
+      ...MarketIndex.presets.where((m) => !m.code.startsWith('em:')),
+    ]..sort((a, b) {
+        int rank(String c) => c == 'sh000300' ? 0 : 1;
+        return rank(a.code).compareTo(rank(b.code));
+      });
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -515,6 +533,18 @@ class _BenchmarkSheetState extends State<_BenchmarkSheet> {
             const SizedBox(height: 4),
             Text('趋势图用它做对比基准，可随时切换',
                 style: TextStyle(fontSize: 11, color: theme.hintColor)),
+            const SizedBox(height: 12),
+            // 图内浮窗开关（用户要求放在「参考收益」设置里）
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              value: context.watch<AppState>().showTrendCallout,
+              onChanged: (v) =>
+                  context.read<AppState>().setShowTrendCallout(v),
+              title: const Text('显示图内浮窗', style: TextStyle(fontSize: 14)),
+              subtitle: Text('关掉后图上只剩十字线，不再挡线',
+                  style: TextStyle(fontSize: 11, color: theme.hintColor)),
+            ),
             const SizedBox(height: 16),
 
             // 1) 自定义年化收益率
@@ -598,9 +628,8 @@ class _BenchmarkSheetState extends State<_BenchmarkSheet> {
             // **只列能提供历史行情的指数**：`em:` 前缀那几个（黄金9999 等）只有
             // 实时报价、没有历史 K 线通道，选来当基准会永远画不出曲线
             // （用户报「那个黄金就没有数据」）。
-            for (final m in MarketIndex.presets)
-              if (!m.code.startsWith('em:'))
-                ListTile(
+            for (final m in presets)
+              ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(

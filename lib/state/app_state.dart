@@ -634,6 +634,17 @@ class AppState extends ChangeNotifier {
   // ============================================================
 
   Benchmark benchmark = kDefaultBenchmark;
+
+  /// 趋势图里要不要显示图内浮窗（用户在「参考基准」面板里可关）
+  ///
+  /// 关掉后图上只剩十字线 + 下方刻度，不再有那个小卡片（用户嫌它挡线）。
+  bool showTrendCallout = true;
+
+  Future<void> setShowTrendCallout(bool v) async {
+    showTrendCallout = v;
+    await db.setSetting('showTrendCallout', v ? '1' : '0');
+    notifyListeners();
+  }
   RangePreset trendPreset = RangePreset.m6;
   DateTime? trendCustomStart;
   DateTime? trendCustomEnd;
@@ -746,7 +757,9 @@ class AppState extends ChangeNotifier {
         await db.setting('benchmarkIndexCode'),
         await db.setting('benchmarkIndexName'),
       );
-      await loadSecuritiesStats();
+      // 趋势图的图内浮窗开关（用户要求可在「参考基准」面板里关掉）
+    showTrendCallout = (await db.setting('showTrendCallout')) != '0';
+    await loadSecuritiesStats();
     } catch (e) {
       lastError = '本地数据加载失败：$e';
     } finally {

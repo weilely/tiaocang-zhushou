@@ -28,6 +28,9 @@ class ReturnsLineChart extends StatefulWidget {
   ///  选哪个在图上就把交叉点突出显示在哪条线上」。
   final bool refIsMarketIndex;
 
+  /// 要不要显示图内浮窗（用户在「参考基准」面板里可关；关掉只剩十字线）
+  final bool showCallout;
+
   /// 拖动/点击时回调当前活动的点下标（`null` = 松手）
   ///
   /// 浮动提示的文案由调用方渲染，所以把下标抛出去，避免这里备一套格式。
@@ -41,6 +44,7 @@ class ReturnsLineChart extends StatefulWidget {
     required this.refs,
     this.refs2 = const [],
     this.refIsMarketIndex = true,
+    this.showCallout = true,
     this.onActiveChanged,
     this.height = 168,
   });
@@ -160,7 +164,9 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
                   ),
                 ),
                 // 设计稿的浮动提示是**图内一个深色圆角浮层**，而不是图表上方一行文字
-                _Callout(
+                // （用户可在「参考基准」面板里关掉它）
+                if (widget.showCallout)
+                  _Callout(
                   left: geo.calloutLeft(active, count: widget.points.length),
                   top: geo.calloutTop(active, points: widget.points),
                   // 差值 = 账户(实际)收益 − **参考**收益（参考 = 当前选的那条：
