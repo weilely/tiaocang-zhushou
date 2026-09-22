@@ -226,13 +226,14 @@ class _TrendViewState extends State<_TrendView> {
     // **两条参考线同时画**：大盘收益（可切换）+ 预期收益（自定义年化，常显）
     final market = st.trendMarketRefPoints;
     final custom = st.trendCustomRefPoints;
+    // 选中点：图表默认高亮**最后一个点**，而且拖到"本来就是活动点"时不会回调
+    // （`_setActive` 提前 return），所以外层拿到的 `_active` 可能是 null ——
+    // **把 null 当作最后一个点**，才和图上高亮的那天一致（否则上方会显示成区间合计）
+    final selIdx = _active ?? (points.isEmpty ? null : points.length - 1);
     double? at(List<double?> s) =>
-        (_active != null && _active! < s.length) ? s[_active!] : null;
+        (selIdx != null && selIdx < s.length) ? s[selIdx] : null;
     // 图**上方**：点选取到的三组值（随取值变化）
-    final activeIdx = points.isEmpty
-        ? null
-        : (_active ?? points.length - 1).clamp(0, points.length - 1);
-    final actualAt = activeIdx == null ? null : points[activeIdx].pct;
+    final actualAt = selIdx == null ? null : points[selIdx].pct;
     final expectAt = at(custom) ?? st.trendCustomRefPct;
     final marketAt = at(market) ?? st.trendMarketRefPct;
     // 图**下方**：期末的三组值（不随点选变化）
@@ -270,6 +271,8 @@ class _TrendViewState extends State<_TrendView> {
             // refs = 大盘收益（可切换）；refs2 = 预期收益（自定义年化，一直显示）
             refs: market,
             refs2: custom,
+            // 「参考」就是基准设置里当前选的那条：大盘指数 or 预期收益
+            refIsMarketIndex: st.benchmark.kind == BenchmarkKind.marketIndex,
             onActiveChanged: (i) => setState(() => _active = i),
           ),
           const SizedBox(height: 10),

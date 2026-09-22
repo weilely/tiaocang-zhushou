@@ -21,6 +21,13 @@ class ReturnsLineChart extends StatefulWidget {
   /// 而 [refs] 那条大盘指标是可切换的）。同样与 [points] 等长。
   final List<double?> refs2;
 
+  /// **当前"参考"是哪一条**：true = 大盘（[refs]），false = 预期收益（[refs2]）
+  ///
+  /// 差值（账户收益 − 参考收益）与交叉点高亮都跟着它走 —— 用户口径：
+  /// 「差值 = 实际收益 − 参考收益，参考收益就是选择的预期收益或大盘指数，
+  ///  选哪个在图上就把交叉点突出显示在哪条线上」。
+  final bool refIsMarketIndex;
+
   /// 拖动/点击时回调当前活动的点下标（`null` = 松手）
   ///
   /// 浮动提示的文案由调用方渲染，所以把下标抛出去，避免这里备一套格式。
@@ -33,6 +40,7 @@ class ReturnsLineChart extends StatefulWidget {
     required this.points,
     required this.refs,
     this.refs2 = const [],
+    this.refIsMarketIndex = true,
     this.onActiveChanged,
     this.height = 168,
   });
@@ -80,6 +88,12 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
     widget.onActiveChanged?.call(idx);
   }
 
+  /// 参考线在该点的值 —— 取**当前选中的那条**（大盘 or 预期收益）
+  double? _refValueAt(int i) {
+    final s = widget.refIsMarketIndex ? widget.refs : widget.refs2;
+    return i < s.length ? s[i] : null;
+  }
+
   void _updateActive(Offset local, double width) {
     final n = widget.points.length;
     if (n < 2 || width <= 0) return;
@@ -114,6 +128,8 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
         );
         // 常显：始终有一个有效的高亮点（默认最后一个）
         final active = _active.clamp(0, widget.points.length - 1);
+        // 参考线在选中点的值（按"当前选中的那条"取），差值就用它
+        final refVal = _refValueAt(active);
 
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -132,6 +148,7 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
                       points: widget.points,
                       refs: widget.refs,
                       refs2: widget.refs2,
+                      refIsMarket: widget.refIsMarketIndex,
                       active: active,
                       mainColor: _mainColor,
                       refColor: _refColor,
@@ -146,11 +163,11 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
                 _Callout(
                   left: geo.calloutLeft(active, count: widget.points.length),
                   top: geo.calloutTop(active, points: widget.points),
-                  // 浮层只显示：账户收益 − 预期收益 的差值 + 点选日期
-                  diff: (active < widget.refs2.length &&
-                          widget.refs2[active] != null)
-                      ? widget.points[active].pct - widget.refs2[active]!
-                      : null,
+                  // 差值 = 账户(实际)收益 − **参考**收益（参考 = 当前选的那条：
+                  // 预期收益 或 大盘指数）
+                  diff: refVal == null
+                      ? null
+                      : widget.points[active].pct - refVal,
                   date: _shortDate(widget.points[active].date),
                 ),
               ],
@@ -168,6 +185,9 @@ class _ChartPainter extends CustomPainter {
 
   /// 第二条参考线（**自定义年化**，常显；颜色与 [refs] 区分）
   final List<double?> refs2;
+
+  /// 当前"参考"是哪一条（true = 大盘 / false = 预期收益）—— 交叉点高亮跟着它
+  final bool refIsMarket;
   final int? active;
   final Color mainColor;
   final Color refColor;
@@ -180,6 +200,7 @@ class _ChartPainter extends CustomPainter {
     required this.points,
     required this.refs,
     this.refs2 = const [],
+    this.refIsMarket = true,
     required this.active,
     required this.mainColor,
     required this.refColor,
@@ -318,9 +339,12 @@ class _ChartPainter extends CustomPainter {
         ..strokeWidth = 1.4
         ..style = PaintingStyle.stroke);
       // 基准线上也画一个点（设计稿里那个蓝点）
-      final rv = a < refs.length ? refs[a] : null;
+      final rv = refIsMarket ? (a < refs.length ? refs[a] : null) : (a < refs2.length ? refs2[a] : null);
       if (rv != null) {
-        canvas.drawCircle(Offset(x, yOf(rv)), 3, Paint()..color = refColor);
+        // **突出显示**选中的那条参考线：实心点 + 白色描边环，
+        // 3px 的裸点在任何线色上都看不清（用户要求"把交叉点突出显示"）
+        canvas.drawCircle(Offset(x, yOf(rv)), 5, Paint()..color = (refIsMarket ? refColor : ref2Color));
+        canvas.drawCircle(Offset(x, yOf(rv)), 5, Paint()..style = PaintingStyle.stroke..strokeWidth = 2..color = const Color(0xFFFFFFFF));
       }
     }
   }
@@ -478,18 +502,29 @@ class _Callout extends StatelessWidget {
       top: top,
       child: SizedBox(
         width: ChartGeometry.calloutWidth,
-        // 浮窗不做底色（叠在曲线上更轻）；字色跟着主题走，
-        // 深浅色主题下都协调，不再假死一块深灰。
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (diff != null) _line(context, '差值', diff!),
-            const SizedBox(height: 2),
-            Text(date,
-                style: TextStyle(
-                    fontSize: 11, color: Theme.of(context).hintColor)),
-          ],
+        // **半透明底色**：用户报"浮窗数据看不太清"——文字压在曲线上会糊，
+        // 所以给一层卡片色的半透明底 + 细边框（主题深浅色都跟着走）。
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor.withValues(alpha: 0.88),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: Theme.of(context).hintColor.withValues(alpha: 0.25),
+              width: 0.6,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (diff != null) _line(context, '差值', diff!),
+              const SizedBox(height: 2),
+              Text(date,
+                  style: TextStyle(
+                      fontSize: 11, color: Theme.of(context).hintColor)),
+            ],
+          ),
         ),
       ),
     );
