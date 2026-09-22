@@ -223,16 +223,22 @@ class _TrendViewState extends State<_TrendView> {
   Widget build(BuildContext context) {
     final st = context.watch<AppState>();
     final points = st.trendPoints;
-    // **两条参考线同时画**：大盘指标（可切换）+ 自定义年化（常显）—— 用户要求
+    // **两条参考线同时画**：大盘收益（可切换）+ 预期收益（自定义年化，常显）
     final market = st.trendMarketRefPoints;
     final custom = st.trendCustomRefPoints;
-    // 点选到某天时，三条线各自在该点的值；没点选/取不到就退回整段区间的值
     double? at(List<double?> s) =>
         (_active != null && _active! < s.length) ? s[_active!] : null;
+    // 图**上方**：点选取到的三组值（随取值变化）
+    final activeIdx = points.isEmpty
+        ? null
+        : (_active ?? points.length - 1).clamp(0, points.length - 1);
+    final actualAt = activeIdx == null ? null : points[activeIdx].pct;
+    final expectAt = at(custom) ?? st.trendCustomRefPct;
     final marketAt = at(market) ?? st.trendMarketRefPct;
-    final customAt = at(custom) ?? st.trendCustomRefPct;
-    // 实际收益 = 统计时段的累计收益（阶段收益），不随点选点变化
-    final stage = st.stagePct;
+    // 图**下方**：期末的三组值（不随点选变化）
+    final actualEnd = st.stagePct;
+    final expectEnd = st.trendCustomRefPct;
+    final marketEnd = st.trendMarketRefPct;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -256,59 +262,75 @@ class _TrendViewState extends State<_TrendView> {
         if (points.length < 2)
           _emptyHint(context, '该区间还没有净值数据，去关注页刷新净值')
         else ...[
-          // 拖动/点击图表显示竖直指示线与浮动提示，点选变化时刷新下方两行
+          // 图**上方**：点选取到的三组值 —— 拖动/点击时跟着变
+          _threeCols(actualAt, expectAt, marketAt),
+          const SizedBox(height: 8),
           ReturnsLineChart(
             points: points,
-            // refs = 大盘指标（可切换）；refs2 = 自定义年化（一直显示）
+            // refs = 大盘收益（可切换）；refs2 = 预期收益（自定义年化，一直显示）
             refs: market,
             refs2: custom,
             onActiveChanged: (i) => setState(() => _active = i),
           ),
           const SizedBox(height: 10),
-          // 图底部三行读数：实际收益（统计时段累计）、大盘（点选那天）、自定义年化
-          Row(
-            children: [
-              Expanded(child: _bottomPctRow('实际收益', stage)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _bottomPctRow('大盘', marketAt, dashed: true),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: _bottomPctRow(
-                  '自定义年化',
-                  customAt,
-                  dashed: true,
-                  dashColor: const Color(0xFFE8A33D),
-                ),
-              ),
-            ],
-          ),
+          // 图**下方**：期末的三组值 —— 不随点选变化；列顺序与上方一一对应
+          _threeCols(actualEnd, expectEnd, marketEnd),
         ],
       ],
     );
   }
 
-  /// 图底部一行：标签 + 涨跌色的百分比（[dashColor] 用于虚线段样本的颜色）
-  Widget _bottomPctRow(String label, double? value,
-      {bool dashed = false, Color dashColor = const Color(0xFF4A90D9)}) {
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        if (dashed) ...[
-          DashedLineSample(color: dashColor),
+  /// 三列读数：实际收益 / 预期收益 / 大盘收益
+  ///
+  /// **上下两行共用这一套列**，所以「图上方（点选，会变）」与
+  /// 「图下方（期末，不变）」的三组值位置一一对应（用户口径）。
+  Widget _threeCols(double? actual, double? expect, double? market) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: _valueCol('实际收益', actual)),
           const SizedBox(width: 6),
+          Expanded(
+            child: _valueCol('预期收益', expect,
+                dashColor: const Color(0xFFE8A33D)),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: _valueCol('大盘收益', market,
+                dashColor: const Color(0xFF4A90D9)),
+          ),
         ],
-        Text(label, style: TextStyle(fontSize: 12, color: theme.hintColor)),
-        const SizedBox(width: 6),
+      );
+
+  /// 一列读数：标签（带该线的虚线段样本）在上、数值在下
+  ///
+  /// 用竖排而不是"标签+数值横排"：用户手机字体调到「大」+ 窄屏，
+  /// 三组横排会挤爆；竖排三列还有余量。
+  Widget _valueCol(String label, double? value, {Color? dashColor}) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            if (dashColor != null) ...[
+              DashedLineSample(color: dashColor),
+              const SizedBox(width: 4),
+            ],
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: theme.hintColor),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 2),
         Text(
           value == null ? '--' : fmtPct(value),
           style: TextStyle(
-            fontSize: 13,
+            fontSize: 14,
             fontWeight: FontWeight.w700,
             color: value == null ? theme.hintColor : pnlColor(value),
           ),

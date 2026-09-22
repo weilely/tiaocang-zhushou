@@ -55,6 +55,10 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
 
   int get _lastIndex => widget.points.isEmpty ? 0 : widget.points.length - 1;
 
+  /// 浮层里的点选日期：`MM-dd`（年份在区间标签里已经有了，省宽度）
+  static String _shortDate(DateTime d) =>
+      '${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
   @override
   void didUpdateWidget(covariant ReturnsLineChart old) {
     super.didUpdateWidget(old);
@@ -142,16 +146,12 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
                 _Callout(
                   left: geo.calloutLeft(active, count: widget.points.length),
                   top: geo.calloutTop(active, points: widget.points),
-                  pct: widget.points[active].pct,
-                  // 三条线的读数：自定义年化（refs2）+ 大盘（refs）
-                  custom: active < widget.refs2.length
-                      ? widget.refs2[active]
+                  // 浮层只显示：账户收益 − 预期收益 的差值 + 点选日期
+                  diff: (active < widget.refs2.length &&
+                          widget.refs2[active] != null)
+                      ? widget.points[active].pct - widget.refs2[active]!
                       : null,
-                  market:
-                      active < widget.refs.length ? widget.refs[active] : null,
-                  diff: active < widget.refs.length && widget.refs[active] != null
-                      ? widget.points[active].pct - widget.refs[active]!
-                      : null,
+                  date: _shortDate(widget.points[active].date),
                 ),
               ],
             ),
@@ -450,30 +450,25 @@ class ChartGeometry {
   }
 }
 
-/// 图内浮层：**三条线的收益值**（实际 / 自定义年化 / 大盘指标）+ 实际−大盘 的差值
+/// 图内浮层：**只显示** 账户收益 − 预期收益 的**差值** + 点选日期（用户口径）
+///
+/// 三条线的具体数值不在这里显示 —— 点选那三个值放在**图上方**、期末三个值放在
+/// **图下方**（见 `returns_stats_card` 的趋势视图）。
 class _Callout extends StatelessWidget {
   final double left;
   final double top;
 
-  /// 实际（本组合）
-  final double pct;
-
-  /// 自定义年化那条线在该点的值（没有则为 null）
-  final double? custom;
-
-  /// 大盘指标那条线在该点的值（没有则为 null）
-  final double? market;
-
-  /// 实际 − 大盘 的差值（没有大盘线时为 null）
+  /// 账户（实际）收益 − 预期收益 的差值；null 表示取不到
   final double? diff;
+
+  /// 点选日期（已格式化，如 `09-21`）
+  final String date;
 
   const _Callout({
     required this.left,
     required this.top,
-    required this.pct,
-    this.custom,
-    this.market,
     required this.diff,
+    required this.date,
   });
 
   @override
@@ -489,19 +484,11 @@ class _Callout extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _line(context, '实际', pct),
-            if (custom != null) ...[
-              const SizedBox(height: 2),
-              _line(context, '自定义', custom!),
-            ],
-            if (market != null) ...[
-              const SizedBox(height: 2),
-              _line(context, '大盘', market!),
-            ],
-            if (diff != null) ...[
-              const SizedBox(height: 2),
-              _line(context, '差值', diff!),
-            ],
+            if (diff != null) _line(context, '差值', diff!),
+            const SizedBox(height: 2),
+            Text(date,
+                style: TextStyle(
+                    fontSize: 11, color: Theme.of(context).hintColor)),
           ],
         ),
       ),
