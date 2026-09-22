@@ -27,11 +27,19 @@ class FundProfilePage extends StatefulWidget {
   /// 标的类型：决定 thscode 用 `.OF` 还是市场后缀
   final AssetKind kind;
 
+  /// 取数函数（默认走 `AppState.loadFundDetail`）
+  ///
+  /// 留一个注入口是为了**能单测这一页的版式与各种状态**：正常、没重仓股、
+  /// 没分红、接口挂了、没配 Key —— 这些状态真实环境里很难凑齐，
+  /// 而 widget 测试里没有 sqflite/网络，直接读 AppState 会炸。
+  final Future<FundDetailBundle> Function(bool force)? loader;
+
   const FundProfilePage({
     super.key,
     required this.code,
     required this.name,
     required this.kind,
+    this.loader,
   });
 
   @override
@@ -58,9 +66,12 @@ class _FundProfilePageState extends State<FundProfilePage> {
       _error = null;
     });
     try {
-      final b = await context
-          .read<AppState>()
-          .loadFundDetail(widget.code, otc: _otc, force: force);
+      final loader = widget.loader;
+      final b = await (loader != null
+          ? loader(force)
+          : context
+              .read<AppState>()
+              .loadFundDetail(widget.code, otc: _otc, force: force));
       if (!mounted) return;
       setState(() {
         _bundle = b;
