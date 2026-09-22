@@ -236,6 +236,9 @@ class _TrendViewState extends State<_TrendView> {
     final actualAt = selIdx == null ? null : points[selIdx].pct;
     final expectAt = at(custom) ?? st.trendCustomRefPct;
     final marketAt = at(market) ?? st.trendMarketRefPct;
+    // "参考"就是**当前选中的那条**（大盘 or 预期）—— 差值按它算
+    final refSelAt =
+        (st.benchmark.kind == BenchmarkKind.marketIndex) ? marketAt : expectAt;
     // 图**下方**：期末的三组值（不随点选变化）
     final actualEnd = st.stagePct;
     final expectEnd = st.trendCustomRefPct;
@@ -257,6 +260,10 @@ class _TrendViewState extends State<_TrendView> {
           // 框里显示的是**本区间折算后**的参考收益率（= 年化 × 天数 ÷ 365）
           refPct: st.trendRefPct,
           rangeLabel: st.trendPreset.label,
+          // 变化的差值：实际 − 参考（参考 = 当前选中的那条：预期收益 or 大盘）
+          diff: (actualAt != null && refSelAt != null)
+              ? actualAt - refSelAt
+              : null,
           onTap: () => _pickBenchmark(context, st),
         ),
         const SizedBox(height: 12),
@@ -402,11 +409,15 @@ class _BenchmarkRow extends StatelessWidget {
   final String rangeLabel;
   final VoidCallback onTap;
 
+  /// **变化的差值**：实际收益 − 参考收益（跟着点选走；null = 取不到）
+  final double? diff;
+
   const _BenchmarkRow({
     required this.benchmark,
     required this.refPct,
     required this.rangeLabel,
     required this.onTap,
+    this.diff,
   });
 
   @override
@@ -457,6 +468,19 @@ class _BenchmarkRow extends StatelessWidget {
         if (custom) ...[
           const SizedBox(width: 8),
           Text('%', style: TextStyle(fontSize: 14, color: theme.hintColor)),
+        ],
+        // **变化的差值**（跟着点选走）：实际 − 参考
+        // —— 用户口径「实际-参考=（数值）」
+        if (diff != null) ...[
+          const SizedBox(width: 10),
+          Text('实际-参考=',
+              style: TextStyle(fontSize: 12, color: theme.hintColor)),
+          const SizedBox(width: 2),
+          Text(fmtPct(diff!),
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: pnlColor(diff!))),
         ],
         const Spacer(),
       ],
