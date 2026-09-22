@@ -1065,6 +1065,9 @@ class AppState extends ChangeNotifier {
   /// 长窗口（蛋卷给的）PE 分位 0~1，取不到为 null
   double? macroPePercentileLong;
 
+  /// 上面那个长窗口分位的**窗口起点**（界面上要标出"这个分位覆盖多久"）
+  DateTime? macroPeWindowStart;
+
   /// 上次取数失败的原因（成功则清空）
   String? macroError;
 
@@ -1129,6 +1132,7 @@ class AppState extends ChangeNotifier {
         erp: p.erp,
       ));
       macroPePercentileLong = p.pePercentileLong;
+      macroPeWindowStart = p.peWindowStart;
       macroError = null;
       await loadMacroHistory();
     } catch (e) {

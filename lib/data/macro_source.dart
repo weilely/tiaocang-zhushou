@@ -32,12 +32,16 @@ class MacroPoint {
   /// 蛋卷给的**长窗口** PE 分位（0~1），取不到为 null
   final double? pePercentileLong;
 
+  /// 上面那个长窗口分位的**窗口起点**（界面上要标出来，别让人当成长周期分位）
+  final DateTime? peWindowStart;
+
   const MacroPoint({
     required this.date,
     required this.hs300Pe,
     required this.cn10y,
     required this.erp,
     this.pePercentileLong,
+    this.peWindowStart,
   });
 
   /// 盈利收益率（%）= 1/PE
@@ -58,7 +62,8 @@ Future<MacroPoint?> fetchMacroPoint({
     hs300Pe: pe.value,
     cn10y: bond.value,
     erp: ey - bond.value,
-    pePercentileLong: pct,
+    pePercentileLong: pct?.$1,
+    peWindowStart: pct?.$2,
   );
 }
 
@@ -135,7 +140,10 @@ Future<DatedValue?> fetchCn10y({
 /// 沪深300 **长窗口** PE 分位（0~1）—— 蛋卷；取不到返回 null
 ///
 /// 本地累积的历史还短，这个长窗口分位能补上"当前贵不贵"的参照。
-Future<double?> fetchHs300PePercentile({
+/// 返回的第二个值是该分位的**窗口起点**（蛋卷响应里的 `begin_at`）——
+/// 界面上必须把"这个分位是多久的"写出来（实测 2026-09-22 时 `begin_at`
+/// = 2016-06-15，即约 10 年，正好是用户要的"10 年口径"）。
+Future<(double percentile, DateTime? windowStart)?> fetchHs300PePercentile({
   String symbol = 'SH000300',
   Duration timeout = const Duration(seconds: 12),
 }) async {
@@ -151,7 +159,14 @@ Future<double?> fetchHs300PePercentile({
     final raw = data['pe_percentile'];
     final v = raw is num ? raw.toDouble() : double.tryParse('$raw');
     if (v == null || v < 0 || v > 1) return null;
-    return v;
+    final begin = data['begin_at'];
+    final ms = begin is num ? begin.toInt() : int.tryParse('$begin');
+    return (
+      v,
+      ms == null || ms <= 0
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(ms),
+    );
   } catch (_) {
     return null;
   }

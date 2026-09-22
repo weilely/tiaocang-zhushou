@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/db.dart';
+import '../../logic/macro_allocation.dart';
 import '../../state/app_state.dart';
 
 /// 「市场估值」卡片：股债利差 + 沪深300 PE + 10年国债 + 历史分位
@@ -146,8 +147,7 @@ class _MacroCardState extends State<MacroCard> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
                 child: Text(
-                  '利差 = 沪深300盈利收益率(1/PE) − 10年国债收益率；'
-                  '越大说明股票相对债券越便宜。仅为市场估值参考，不构成投资建议。',
+                  _explain(st),
                   style: TextStyle(
                       fontSize: 10, color: theme.hintColor, height: 1.5),
                 ),
@@ -157,6 +157,38 @@ class _MacroCardState extends State<MacroCard> {
         ),
       ),
     );
+  }
+
+  /// 展开后的说明文字：利差口径 + **按 10 年分位折算的股债比** + 免责
+  ///
+  /// 股债比是用户 2026-09-22 要的（**10 年口径**）：用「沪深300 PE 长周期分位」
+  /// （蛋卷长窗口，周频、约 10 年、500+ 个点）折算 —— 它是当前**唯一真正覆盖
+  /// 10 年**的分位来源。
+  ///
+  /// ⚠️ 为什么不是"利差自己的 10 年分位"：那需要 10 年的 10 年期国债收益率序列，
+  /// 而免费可得的两条路都断了 —— 东财 `171.CN10Y` 的 K 线**硬性从 2023-05-08 起**，
+  /// 中债（ChinaBond）的 `queryYz` 历史序列接口**没能打通**（返回值恒为空数组）。
+  /// 所以这里降级成"PE 长周期分位"，**并且把用的是哪个口径写在脸上**，不混着说。
+  /// 口径链：长周期分位（10 年）→ 本地利差分位（样本天数）→ 不折算。
+  String _explain(AppState st) {
+    final buf = StringBuffer(
+        '利差 = 沪深300盈利收益率(1/PE) − 10年国债收益率；越大说明股票相对债券越便宜。');
+
+    final lp = st.macroPePercentileLong;
+    final ep = st.macroErpPercentile;
+    if (lp != null) {
+      final win = _ym(st.macroPeWindowStart);
+      buf.write('按沪深300 PE 长窗口分位${win.isEmpty ? '' : '（$win 起）'}折算：'
+          '${equityBondSplitText(lp)}'
+          '（＝分位×100 给权益、其余给债券，纯机械折算）。');
+    } else if (ep != null) {
+      buf.write('长周期分位暂时取不到，改用本地利差分位（${st.macroHistory.length} 天）折算：'
+          '${equityBondSplitText(ep)}（纯机械折算）。');
+    } else {
+      buf.write('分位样本不足，暂不折算股债比。');
+    }
+    buf.write('仅为市场估值参考，不构成投资建议。');
+    return buf.toString();
   }
 
   /// 副标题：分位 + **样本区间**（必须写年限，否则容易被当成长周期分位）
@@ -171,10 +203,17 @@ class _MacroCardState extends State<MacroCard> {
     }
     final lp = st.macroPePercentileLong;
     if (lp != null) {
-      parts.add('沪深300 PE 长周期分位 ${(lp * 100).toStringAsFixed(0)}%');
+      final win = _ym(st.macroPeWindowStart);
+      parts.add('沪深300 PE 长窗口分位 ${(lp * 100).toStringAsFixed(0)}%'
+          '${win.isEmpty ? '' : '（$win 起）'}');
     }
     return parts.join('　·　');
   }
+
+  /// `2016-06`；拿不到就空串（宁可不写，也不写个猜的年份）
+  static String _ym(DateTime? d) => d == null
+      ? ''
+      : '${d.year}-${d.month.toString().padLeft(2, '0')}';
 }
 
 /// 股债利差历史曲线（自绘，单序列 + 中位参考线）
