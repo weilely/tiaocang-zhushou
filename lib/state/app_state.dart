@@ -1507,6 +1507,118 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 按推荐方式给一个诊断结果补记一笔（**写库**；用户 2026-09-22 授权"按推荐方式补记"）
+  ///
+  /// - 只对 `missing` / `mismatch` 生效：`ledgerShort` 要先把更早的补上才算得清，
+  ///   `notHeld` / `split` 一律不动（拆分是份额的事，得他自己核）。
+  /// - **幂等**：备注与 `runAutoDividends` 完全一致（`红利再投 <除息日>` /
+  ///   `分红自动 <除息日>`）。
+  /// - **可修正**：如果同备注的那笔已经存在、但金额/份额对不上（比如"先补的那笔
+  ///   改变了后面这笔的持有份额"），就**就地改成刚算出来的值**；备注是另一种方式的
+  ///   绝不混改（只动 App 自己写的那些备注）。
+  /// - 红利再投**不产生现金流水**（`saveTxnNoCash`），现金分红走 `saveTxnAndLinkedCash`。
+  Future<bool> applyDividendFix(DivCheckRow row, String mode) async {
+    if (row.status != DivCheckStatus.missing &&
+        row.status != DivCheckStatus.mismatch) {
+      return false;
+    }
+    if (row.expectAmount < kMinFixAmount) return false;
+    final asset = assetsById[row.assetId];
+    final d = DateTime.tryParse(row.event.date);
+    if (asset == null || d == null) return false;
+
+    final cashNote = '分红自动 ${row.event.date}';
+    final reinNote = '${Txn.reinvestNote} ${row.event.date}';
+    // App 自己写过的那些记录（同账户同标的同备注）
+    final existing = txns.where((t) =>
+        t.assetId == row.assetId &&
+        t.accountId == row.accountId &&
+        (t.note == cashNote || t.note == reinNote));
+    final hit = existing.isEmpty ? null : existing.first;
+
+    if (hit != null) {
+      // 已经记对了就别动
+      final isReinvest = hit.note == reinNote;
+      final wantReinvest = mode == DividendMode.reinvest;
+      if (isReinvest != wantReinvest) return false; // 方式不同：不混改
+      final wantShares = wantReinvest
+          ? roundDcaShares(row.expectAmount / row.event.nav, asset.kind)
+          : 0.0;
+      if (closeEnough(hit.amount, row.expectAmount) &&
+          (!wantReinvest || closeEnough(hit.shares, wantShares))) {
+        return false;
+      }
+      // 就地修正（只改我们自己的自动记录）
+      hit.amount = row.expectAmount;
+      hit.price = wantReinvest ? row.event.nav : 0;
+      hit.shares = wantShares;
+      await db.saveTxn(hit);
+      txns = await db.txns();
+      _recompute();
+      notifyListeners();
+      return true;
+    }
+
+    if (mode == DividendMode.cash) {
+      await saveTxnAndLinkedCash(Txn(
+        accountId: row.accountId,
+        assetId: row.assetId,
+        type: TxnType.dividend,
+        date: d,
+        amount: row.expectAmount,
+        note: cashNote,
+      ));
+    } else if (mode == DividendMode.reinvest) {
+      final navP = row.event.nav;
+      if (navP <= 0) return false;
+      final sh = roundDcaShares(row.expectAmount / navP, asset.kind);
+      if (sh <= 0) return false;
+      await saveTxnNoCash(Txn(
+        accountId: row.accountId,
+        assetId: row.assetId,
+        type: TxnType.buy,
+        date: d,
+        amount: row.expectAmount,
+        shares: sh,
+        price: navP,
+        note: reinNote,
+      ));
+    } else {
+      return false;
+    }
+    txns = await db.txns();
+    cashTxns = await db.cashTxns();
+    _recompute();
+    notifyListeners();
+    return true;
+  }
+
+  /// 按推荐方式**批量补记**：**每写一笔就重新诊断一次**，永远从最早的那笔开始
+  ///
+  /// 为什么必须逐笔重算（2026-09-22 踩过）：先补的分红会**增加后面的持有份额**，
+  /// 一次性算好的"应得金额"到写的时候就已经过时了 —— 实测 501029 的 05-28 那笔
+  /// 因此少记了 1.32 元，复核时被打成「对不上」。
+  /// 分轮也没用：下一轮会被"同备注已存在"挡住。所以边写边重算，
+  /// 并且**从最早的开始**（先补早期缺记，账本份额才正确，后面的才算得出来）。
+  Future<int> applyAllDividendFixes() async {
+    var written = 0;
+    for (var i = 0; i < 40; i++) {
+      final rows = await diagnoseDividends();
+      final todo = [
+        for (final r in rows)
+          if ((r.status == DivCheckStatus.missing ||
+                  r.status == DivCheckStatus.mismatch) &&
+              r.expectAmount >= kMinFixAmount)
+            r
+      ]..sort((a, b) => a.date.compareTo(b.date));
+      if (todo.isEmpty) break;
+      final ok = await applyDividendFix(todo.first, recommendedModeFor(todo.first));
+      if (!ok) break; // 防死循环：算得出来却写不进去就停下
+      written++;
+    }
+    return written;
+  }
+
   /// 分红核对（**只诊断，不写库**）
   ///
   /// 把每只标的「净值里能看见的分红/拆分事件」逐个对到账本上：

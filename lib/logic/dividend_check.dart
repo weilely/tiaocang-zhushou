@@ -209,6 +209,23 @@ bool closeEnough(double a, double b) {
   return diff <= 0.02 || diff <= math.max(a.abs(), b.abs()) * 0.005;
 }
 
+/// 值得补记的最小金额（元）
+///
+/// 低于这个数不列、也不补：卖出后剩下的零头份额（如 0.9 份）会造出"1 分钱分红",
+/// 补进账本只会制造噪声。
+const double kMinFixAmount = 1.0;
+
+/// 补记时该用哪种方式（用户 2026-09-22 拍板："**按推荐方式补记**"）
+///
+/// - 这次分红**在分红方式生效日之后** → 就用设置里那个方式（他明确定过的）
+/// - 否则一律 **红利再投**：依据是他自己账本里那 15 笔手记「再投」
+///   （说明他历史上就是按再投处理的），而且再投**不动现金、只补份额**，
+///   正好修掉"份额短缺 → 卖超 → 假警告"这个真问题。
+String recommendedModeFor(DivCheckRow row) {
+  if (row.modeApplies && DividendMode.isValid(row.mode)) return row.mode;
+  return DividendMode.reinvest;
+}
+
 /// 把一只标的（某账户）的净值事件对到账本上（**纯函数，不写库**）
 List<DivCheckRow> checkDividends({
   required String code,
@@ -275,6 +292,9 @@ List<DivCheckRow> checkDividends({
         );
 
     if (before < -1e-6) {
+      // 残份额噪声（|份额| 不到 1 股）：卖出后剩下的零头，多半是份额取整留下的，
+      // 列出来只会干扰（应得金额也就几分钱）—— 直接不列。
+      if (before > -1) continue;
       // 账本份额为负 = 卖得比买的多 —— 典型是前面的红利再投没记份额，
       // 这种"应得多少"根本算不出来（份额本身是错的），只能先补前面的缺记。
       out.add(row(status: DivCheckStatus.ledgerShort));
@@ -284,6 +304,10 @@ List<DivCheckRow> checkDividends({
       out.add(row(status: DivCheckStatus.notHeld));
       continue;
     }
+
+    // 残份额（比如卖出后剩 0.9 份）会造出分币级的分红：列出来只是噪声，
+    // 补进账本更没意义 —— 直接不列（阈值见 [kMinFixAmount]）。
+    if (!e.isSplit && e.perShare * before < kMinFixAmount) continue;
 
     if (e.isSplit) {
       // 拆分不是钱的事：份额应变成 shares × 系数

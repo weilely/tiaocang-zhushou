@@ -24,7 +24,74 @@ class DividendCheckPage extends StatefulWidget {
 class _DividendCheckPageState extends State<DividendCheckPage> {
   List<DivCheckRow>? _rows;
   bool _loading = true;
+  bool _busy = false;
   String? _error;
+
+  /// 这一行能不能补：缺记/对不上、且金额够大（分币级的不补）
+  static bool _fixable(DivCheckRow r) =>
+      (r.status == DivCheckStatus.missing ||
+          r.status == DivCheckStatus.mismatch) &&
+      r.expectAmount >= kMinFixAmount;
+
+  /// 按推荐方式批量补记（会写库，先弹确认）
+  Future<void> _applyAll() async {
+    final rows = _rows ?? const <DivCheckRow>[];
+    final fixable = [for (final r in rows) if (_fixable(r)) r];
+    if (fixable.isEmpty) return;
+    final st = context.read<AppState>();
+    final total = fixable.fold<double>(0, (s, r) => s + r.expectAmount);
+    final rein =
+        fixable.where((r) => recommendedModeFor(r) == DividendMode.reinvest).length;
+
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('按推荐方式补记？'),
+        content: Text(
+          '将写入你的账本：共 ${fixable.length} 笔，合计 ¥${fmtMoney(total)}。\n\n'
+          '方式：红利再投 $rein 笔'
+          '${rein == fixable.length ? '' : '，现金分红 ${fixable.length - rein} 笔'}'
+          '（再投只加份额、不动现金）。\n\n'
+          '补记后用日期+备注就能对上，同一笔不会重复记；'
+          '记完会重新诊断一次，你可以在这一页核对。',
+          style: const TextStyle(height: 1.6),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('先不补')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('补记')),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+
+    setState(() => _busy = true);
+    final n = await st.applyAllDividendFixes();
+    if (!mounted) return;
+    await _run();
+    if (!mounted) return;
+    setState(() => _busy = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(n > 0 ? '已补记 $n 笔' : '没有需要补的（可能已经记过）')),
+    );
+  }
+
+  /// 单笔补记
+  Future<void> _applyOne(DivCheckRow r, String mode) async {
+    final st = context.read<AppState>();
+    setState(() => _busy = true);
+    final ok = await st.applyDividendFix(r, mode);
+    if (!mounted) return;
+    await _run();
+    if (!mounted) return;
+    setState(() => _busy = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(ok ? '已按${DividendMode.label(mode)}补记' : '这笔没补（已记过或不适用）')),
+    );
+  }
 
   @override
   void initState() {
@@ -110,7 +177,7 @@ class _DividendCheckPageState extends State<DividendCheckPage> {
     );
   }
 
-  /// 汇总：几件与你有份、其中多少已记/缺记/对不上/账本负份额
+  /// 汇总 + 「按推荐方式补记」入口
   Widget _summary(BuildContext context, List<DivCheckRow> rows) {
     final held = [for (final r in rows) if (r.status != DivCheckStatus.notHeld) r];
     int n(DivCheckStatus s) => held.where((r) => r.status == s).length;
@@ -118,11 +185,14 @@ class _DividendCheckPageState extends State<DividendCheckPage> {
     final mismatch = n(DivCheckStatus.mismatch);
     final split = n(DivCheckStatus.split);
     final short = n(DivCheckStatus.ledgerShort);
+    final fixable = [for (final r in rows) if (_fixable(r)) r];
+    final total = fixable.fold<double>(0, (s, r) => s + r.expectAmount);
+    final theme = Theme.of(context);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       elevation: 0,
-      color: Theme.of(context).cardColor,
+      color: theme.cardColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -139,7 +209,7 @@ class _DividendCheckPageState extends State<DividendCheckPage> {
               '　·　对不上 $mismatch'
               '${short > 0 ? '　·　账本份额为负 $short' : ''}'
               '${split > 0 ? '　·　拆分提示 $split' : ''}',
-              style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
+              style: TextStyle(fontSize: 12, color: theme.hintColor),
             ),
             if (short > 0) ...[
               const SizedBox(height: 6),
@@ -152,14 +222,28 @@ class _DividendCheckPageState extends State<DividendCheckPage> {
                     height: 1.5),
               ),
             ],
-            if (missing > 0 || mismatch > 0) ...[
+            if (fixable.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                onPressed: _busy ? null : _applyAll,
+                icon: _busy
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.playlist_add_check, size: 18),
+                label: Text('按推荐方式补记（${fixable.length} 笔 · ¥${fmtMoney(total)}）'),
+              ),
               const SizedBox(height: 6),
               Text(
-                '缺记/对不上的先别急着补 —— 这一版只诊断，'
-                '下一步会逐笔让你确认补成「现金分红」还是「红利再投」。',
-                style: TextStyle(
-                    fontSize: 11, color: Theme.of(context).hintColor, height: 1.5),
+                '推荐＝红利再投（你历史那 15 笔手记「再投」就是这么处理的；'
+                '再投只加份额、不动现金）。也可以逐笔改用现金，见每张卡片。',
+                style: TextStyle(fontSize: 11, color: theme.hintColor, height: 1.5),
               ),
+            ] else ...[
+              const SizedBox(height: 6),
+              Text('没有需要补记的了 ✓',
+                  style: TextStyle(fontSize: 11, color: theme.hintColor)),
             ],
           ],
         ),
@@ -243,9 +327,8 @@ class _DividendCheckPageState extends State<DividendCheckPage> {
                         '${r.suggestedMode.isEmpty ? '；当时的分红方式已无从考证，补记方式要你定' : '；按当前设置建议补成${DividendMode.label(r.suggestedMode)}'}',
                   DivCheckStatus.mismatch => '账本里那笔与理论值差得多，先核对一下',
                   _ => '账本里这时是负份额：说明前面有红利再投没记份额。'
-                      '先补前面的缺记（比如这只基金少的就是 '
-                      '${fmtShares(r.shares.abs())} 份），这笔才核算得清。'
-                      '这一版只诊断，不会替你改账。',
+                      '先补前面那些缺记（比如这只基金少的就是 '
+                      '${fmtShares(r.shares.abs())} 份），补完会自动重新核对，这笔才核算得清。',
                 },
                 style: TextStyle(
                     fontSize: 11, color: theme.hintColor, height: 1.5),
@@ -277,6 +360,38 @@ class _DividendCheckPageState extends State<DividendCheckPage> {
                   style: TextStyle(
                       fontSize: 11, color: theme.hintColor, height: 1.5)),
             ],
+            if (_fixable(r)) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  if (recommendedModeFor(r) == DividendMode.reinvest) ...[
+                    FilledButton.tonal(
+                      onPressed:
+                          _busy ? null : () => _applyOne(r, DividendMode.reinvest),
+                      child: const Text('按再投补记（推荐）'),
+                    ),
+                    OutlinedButton(
+                      onPressed:
+                          _busy ? null : () => _applyOne(r, DividendMode.cash),
+                      child: const Text('按现金补记'),
+                    ),
+                  ] else ...[
+                    FilledButton.tonal(
+                      onPressed:
+                          _busy ? null : () => _applyOne(r, DividendMode.cash),
+                      child: const Text('按现金补记（推荐）'),
+                    ),
+                    OutlinedButton(
+                      onPressed:
+                          _busy ? null : () => _applyOne(r, DividendMode.reinvest),
+                      child: const Text('按再投补记'),
+                    ),
+                  ],
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -307,7 +422,8 @@ class _DividendCheckPageState extends State<DividendCheckPage> {
     return Text(
       '事件来自东财的净值与累计净值（每份分红 = 当天「累计净值 − 单位净值」的增量；'
       '拆分 = 折算系数）。与同花顺分红表的交叉核对见各基金的档案页。\n'
-      '本次只诊断、没有写入任何数据。',
+      '补记按「推荐方式」（红利再投：只加份额、不动现金）写入，'
+      '备注带日期因而**不会重复记**；不到 ¥1 的分红不补（残份额造成的分币级事件）。',
       style: TextStyle(
           fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
     );

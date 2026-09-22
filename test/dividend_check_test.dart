@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/data/nav_models.dart';
+import 'package:invest_tracker/logic/dividend.dart';
 import 'package:invest_tracker/logic/dividend_check.dart';
 
 /// 分红核对的纯逻辑：**从净值提炼事件** + **对到账本上**
@@ -276,6 +277,61 @@ void main() {
       expect(closeEnough(80.0, 80.02), isTrue);
       expect(closeEnough(80.0, 82.0), isFalse);
       expect(closeEnough(10000, 10030), isTrue, reason: '0.3% 在容差内');
+    });
+
+    test('残份额造成的分币级分红不列（低于 ¥1 直接跳过）', () {
+      final rows = checkDividends(
+        code: '020602',
+        assetName: 'x',
+        accountName: '账户A',
+        accountId: 1,
+        assetId: 9,
+        navs: [
+          nav('2026-09-09', 1.07, 1.08),
+          nav('2026-09-10', 1.06, 1.08, '分红：每份派现金0.011元'),
+        ],
+        // 卖出后只剩 0.92 份 → 应得 0.01 元，纯噪声
+        txns: [
+          txn(TxnType.buy, '2026-01-05', 36500, shares: 34106.85),
+          txn(TxnType.sell, '2026-06-01', 36000, shares: 34105.93),
+        ],
+      );
+      expect(rows, isEmpty);
+    });
+  });
+
+  group('recommendedModeFor：补记用哪种方式（用户拍板"按推荐方式补记"）', () {
+    DivCheckRow row({String mode = '', DateTime? from}) => checkDividends(
+          code: '024564',
+          assetName: 'x',
+          accountName: '账户A',
+          accountId: 1,
+          assetId: 9,
+          navs: [
+            nav('2026-07-13', 0.9713, 0.9813),
+            nav('2026-07-14', 0.9633, 0.9813, '分红：每份派现金0.008元'),
+          ],
+          txns: [txn(TxnType.buy, '2026-01-05', 10000, shares: 10000)],
+          mode: mode,
+          modeFrom: from,
+        ).single;
+
+    test('没设过分红方式（历史方式未知）→ 推荐红利再投', () {
+      expect(recommendedModeFor(row()), DividendMode.reinvest);
+    });
+
+    test('设置生效日在这次分红之后 → 仍然推荐红利再投（不拿当前设置套历史）', () {
+      expect(recommendedModeFor(row(mode: 'cash', from: DateTime.parse('2026-09-01'))),
+          DividendMode.reinvest);
+    });
+
+    test('设置生效日在这次分红之前 → 就用他明确定的方式', () {
+      expect(recommendedModeFor(row(mode: 'cash', from: DateTime.parse('2026-06-01'))),
+          DividendMode.cash);
+      expect(
+          recommendedModeFor(
+              row(mode: 'reinvest', from: DateTime.parse('2026-06-01'))),
+          DividendMode.reinvest);
     });
   });
 }
