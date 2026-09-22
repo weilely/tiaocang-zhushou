@@ -14,6 +14,7 @@ import '../data/nav_models.dart';
 import '../logic/backup.dart';
 import '../state/app_state.dart';
 import 'all_txns_page.dart';
+import 'dividend_check_page.dart';
 import 'widgets/common.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -474,6 +475,27 @@ class _SettingsPageState extends State<SettingsPage> {
                   style: TextStyle(
                       fontSize: 11, color: Theme.of(context).hintColor)),
             ),
+          const Divider(height: 16),
+          _groupHeader(context, '分红核对'),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              '拿净值与累计净值里的分红/拆分事件，逐个对到你的账本上'
+              '（只诊断、不写数据）',
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: const Icon(Icons.rule_folder_outlined, size: 20),
+            title: const Text('分红核对（只诊断）', style: TextStyle(fontSize: 14)),
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const DividendCheckPage()),
+            ),
+          ),
           const Divider(height: 16),
           _groupHeader(context, '基础数据库'),
           Padding(

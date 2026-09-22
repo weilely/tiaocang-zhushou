@@ -28,6 +28,7 @@ import '../logic/cash_flow.dart';
 import '../logic/csv_io.dart';
 import '../logic/dca.dart';
 import '../logic/dividend.dart';
+import '../logic/dividend_check.dart';
 import '../logic/link_etf.dart';
 import '../logic/nav_lookup.dart';
 import '../logic/period_return.dart';
@@ -1504,6 +1505,50 @@ class AppState extends ChangeNotifier {
           '分红方式：${DividendMode.label(mode)}（自 ${_dayKey(from)} 起自动补记）';
     }
     notifyListeners();
+  }
+
+  /// 分红核对（**只诊断，不写库**）
+  ///
+  /// 把每只标的「净值里能看见的分红/拆分事件」逐个对到账本上：
+  /// 已记（现金/再投）、该记没记、记了但对不上、与你无关、拆分提示。
+  /// 用户 2026-09-22 定的顺序是**先诊断、后逐笔补记** —— 所以这里绝不写库：
+  /// 中途改过分红方式时，"当时该记什么"不能拿当前设置反推，只能让他逐笔认。
+  Future<List<DivCheckRow>> diagnoseDividends() async {
+    final rows = <DivCheckRow>[];
+    for (final p in allPositions) {
+      final a = p.asset;
+      final id = a.id;
+      if (id == null) continue;
+      final navs = await db.navHistory(a.code);
+      if (navs.isEmpty) continue;
+      rows.addAll(checkDividends(
+        code: a.code,
+        assetName: a.name.isEmpty ? a.code : a.name,
+        accountName: accountsById[p.accountId]?.name ?? '未命名账户',
+        accountId: p.accountId,
+        assetId: id,
+        navs: navs,
+        txns: p.txns,
+        mode: dividendModeOf(a.code),
+        modeFrom: dividendModeFrom(a.code),
+      ));
+    }
+    // 要处理的排前面（账本负份额 > 缺记 > 对不上 > 拆分提示），同档按日期新→旧；
+    // "已记 / 与你无关"垫底 —— 用户是来看"哪里有问题的"，不是来翻流水。
+    int rank(DivCheckStatus s) => switch (s) {
+          DivCheckStatus.ledgerShort => 0,
+          DivCheckStatus.missing => 1,
+          DivCheckStatus.mismatch => 2,
+          DivCheckStatus.split => 3,
+          DivCheckStatus.reinvestRecorded => 4,
+          DivCheckStatus.cashRecorded => 5,
+          DivCheckStatus.notHeld => 6,
+        };
+    rows.sort((x, y) {
+      final c = rank(x.status).compareTo(rank(y.status));
+      return c != 0 ? c : y.date.compareTo(x.date);
+    });
+    return rows;
   }
 
   /// 某笔持仓在 [d] 当天持有的份额（只按流水推：买入加、卖出减）
