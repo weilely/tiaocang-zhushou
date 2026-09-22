@@ -201,4 +201,77 @@ void main() {
       src.dispose();
     });
   });
+
+  group('今年以来收益率序列（持仓卡片那条迷你曲线）', () {
+    test('基准取年初之前最近的一条，年内每个点算相对它的收益', () {
+      final s = ytdReturnSeries([
+        p('2025-12-30', 1.00),
+        p('2026-01-05', 1.10), // 相对 12-30：+10%
+        p('2026-06-30', 1.20), // +20%
+        p('2026-09-11', 0.90), // −10%
+      ], year: 2026)!;
+      expect(s.startDate, '2025-12-30');
+      expect(s.values.first, closeTo(10, 1e-9));
+      expect(s.values[1], closeTo(20, 1e-9));
+      expect(s.values.last, closeTo(-10, 1e-9));
+    });
+
+    test('优先累计净值（分红再投资口径，与区间收益一致）', () {
+      final s = ytdReturnSeries([
+        p('2025-12-31', 1.00, acc: 2.00),
+        p('2026-03-31', 1.05, acc: 2.10), // 单位净值没动，累计净值 +5%
+        p('2026-06-30', 1.05, acc: 2.20), // 用累计：+10%（不是单位净值的 0%）
+      ], year: 2026)!;
+      expect(s.values.last, closeTo(10, 1e-9));
+    });
+
+    test('今年才成立的标的：基准是年内第一条，起始日如实返回', () {
+      final s = ytdReturnSeries([
+        p('2026-03-02', 1.00),
+        p('2026-09-11', 1.08),
+      ], year: 2026)!;
+      expect(s.startDate, '2026-03-02');
+      expect(s.values.first, closeTo(0, 1e-9));
+      expect(s.values.last, closeTo(8, 1e-9));
+    });
+
+    test('只取当年的点（别的年份不混进来）', () {
+      // 年内只有 1 个点（去年尾巴 + 明年开头都不算）→ 不够画，返回 null
+      final none = ytdReturnSeries([
+        p('2025-12-31', 1.00),
+        p('2026-03-02', 1.05),
+        p('2027-01-04', 9.99),
+      ], year: 2026);
+      expect(none, isNull, reason: '年内只 1 个点，序列至少要 2 个点');
+
+      // 年内 2 个点：更晚那条 2027 的点必须被排除掉，最后一个是年内最后一个
+      final s = ytdReturnSeries([
+        p('2025-12-31', 1.00),
+        p('2026-03-02', 1.05),
+        p('2026-06-30', 1.10),
+        p('2027-01-04', 9.99),
+      ], year: 2026)!;
+      expect(s.values.length, 2, reason: '2027 那个点不该算进来');
+      expect(s.values.last, closeTo(10, 1e-9));
+    });
+
+    test('点数不足 / 年内无数据 / 基准为 0 → 一律 null（不画假的线）', () {
+      expect(ytdReturnSeries([p('2026-09-11', 1.0)], year: 2026), isNull);
+      expect(ytdReturnSeries([p('2025-06-01', 1.0), p('2025-07-01', 1.1)],
+          year: 2026), isNull);
+      expect(ytdReturnSeries([p('2025-12-31', 0), p('2026-01-05', 1.1)],
+          year: 2026), isNull);
+      expect(ytdReturnSeries(const [], year: 2026), isNull);
+    });
+
+    test('乱序输入也能算（内部会排序）', () {
+      final s = ytdReturnSeries([
+        p('2026-09-11', 1.10),
+        p('2025-12-31', 1.00),
+        p('2026-03-02', 1.05),
+      ], year: 2026)!;
+      expect(s.startDate, '2025-12-31');
+      expect(s.values.last, closeTo(10, 1e-9));
+    });
+  });
 }

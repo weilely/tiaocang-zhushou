@@ -125,16 +125,16 @@ void main() {
       expect(p.erp, closeTo(p.earningsYield - p.cn10y, 1e-9));
     }, timeout: const Timeout(Duration(seconds: 60)));
 
-    test('能回填历史，且点数是「周频 × 三年多」的量级', () async {
-      if (!await push2HisAvailable()) {
-        markTestSkipped('push2his 网关当前不可用，跳过');
-        return;
-      }
+    test('能回填历史，且点数是「日频 × 十年」的量级', () async {
       final hist = await fetchMacroBackfill();
       expect(hist, isNotEmpty, reason: '回填拿不到数据，新装用户就没有曲线和分位');
-      // 国债历史只有 2023-05 起，PE 是周频 → 大约 170 上下
-      expect(hist.length, greaterThan(100));
-      expect(hist.length, lessThan(400));
+      // 2026-09-22 换源后：国债走东财数据中心（2002 起）、PE 走中证官网日频（2015 起）
+      // → 十年日频大约是 2400 上下（去掉任一侧缺失的交易日）
+      expect(hist.length, greaterThan(1500), reason: '10 年日频应有 2000+ 条');
+      expect(hist.length, lessThan(3200));
+      // 最早的一条要能到十年前（否则"10 年口径"就是假的）
+      expect(hist.first.date.compareTo('2017-01-01'), lessThan(0),
+          reason: '回填必须覆盖到十年前，否则分位口径还是短的');
       // 日期升序、无重复、数值合理
       for (var i = 1; i < hist.length; i++) {
         expect(hist[i].date.compareTo(hist[i - 1].date), greaterThan(0));
@@ -149,6 +149,6 @@ void main() {
       // 回填后应该够算分位（阈值 20）
       expect(percentileOf([for (final p in hist) p.erp], hist.last.erp),
           isNotNull);
-    }, timeout: const Timeout(Duration(seconds: 90)));
+    }, timeout: const Timeout(Duration(seconds: 120)));
   });
 }

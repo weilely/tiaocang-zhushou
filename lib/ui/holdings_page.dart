@@ -3,7 +3,9 @@ import 'package:provider/provider.dart';
 
 import '../core/format.dart';
 import '../data/models.dart';
+import '../data/nav_models.dart';
 import '../logic/portfolio.dart';
+import '../logic/period_return.dart';
 import '../logic/receipt_parser.dart';
 import '../data/ocr_source.dart';
 import '../state/app_state.dart';
@@ -64,6 +66,8 @@ class HoldingsPage extends StatelessWidget {
                 accountName: showAccount
                     ? (state.accountsById[p.accountId]?.name ?? '未命名账户')
                     : null,
+                // 迷你曲线与"收益是否已更新"都要看历史净值（内存里那份就够）
+                navs: state.navSamples[p.asset.code],
               ),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(
@@ -446,6 +450,15 @@ class HoldingCardData {
   final double? changePct;
   final String infoDate;
 
+  /// 行情类型：`nav`（已公布净值）/ `est`（盘中估值）/ `price`（成交价）
+  final String priceType;
+
+  /// 「今年以来累计收益率」序列（%）；null = 历史不够 → **不画**曲线
+  final YtdSeries? ytd;
+
+  /// 这张卡的收益是否已按**最新公布的净值**算过（决定右上角那个状态标签）
+  final bool navIsLatest;
+
   /// 「全部账户」时把账户名显示出来（设计稿没有，但不显示就分不清同代码的持仓）
   final String? accountName;
 
@@ -474,6 +487,9 @@ class HoldingCardData {
     required this.price,
     required this.changePct,
     required this.infoDate,
+    this.priceType = '',
+    this.ytd,
+    this.navIsLatest = true,
     this.accountName,
     this.estChangePct,
     this.estDayPnl,
@@ -483,6 +499,9 @@ class HoldingCardData {
     Position p, {
     required double totalMarketValue,
     String? accountName,
+
+    /// 该标的的历史净值（用于「今年以来收益率」迷你曲线与"收益是否已更新"判断）
+    List<NavPoint>? navs,
   }) {
     final hasQuote = p.hasQuote;
 
@@ -496,6 +515,21 @@ class HoldingCardData {
     final dayBase = p.marketValue - p.dayPnl;
     final dayPct =
         (hasQuote && dayBase.abs() > 1e-9) ? p.dayPnl / dayBase * 100 : null;
+
+    // 「收益已更新」的判断：行情的净值日期是否**不落后于**本地历史净值的最后一天。
+    // 没有历史就退回"这是不是一条已公布净值"（`est` 是盘中估值，不算）。
+    final infoDate = p.quote?.infoDate ?? '';
+    final priceType = p.quote?.priceType ?? '';
+    var lastNavDate = '';
+    if (navs != null) {
+      for (final n in navs) {
+        if (n.date.compareTo(lastNavDate) > 0) lastNavDate = n.date;
+      }
+    }
+    final navIsLatest = infoDate.isNotEmpty &&
+        (lastNavDate.isEmpty
+            ? priceType == 'nav'
+            : infoDate.compareTo(lastNavDate) >= 0);
 
     return HoldingCardData(
       name: p.asset.name.isEmpty ? p.asset.code : p.asset.name,
@@ -515,12 +549,28 @@ class HoldingCardData {
       avgCost: p.avgCost,
       price: hasQuote ? p.price : null,
       changePct: hasQuote ? p.quote!.changePct : null,
-      infoDate: p.quote?.infoDate ?? '',
+      infoDate: infoDate,
+      priceType: priceType,
+      ytd: navs == null ? null : ytdReturnSeries(navs),
+      navIsLatest: navIsLatest,
       accountName: accountName,
       // 当日净值未更新时，按关联 ETF 实时行情给个预估（场内有行情则 est 为 null，不显示）
       estChangePct: p.estChangePct,
       estDayPnl: p.estDayPnl,
     );
+  }
+
+  /// 右上角状态标签（图里的「收益已更新」）—— 要如实反映状态，不硬写
+  String get statusText {
+    if (!hasQuote) return '无行情';
+    if (estChangePct != null) return '盘中估值';
+    return navIsLatest ? '收益已更新' : '收益待更新';
+  }
+
+  Color? get statusColor {
+    if (!hasQuote) return null; // 用主题 hintColor
+    if (estChangePct != null) return const Color(0xFFB4770A);
+    return navIsLatest ? const Color(0xFF1A9C5B) : const Color(0xFFB4770A);
   }
 
   /// 设计稿规则：**市值大字的颜色跟随「累计收益」的正负**
@@ -546,6 +596,10 @@ class HoldingCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final d = data;
+    // 内嵌浅色块：按主色轻微染色（浅色主题像图里那种淡蓝，深色主题也不刺眼）
+    final panelColor = Color.alphaBlend(
+        theme.colorScheme.primary.withValues(alpha: 0.08), theme.cardColor);
+    final scale = MediaQuery.textScalerOf(context).scale(1.0);
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -560,50 +614,48 @@ class HoldingCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 1) 名称 + 代码
+              // 1) 名称（最多两行）+ 代码 + 右侧箭头（提示可点进详情）
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: Text(d.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 17, fontWeight: FontWeight.w600)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(d.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                height: 1.25)),
+                        const SizedBox(height: 2),
+                        Text(d.code,
+                            style: TextStyle(
+                                fontSize: 12, color: theme.hintColor)),
+                      ],
+                    ),
                   ),
-                  const SizedBox(width: 8),
-                  Text(d.code,
-                      style: TextStyle(fontSize: 14, color: theme.hintColor)),
+                  Icon(Icons.chevron_right, size: 20, color: theme.hintColor),
                 ],
               ),
-              if (!d.hasQuote || d.accountName != null || d.estChangePct != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: Row(
-                    children: [
-                      if (!d.hasQuote) ...[
-                        const Tag(text: '无行情'),
-                        const SizedBox(width: 6),
-                      ],
-                      if (d.accountName != null) ...[
-                        Tag(text: d.accountName!),
-                        const SizedBox(width: 6),
-                      ],
-                      // 有估值时，账户名后面跟一段跑马灯：
-                      // 「预估涨幅 +1.23% · 预估收益 +45.67」宽度放不下就自动横向滚动
-                      if (d.estChangePct != null)
-                        Expanded(child: _estMarquee(d)),
-                    ],
-                  ),
+              if (d.accountName != null) ...[
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [Tag(text: d.accountName!)],
                 ),
+              ],
 
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
 
-              // 2) 市值 + 占比
+              // 2) 资产大字 + 右上角状态标签（收益已更新 / 盘中估值 / 待更新）
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('市值',
-                      style: TextStyle(fontSize: 15, color: theme.hintColor)),
+                  Text('资产',
+                      style: TextStyle(fontSize: 14, color: theme.hintColor)),
                   const SizedBox(width: 8),
                   Flexible(
                     child: FittedBox(
@@ -612,7 +664,7 @@ class HoldingCard extends StatelessWidget {
                       child: Text(
                         d.hasQuote ? fmtMoney(d.marketValue) : '--',
                         style: TextStyle(
-                          fontSize: 26,
+                          fontSize: 25,
                           fontWeight: FontWeight.w700,
                           height: 1.1,
                           color: d.hasQuote ? d.valueColor : theme.hintColor,
@@ -621,64 +673,69 @@ class HoldingCard extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  Text('占比',
-                      style: TextStyle(fontSize: 14, color: theme.hintColor)),
-                  const SizedBox(width: 6),
-                  _rightNum(
-                    context,
-                    d.ratio == null ? '--' : fmtRatioPct(d.ratio!),
-                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
+                  _statusTag(context, d),
                 ],
               ),
+
+              // 3) 估值模式保留：净值未公布时按关联 ETF 给「预估涨幅 · 预估收益」
+              //    宽度放不下时这段会自己横向滚动（InlineMarquee）
+              if (d.estChangePct != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(children: [Expanded(child: _estMarquee(d))]),
+                ),
 
               const SizedBox(height: 10),
 
-              _pnlRow(context, d.dayLabel, d.dayPnl, d.dayPct),
-              _pnlRow(context, '持仓收益', d.holdingPnl, d.holdingPct),
-              _pnlRow(context, '累计收益', d.cumulativePnl, d.cumulativePct),
-
-              const SizedBox(height: 8),
-
-              // 6) 份额 + 成本
-              Row(
-                children: [
-                  Text('份额',
-                      style: TextStyle(fontSize: 14, color: theme.hintColor)),
-                  const SizedBox(width: 6),
-                  Text(fmtSharesOf(d.shares, isFund: d.isFund),
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
-                  const Spacer(),
-                  Text('成本',
-                      style: TextStyle(fontSize: 14, color: theme.hintColor)),
-                  const SizedBox(width: 6),
-                  _rightNum(
-                    context,
-                    fmtPrice(d.avgCost),
-                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
-
-              const Divider(height: 18, thickness: 0.5),
-
-              // 7) 净值（涨跌幅） + 净值日期
-              Row(
-                children: [
-                  Text(d.price == null ? '--' : fmtPrice(d.price!),
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600)),
-                  if (d.changePct != null) ...[
-                    const SizedBox(width: 6),
-                    Text('(${fmtPct(d.changePct!)})',
-                        style: TextStyle(
-                            fontSize: 15, color: pnlColor(d.changePct!))),
-                  ],
-                  const Spacer(),
-                  Text(d.infoDate.isNotEmpty ? d.infoDate : '--',
-                      style: TextStyle(fontSize: 14, color: theme.hintColor)),
-                ],
+              // 4) 内嵌浅色块：左列指标 + 右侧「今年以来收益率」迷你曲线
+              Container(
+                decoration: BoxDecoration(
+                    color: panelColor, borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+                child: LayoutBuilder(
+                  builder: (ctx, c) {
+                    final ytd = d.ytd;
+                    final metrics = Column(
+                      children: [
+                        _kv(context, '最新净值', _navValue(context, d)),
+                        _kv(
+                            context,
+                            '净值日期',
+                            Text(d.infoDate.isNotEmpty ? d.infoDate : '--',
+                                style: const TextStyle(fontSize: 12.5))),
+                        _kv(context, '当日收益', _money(context, d.dayPnl)),
+                        _kv(context, '持仓收益', _money(context, d.holdingPnl)),
+                        _kv(
+                            context,
+                            '持仓收益率',
+                            _pctText(context, d.holdingPct)),
+                        _kv(context, '累计收益', _money(context, d.cumulativePnl)),
+                        _kv(
+                            context,
+                            '资产占比',
+                            Text(
+                                d.ratio == null ? '--' : fmtRatioPct(d.ratio!),
+                                style: const TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600))),
+                      ],
+                    );
+                    // 太窄就不画曲线（大字体 + 窄屏时优先保住数字）；
+                    // 阈值跟着字体缩放走 —— 字体放大后文字本身就要更多横向空间。
+                    if (ytd == null || c.maxWidth < 250 * scale) return metrics;
+                    final w = (110.0 * scale)
+                        .clamp(84.0, c.maxWidth * 0.45)
+                        .toDouble();
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: metrics),
+                        const SizedBox(width: 10),
+                        SizedBox(width: w, child: _ytdColumn(context, ytd)),
+                      ],
+                    );
+                  },
+                ),
               ),
             ],
           ),
@@ -687,8 +744,124 @@ class HoldingCard extends StatelessWidget {
     );
   }
 
-  /// 一行收益：左「标签 + 金额」，右「百分比」
-  /// 有估值时，账户名后面那段跑马灯：预估涨幅 + 预估收益
+  /// 左列一行：标签 + 右对齐的值
+  Widget _kv(BuildContext context, String label, Widget value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2.5),
+        child: Row(
+          children: [
+            Text(label,
+                style: TextStyle(
+                    fontSize: 12.5, color: Theme.of(context).hintColor)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                // 值可能比可用宽度还长（大字体 + 窄屏）：宁可整体缩一点，
+                // 也不要 RenderFlex overflow
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: value,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+
+  /// 金额（不带百分比），按盈亏染色；null → `--`
+  Widget _money(BuildContext context, double? v) => Text(
+        v == null ? '--' : fmtMoneySigned(v),
+        style: TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          color: v == null ? Theme.of(context).hintColor : pnlColor(v),
+        ),
+      );
+
+  /// 百分比，按盈亏染色；null → `--`
+  Widget _pctText(BuildContext context, double? v) => Text(
+        v == null ? '--' : fmtPct(v),
+        style: TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          color: v == null ? Theme.of(context).hintColor : pnlColor(v),
+        ),
+      );
+
+  /// 「最新净值 1.0776(+0.16%)」——涨跌幅带颜色
+  Widget _navValue(BuildContext context, HoldingCardData d) {
+    if (d.price == null) {
+      return Text('--',
+          style: TextStyle(
+              fontSize: 12.5, color: Theme.of(context).hintColor));
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(fmtPrice(d.price!),
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+        if (d.changePct != null) ...[
+          const SizedBox(width: 4),
+          Text('(${fmtPct(d.changePct!)})',
+              style: TextStyle(fontSize: 12, color: pnlColor(d.changePct!))),
+        ],
+      ],
+    );
+  }
+
+  /// 右侧那列：标题 + 当前值 + 迷你曲线
+  Widget _ytdColumn(BuildContext context, YtdSeries ytd) {
+    final last = ytd.values.last;
+    final line = pnlColor(last);
+    final y = DateTime.now().year;
+    // 基准在**年初或更早**（去年的最后一条就是正常情形）→ 这就是"今年以来"；
+    // 只有今年才成立的标的，基准落在年内，才如实写起始日。
+    final label = ytd.startDate.compareTo('$y-01-01') <= 0
+        ? '今年以来收益率'
+        : '${ytd.startDate.substring(5)} 以来收益率';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(label,
+            textAlign: TextAlign.right,
+            maxLines: 2,
+            style: TextStyle(
+                fontSize: 9.5,
+                color: Theme.of(context).hintColor,
+                height: 1.3)),
+        const SizedBox(height: 3),
+        Text(fmtPct(last),
+            style: TextStyle(
+                fontSize: 11.5, fontWeight: FontWeight.w600, color: line)),
+        const SizedBox(height: 4),
+        SizedBox(
+          height: 44,
+          width: double.infinity,
+          child: CustomPaint(
+            painter: _SparklinePainter(values: ytd.values, line: line),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 右上角状态标签
+  Widget _statusTag(BuildContext context, HoldingCardData d) {
+    final c = d.statusColor ?? Theme.of(context).hintColor;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.13),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(d.statusText,
+          style: TextStyle(
+              fontSize: 10.5, fontWeight: FontWeight.w600, color: c)),
+    );
+  }
+
+  /// 估值模式保留：净值未公布时（且联动 ETF 有"今天"的行情）给一段跑马灯
   Widget _estMarquee(HoldingCardData d) {
     final pct = d.estChangePct!;
     final buf = StringBuffer('预估涨幅 ${pct >= 0 ? '+' : ''}${pct.toStringAsFixed(2)}%');
@@ -714,52 +887,72 @@ class HoldingCard extends StatelessWidget {
     );
   }
 
-  /// 卡片右侧那一列数字：**统一宽度 + 右对齐**。
-  ///
-  /// 为什么要统一：占比 / 三个收益率 / 成本 原本有的用固定 62px 盒子、有的是自然宽度，
-  /// 于是右边界各不相同（实测 10.3% 收在 825、+1.25% 收在 845），看着就是对不齐。
-  /// 而且固定宽度在**系统字体放大**时会被撑爆（用户手机字体就是调大的），
-  /// 所以宽度还要跟着 textScaler 走。
-  static const double _rightColBase = 62;
+}
 
-  Widget _rightNum(BuildContext context, String text, TextStyle style) {
-    final scale = MediaQuery.textScalerOf(context).scale(1.0);
-    return SizedBox(
-      width: _rightColBase * scale,
-      child: Text(text, textAlign: TextAlign.right, maxLines: 1,
-          overflow: TextOverflow.visible, style: style),
+/// 卡片里的迷你走势线（「今年以来收益率」）—— 按项目约定自绘，不引第三方图表库
+class _SparklinePainter extends CustomPainter {
+  final List<double> values;
+  final Color line;
+
+  const _SparklinePainter({required this.values, required this.line});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.length < 2 || size.width <= 0 || size.height <= 0) return;
+
+    var lo = values.first;
+    var hi = values.first;
+    for (final v in values) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    var span = hi - lo;
+    if (span.abs() < 1e-9) {
+      // 全平（比如刚成立、还没波动）：撑开一点，免得除以 0 画成一条贴边的线
+      hi = lo + 1;
+      span = 1;
+    }
+
+    const pad = 2.0;
+    final h = size.height - pad * 2;
+    final dx = size.width / (values.length - 1);
+    double yOf(double v) => pad + (1 - (v - lo) / span) * h;
+
+    // 曲线跨 0 时画一条 0% 基准虚线，方便看"现在是赚还是亏"
+    if (lo < 0 && hi > 0) {
+      final y0 = yOf(0);
+      final dash = Paint()
+        ..color = line.withValues(alpha: 0.32)
+        ..strokeWidth = 1;
+      for (var x = 0.0; x < size.width; x += 4) {
+        canvas.drawLine(Offset(x, y0), Offset(x + 2, y0), dash);
+      }
+    }
+
+    final path = Path()..moveTo(0, yOf(values.first));
+    for (var i = 1; i < values.length; i++) {
+      path.lineTo(i * dx, yOf(values[i]));
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = line
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..strokeJoin = StrokeJoin.round,
     );
+    // 末点一个实心小圆（跟市场估值卡片一致，标出"现在在哪"）
+    canvas.drawCircle(
+        Offset(size.width, yOf(values.last)), 2.0, Paint()..color = line);
   }
-  Widget _pnlRow(
-      BuildContext context, String label, double? amount, double? pct) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),      child: Row(
-        children: [
-          Text(label, style: TextStyle(fontSize: 14, color: theme.hintColor)),
-          const SizedBox(width: 8),
-          Text(
-            amount == null ? '--' : fmtMoneySigned(amount),
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: amount == null ? theme.hintColor : pnlColor(amount),
-            ),
-          ),
-          const Spacer(),
-          _rightNum(
-            context,
-            pct == null ? '--' : fmtPct(pct),
-            TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: pct == null ? theme.hintColor : pnlColor(pct),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+
+  @override
+  bool shouldRepaint(covariant _SparklinePainter old) =>
+      old.line != line ||
+      old.values.length != values.length ||
+      (old.values.isNotEmpty &&
+          values.isNotEmpty &&
+          old.values.last != values.last);
 }
 
 /// 小标签（无行情、账户名、预估）

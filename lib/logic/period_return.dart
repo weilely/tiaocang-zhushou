@@ -127,3 +127,52 @@ NavPoint? latestPoint(List<NavPoint> points) {
 
 /// 最新净值
 double? latestNav(List<NavPoint> points) => latestPoint(points)?.nav;
+
+/// 「今年以来」累计收益率序列的返回：值（%）+ 序列起始日
+typedef YtdSeries = ({List<double> values, String startDate});
+
+/// 「今年以来」的**累计收益率序列**（%）—— 供持仓卡片的迷你曲线用
+///
+/// 口径与 [periodReturn] 一致：优先**累计净值**（分红再投资，与天天基金一致），
+/// 缺失时退回单位净值。基准取**年初（含）之前最近的一条**；如果这只标的是今年
+/// 才成立的（年初之前没有数据），基准就是年内第一条，起始日也如实返回 ——
+/// 界面据此把标题写成「今年以来」或「MM-DD 以来」，不假装是全年。
+/// 点数不足 2 个 → 返回 null（界面**不画**曲线，而不是画一条假的）。
+YtdSeries? ytdReturnSeries(
+  List<NavPoint> points, {
+  DateTime? asOf,
+  int? year,
+}) {
+  if (points.length < 2) return null;
+  final sorted = List<NavPoint>.from(points)
+    ..sort((a, b) => a.date.compareTo(b.date));
+
+  final y = year ?? (asOf ?? DateTime.now()).year;
+  final startKey = _key(DateTime(y, 1, 1));
+  final inYear = <NavPoint>[
+    for (final p in sorted)
+      if (p.date.compareTo(startKey) >= 0 && DateTime.parse(p.date).year == y) p,
+  ];
+  if (inYear.isEmpty) return null;
+
+  // 基准：年初之前最近的一条（没有就用年内第一条）
+  var base = inYear.first;
+  for (final p in sorted) {
+    if (p.date.compareTo(startKey) < 0) {
+      base = p;
+    } else {
+      break;
+    }
+  }
+  final baseValue = base.value;
+  if (baseValue <= 0) return null;
+
+  final values = <double>[(inYear.first.value / baseValue - 1) * 100];
+  for (var i = 1; i < inYear.length; i++) {
+    final v = inYear[i].value;
+    if (v <= 0) continue;
+    values.add((v / baseValue - 1) * 100);
+  }
+  if (values.length < 2) return null;
+  return (values: values, startDate: base.date);
+}

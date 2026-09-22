@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/data/models.dart';
+import 'package:invest_tracker/data/nav_models.dart';
 import 'package:invest_tracker/logic/portfolio.dart';
 import 'package:invest_tracker/ui/holdings_page.dart';
 
@@ -152,46 +153,115 @@ void main() {
     });
   });
 
-  group('卡片渲染', () {
-    testWidgets('七行结构齐全，金额 2 位小数', (tester) async {
+  group('卡片渲染（按参考图：名称与代码 → 资产＋状态标签 → 内嵌块里左指标右曲线）', () {
+    testWidgets('结构齐全，旧版式字段已移走', (tester) async {
       await tester.pumpWidget(host(HoldingCard(data: dataFor(pos()))));
 
       expect(find.text('易方达中证A500ETF联接A'), findsOneWidget);
       expect(find.text('022459'), findsOneWidget);
-      expect(find.text('市值'), findsOneWidget);
-      expect(find.text('占比'), findsOneWidget);
-      expect(find.text('持仓收益'), findsOneWidget);
-      expect(find.text('累计收益'), findsOneWidget);
-      expect(find.text('份额'), findsOneWidget);
-      expect(find.text('成本'), findsOneWidget);
-      // 净值那行是「净值 + (涨跌幅%)」，用正则确认括号形式
-      expect(find.textContaining(RegExp(r'^\([-+]?\d+\.\d\d%\)$')), findsOneWidget);
+      // 右侧箭头提示"可点进详情"
+      expect(find.byIcon(Icons.chevron_right), findsOneWidget);
+
+      expect(find.text('资产'), findsOneWidget);
+      for (final k in [
+        '最新净值',
+        '净值日期',
+        '当日收益',
+        '持仓收益',
+        '持仓收益率',
+        '累计收益',
+        '资产占比',
+      ]) {
+        expect(find.text(k), findsOneWidget, reason: '内嵌块里要有「$k」');
+      }
+
+      // 旧版式的字段不再出现在卡片上（份额/成本在「持仓详情」里看）
+      expect(find.text('市值'), findsNothing);
+      expect(find.text('占比'), findsNothing);
+      expect(find.text('份额'), findsNothing);
+      expect(find.text('成本'), findsNothing);
+
+      // 净值日期 + 金额格式
       expect(find.text('2026-09-11'), findsOneWidget);
-      // 市值保留两位小数且带千分位
-      expect(find.textContaining(RegExp(r'^\d{1,3}(,\d{3})*\.\d\d$')), findsWidgets);
+      expect(find.textContaining(RegExp(r'^\d{1,3}(,\d{3})*\.\d\d$')),
+          findsWidgets);
+      // 最新净值带涨跌幅：(+0.51%) 之类
+      expect(find.textContaining(RegExp(r'^\([-+]?\d+\.\d\d%\)$')),
+          findsOneWidget);
     });
 
-    testWidgets('收益标签固定为「当日收益」，不带日期', (tester) async {
-      await tester.pumpWidget(host(HoldingCard(data: dataFor(pos()))));
-      expect(find.text('当日收益'), findsOneWidget);
-      // 不再拼「前日收益 09-11」这种带日期的文案
-      expect(find.textContaining('收益 09-11'), findsNothing);
+    testWidgets('右上角状态标签：已公布净值且不落后于历史 → 收益已更新', (tester) async {
+      await tester.pumpWidget(host(HoldingCard(
+        data: HoldingCardData.from(pos(),
+            totalMarketValue: 100000,
+            navs: [
+              NavPoint(code: '022459', date: '2026-09-10', nav: 1.2300),
+              NavPoint(code: '022459', date: '2026-09-11', nav: 1.2319),
+            ]),
+      )));
+      expect(find.text('收益已更新'), findsOneWidget);
     });
 
-    testWidgets('市值金额的颜色跟随累计收益', (tester) async {
+    testWidgets('历史净值比行情新 → 收益待更新（不硬写"已更新"）', (tester) async {
+      await tester.pumpWidget(host(HoldingCard(
+        data: HoldingCardData.from(pos(infoDate: '2026-09-10'),
+            totalMarketValue: 100000,
+            navs: [
+              NavPoint(code: '022459', date: '2026-09-11', nav: 1.2319),
+            ]),
+      )));
+      expect(find.text('收益待更新'), findsOneWidget);
+      expect(find.text('收益已更新'), findsNothing);
+    });
+
+    testWidgets('估值模式保留：有预估时显示「预估涨幅 · 预估收益」跑马灯', (tester) async {
+      final p = pos()..estChangePct = 1.23;
+      p.estDayPnl = 45.67;
+      await tester.pumpWidget(host(HoldingCard(data: dataFor(p))));
+
+      expect(find.textContaining('预估涨幅'), findsOneWidget);
+      expect(find.textContaining('预估收益'), findsOneWidget);
+      // 有估值时状态标签要说明这是估值，不是已公布净值
+      expect(find.text('盘中估值'), findsOneWidget);
+    });
+
+    testWidgets('有历史净值时画「今年以来收益率」曲线', (tester) async {
+      final navs = [
+        NavPoint(code: '022459', date: '2025-12-31', nav: 1.10),
+        NavPoint(code: '022459', date: '2026-06-30', nav: 1.20),
+        NavPoint(code: '022459', date: '2026-09-11', nav: 1.2319),
+      ];
+      await tester.pumpWidget(host(HoldingCard(
+        data: HoldingCardData.from(pos(),
+            totalMarketValue: 100000, navs: navs),
+      )));
+      expect(find.text('今年以来收益率'), findsOneWidget);
+      expect(find.byType(CustomPaint), findsWidgets);
+    });
+
+    testWidgets('历史不够（只有一条）→ 不画曲线，也不写口径', (tester) async {
+      await tester.pumpWidget(host(HoldingCard(
+        data: HoldingCardData.from(pos(),
+            totalMarketValue: 100000,
+            navs: [NavPoint(code: '022459', date: '2026-09-11', nav: 1.2319)]),
+      )));
+      expect(find.text('今年以来收益率'), findsNothing);
+    });
+
+    testWidgets('资产金额的颜色跟随累计收益', (tester) async {
       final p = pos(price: 1.20, cost: 2412.0); // 亏损
       await tester.pumpWidget(host(HoldingCard(data: dataFor(p))));
 
-      final money = find.textContaining(RegExp(r'^1,8|^2,2|^2,3|^\d,\d{3}\.\d\d$'));
+      final money = find.textContaining(RegExp(r'^\d{1,3}(,\d{3})*\.\d\d$'));
       expect(money, findsWidgets);
       final style = tester.widget<Text>(money.first).style;
       expect(style?.color, const Color(0xFF1A9C5B));
     });
 
-    testWidgets('占比值不带涨跌色（黑色）', (tester) async {
+    testWidgets('资产占比值不带涨跌色（黑色）', (tester) async {
       await tester.pumpWidget(host(HoldingCard(data: dataFor(pos()))));
-      final ratio = tester.widget<Text>(
-          find.textContaining(RegExp(r'^\d+\.\d%$')));
+      final ratio =
+          tester.widget<Text>(find.textContaining(RegExp(r'^\d+\.\d%$')));
       expect(ratio.style?.color, isNull);
     });
 
@@ -200,12 +270,9 @@ void main() {
           host(HoldingCard(data: dataFor(pos(withQuote: false)))));
 
       expect(find.text('无行情'), findsOneWidget);
-      // 无行情时降级为 -- 的共 10 处：
-      // 市值、占比、昨日收益(金额+%)、持仓收益(金额+%)、累计收益(金额+%)、
-      // 净值、净值日期
-      expect(find.text('--'), findsNWidgets(10));
-      // 份额与成本不依赖行情，仍应正常显示
-      expect(find.text('1,892.67'), findsOneWidget);
+      // 内嵌块里降级为 -- 的共 8 处：资产、最新净值、净值日期、
+      // 当日收益、持仓收益、持仓收益率、累计收益、资产占比
+      expect(find.text('--'), findsNWidgets(8));
     });
 
     testWidgets('传入账户名时显示灰色标签', (tester) async {
@@ -224,6 +291,35 @@ void main() {
       )));
       await tester.tap(find.byType(HoldingCard));
       expect(tapped, isTrue);
+    });
+
+    testWidgets('窄屏（320dp）+ 字体 1.3 倍：整张卡不溢出', (tester) async {
+      tester.view.physicalSize = const Size(320, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final navs = [
+        NavPoint(code: '022459', date: '2025-12-31', nav: 1.10),
+        NavPoint(code: '022459', date: '2026-09-11', nav: 1.2319),
+      ];
+      await tester.pumpWidget(MaterialApp(
+        builder: (ctx, child) => MediaQuery(
+          data: MediaQuery.of(ctx)
+              .copyWith(textScaler: const TextScaler.linear(1.3)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: HoldingCard(
+              data: HoldingCardData.from(pos(),
+                  totalMarketValue: 100000, navs: navs),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull,
+          reason: '用户手机是窄屏 + 大字体，这里不许 RenderFlex overflow');
     });
   });
 
