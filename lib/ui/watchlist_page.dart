@@ -121,22 +121,22 @@ class _WatchlistPageState extends State<WatchlistPage> {
                   if (allRows.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: SegmentedPills<AssetKind?>(
-                          expand: false,
-                          selected: kind,
-                          onChanged: (v) => setState(() => _kind = v),
-                          items: [
-                            (value: null, label: '全部 ${allRows.length}'),
-                            for (final k in kindTabs)
-                              (
-                                value: k,
-                                label:
-                                    '${kindLabel(k)} ${allRows.where((r) => r.item.kind == k).length}'
-                              ),
-                          ],
-                        ),
+                      // 用户要求：标签**横向平均分布**（原来 expand:false 是按文字
+                      // 宽度挤在左边、右侧留一大片空白）。用 expand:true 让每个标签
+                      // 等宽铺满，所以外面的 Align 也不需要了。
+                      child: SegmentedPills<AssetKind?>(
+                        expand: true,
+                        selected: kind,
+                        onChanged: (v) => setState(() => _kind = v),
+                        items: [
+                          (value: null, label: '全部 ${allRows.length}'),
+                          for (final k in kindTabs)
+                            (
+                              value: k,
+                              label:
+                                  '${kindLabel(k)} ${allRows.where((r) => r.item.kind == k).length}'
+                            ),
+                        ],
                       ),
                     ),
                   Expanded(

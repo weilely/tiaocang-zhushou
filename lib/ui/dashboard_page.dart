@@ -74,7 +74,7 @@ class DashboardPage extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Text(
-                '持仓市值 ${fmtCompact(s.marketValue)} + 现金 ${fmtCompact(state.cashTotal)}',
+                '持仓市值 ${fmtCompact(s.marketValue)} + 现金 ${fmtCompact(state.cashTotalValue)}',
                 style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
               ),
             ),
@@ -93,7 +93,9 @@ class DashboardPage extends StatelessWidget {
                       style: TextStyle(
                           fontSize: 13, color: Theme.of(context).hintColor)),
                 ),
-                Text(fmtMoney(state.cashTotal),
+                // **必须用 cashTotalValue（按账户过滤）**：早先用的是 cashTotal
+                // （全部账户的合计），于是切换账户后这里的现金余额还是原来那个。
+                Text(fmtMoney(state.cashTotalValue),
                     style: const TextStyle(
                         fontSize: 14, fontWeight: FontWeight.w600)),
                 const Spacer(),

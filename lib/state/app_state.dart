@@ -642,7 +642,34 @@ class AppState extends ChangeNotifier {
     for (final e in b.toSettings().entries) {
       await db.setSetting(e.key, e.value);
     }
+    // 切到指数基准后必须立即把它的历史读回内存：库里可能早就抓过
+    // （navTargets 每次都带上指数），但「选基准」这个动作本身不读库，
+    // 不读回来趋势图的基准线就永远画不出来。
+    unawaited(_fetchBenchmarkIndex());
     notifyListeners();
+  }
+
+  /// 选基准后拉一次该指数的历史：库里没有就全量抓，有就补增量，
+  /// 抓完把数据读回 [indexNavs] —— 保证切完基准曲线立刻画得出来。
+  Future<void> _fetchBenchmarkIndex() async {
+    if (benchmark.kind != BenchmarkKind.marketIndex) {
+      await loadIndexNavs();
+      return;
+    }
+    final code = benchmark.indexCode;
+    if (code.isEmpty) return;
+    try {
+      final asset =
+          Asset(code: code, name: benchmark.indexName, kind: AssetKind.other);
+      final latest = await db.latestNavDate(code);
+      final pts = latest == null
+          ? await navSource.fullHistory(asset, datalen: 1500)
+          : await navSource.recentHistory(asset, stopDate: latest, sinaDays: 7);
+      if (pts.isNotEmpty) await db.upsertNavPoints(pts);
+    } catch (_) {
+      // 拉不到就只画组合单线；「更新净值」跑完全量后会自然补上
+    }
+    await loadIndexNavs();
   }
 
   void setTrendPreset(RangePreset p) {
@@ -735,6 +762,10 @@ class AppState extends ChangeNotifier {
     unawaited(loadDividendModes()
         .then((_) => loadNavSamples())
         .then((_) => runAutoDividends()));
+    // 启动时把基准指数的历史读回内存（库里可能早就抓过了）；
+    // 库里没有（用户从没切过指数基准）就顺手抓一次，
+    // 否则趋势图的基准线要等「更新净值」跑完才画得出来
+    unawaited(_fetchBenchmarkIndex());
   }
 
   /// 重新算派生数据（现金余额/收益、逐日序列缓存作废）
@@ -1507,22 +1538,28 @@ class AppState extends ChangeNotifier {
         note: note,
       ));
 
+  /// 现金余额（**跟随当前账户筛选**）：选了账户就只看那个账户的 Σ流水，
+  /// 「全部账户」才是所有账户合计。现金管理页写的是「只针对当前账户」，
+  /// 之前的实现恒为全账户合计，切换账户后余额纹丝不动。
   double get cashTotal {
+    if (accountFilter != null) return cashBalances[accountFilter] ?? 0;
     return cashBalances.values.fold<double>(0, (a, b) => a + b);
   }
 
   double get cashTotalIncome {
     var sum = 0.0;
-    for (final v in cashIncome.values) {
-      if (v.length > 1) sum += v[1];
+    for (final e in cashIncome.entries) {
+      if (accountFilter != null && e.key != accountFilter) continue;
+      if (e.value.length > 1) sum += e.value[1];
     }
     return sum;
   }
 
   double get cashMonthIncome {
     var sum = 0.0;
-    for (final v in cashIncome.values) {
-      if (v.isNotEmpty) sum += v[0];
+    for (final e in cashIncome.entries) {
+      if (accountFilter != null && e.key != accountFilter) continue;
+      if (e.value.isNotEmpty) sum += e.value[0];
     }
     return sum;
   }
@@ -1969,11 +2006,28 @@ class AppState extends ChangeNotifier {
       indexNavs[benchmark.indexCode] ?? const [];
 
   Future<void> loadIndexNavs() async {
+    final code = benchmark.indexCode;
+    if (code.isEmpty) {
+      _invalidateSeries();
+      notifyListeners();
+      return;
+    }
     try {
-      final code = benchmark.indexCode;
-      indexNavs[code] = indexNavs[code] ?? const [];
+      // 从库里读基准指数的历史（和 loadNavSamples 同一套样本：最早一条 + 近 5 年），
+      // 读不进来就沿用旧值 —— 界面只画组合单线，不编造基准值。
+      final from = _dayKey(DateTime.now().subtract(const Duration(days: 1835)));
+      final samples = await db.navSamplesFor([code], earliestDate: from);
+      final earliest = await db.navEarliestFor([code]);
+      var list = samples[code] ?? <NavPoint>[];
+      for (final e in earliest.entries) {
+        if (e.key != code) continue;
+        if (list.isEmpty || list.first.date != e.value.date) {
+          list = [e.value, ...list];
+        }
+      }
+      indexNavs[code] = list;
     } catch (_) {
-      // 拿不到就只画组合单线
+      indexNavs[code] = indexNavs[code] ?? const [];
     }
     _invalidateSeries();
     notifyListeners();
