@@ -551,12 +551,17 @@ class _BenchmarkSheetState extends State<_BenchmarkSheet> {
               selected: cur.kind == BenchmarkKind.marketIndex,
               icon: Icons.show_chart,
               title: '大盘指数',
-              subtitle: '用指数的真实区间涨跌做基准',
+              subtitle: '用指数的真实区间涨跌做基准；'
+                  '已抓过历史的指数立刻出图，没抓过的首次会联网取一次',
               onTap: null,
             ),
             const SizedBox(height: 4),
+            // **只列能提供历史行情的指数**：`em:` 前缀那几个（黄金9999 等）只有
+            // 实时报价、没有历史 K 线通道，选来当基准会永远画不出曲线
+            // （用户报「那个黄金就没有数据」）。
             for (final m in MarketIndex.presets)
-              ListTile(
+              if (!m.code.startsWith('em:'))
+                ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(
