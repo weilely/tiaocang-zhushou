@@ -205,7 +205,7 @@ class _FundProfilePageState extends State<FundProfilePage> {
         children: [
           _kv('基金公司', p.companyName),
           _kv('成立日期', p.estabDate == null ? '--' : fmtDate(p.estabDate!)),
-          _kv('最新规模', p.scale.isEmpty ? '--' : p.scale),
+          _kv('最新规模', p.scaleText),
           _kv('单位净值', p.unitNav == null ? '--' : fmtPrice(p.unitNav!)),
           _kv('基金经理',
               p.managers.isNotEmpty
@@ -282,41 +282,65 @@ class _FundProfilePageState extends State<FundProfilePage> {
     );
   }
 
-  // ---------------- 申购费率 ----------------
+  // ---------------- 费率 ----------------
 
+  /// 费率：按 `rate_type` 分五段显示（申购 / 赎回 / 定投 / 管理费 / 托管费）
+  ///
+  /// 实测 `standard_rate` 是**字符串**（`"1.20%"` / `"1000元/笔"`），
+  /// 而且赎回/管理费/托管费没有 `discounted_rate`、管理费托管费连 `condition` 都没有，
+  /// 所以「空条目不显示、没有档位的写『全部』」，别让界面出现一行 `--`。
   Widget _rateCard(BuildContext context, FundProfile p) {
-    if (p.rates.isEmpty) return const SizedBox.shrink();
+    final rates = [for (final r in p.rates) if (r.hasRate) r];
+    if (rates.isEmpty) return const SizedBox.shrink();
     final theme = Theme.of(context);
+
+    final groups = <String, List<FundRate>>{};
+    for (final r in rates) {
+      groups.putIfAbsent(r.type, () => []).add(r);
+    }
+
     return SectionCard(
-      title: '申购费率',
+      title: '费率',
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final r in p.rates)
+          for (final e in groups.entries) ...[
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Text(
-                      r.condition.isEmpty ? '申购' : r.condition,
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    _rateText(r),
-                    textAlign: TextAlign.right,
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                  ),
-                ],
+              padding: const EdgeInsets.only(top: 2, bottom: 2),
+              child: Text(
+                _rateTypeLabel(e.key),
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: theme.hintColor),
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text('费率为同花顺展示口径，实际以基金公司公告为准',
-                style: TextStyle(fontSize: 11, color: theme.hintColor)),
-          ),
+            for (final r in e.value)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        r.condition.isEmpty ? '全部' : r.condition,
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      _rateText(r),
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 6),
+          ],
+          Text('费率为同花顺展示口径，实际以基金公司公告为准',
+              style: TextStyle(fontSize: 11, color: theme.hintColor)),
         ],
       ),
     );
@@ -436,10 +460,10 @@ class _FundProfilePageState extends State<FundProfilePage> {
             )
           else
             for (final it in d.items) _dividendRow(context, it),
-          if (d.total.isNotEmpty)
+          if (d.totalText != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text('累计分红：${d.total}',
+              child: Text('累计分红：${d.totalText}',
                   style: TextStyle(fontSize: 11, color: theme.hintColor)),
             ),
         ],
@@ -557,11 +581,23 @@ String _pct(double v) => '${v.toStringAsFixed(2)}%';
 
 String _pctOrNull(double? v) => v == null ? '--' : _pct(v);
 
-/// 费率：有折后价就写成「0.12%（原 1.20%）」，只有原价就只写原价
+/// 费率类型的中文名（实测就这五种）
+const Map<String, String> _rateTypeLabels = {
+  'purchase': '申购费率',
+  'redemption': '赎回费率',
+  'recurring_investment': '定投费率',
+  'management': '管理费',
+  'custody': '托管费',
+};
+
+String _rateTypeLabel(String type) =>
+    _rateTypeLabels[type] ?? (type.isEmpty ? '费率' : type);
+
+/// 费率：优先显示折后价，并标注原价；两者相同就只写一个
 String _rateText(FundRate r) {
-  final d = r.discountedRate;
-  final s = r.standardRate;
-  if (d == null) return s == null ? '--' : '${s.toStringAsFixed(2)}%';
-  if (s == null || (s - d).abs() < 1e-9) return '${d.toStringAsFixed(2)}%';
-  return '${d.toStringAsFixed(2)}%（原 ${s.toStringAsFixed(2)}%）';
+  final d = r.discountedRate.trim();
+  final s = r.standardRate.trim();
+  if (d.isEmpty) return s.isEmpty ? '--' : s;
+  if (s.isEmpty || s == d) return d;
+  return '$d（原 $s）';
 }

@@ -46,8 +46,22 @@ void main() {
                 'rate_type': 'purchase',
                 'charge_mode': 'front',
                 'condition': '100万元以下',
-                'standard_rate': 1.2,
-                'discounted_rate': 0.12,
+                // 实测是字符串，不是数字 —— 按数字解析会全变 null
+                'standard_rate': '1.20%',
+                'discounted_rate': '0.12%',
+              },
+              {
+                'rate_type': 'redemption',
+                'charge_mode': 'default',
+                'condition': '7天以下',
+                'standard_rate': '1.50%',
+                // 赎回没有折后价
+              },
+              {
+                'rate_type': 'management',
+                'charge_mode': 'ongoing',
+                'standard_rate': '0.50%',
+                // 管理费连档位都没有
               },
             ],
           },
@@ -71,10 +85,22 @@ void main() {
       expect(p.tradeRules.first.title, '买入提交');
       expect(p.tradeRules.first.displayTime, '今日15点前');
 
-      expect(p.rates.length, 1);
+      expect(p.rates.length, 3);
+      expect(p.rates.first.type, 'purchase');
       expect(p.rates.first.condition, '100万元以下');
-      expect(p.rates.first.standardRate, 1.2);
-      expect(p.rates.first.discountedRate, 0.12);
+      expect(p.rates.first.standardRate, '1.20%');
+      expect(p.rates.first.discountedRate, '0.12%');
+      // 赎回没有折后价、管理费没有档位：都不能变成 null 或崩掉
+      expect(p.rates[1].type, 'redemption');
+      expect(p.rates[1].discountedRate, '');
+      expect(p.rates[2].type, 'management');
+      expect(p.rates[2].condition, '');
+      expect(p.rates[2].standardRate, '0.50%');
+      // 「1000元/笔」这种非百分比也要原样留着
+      final perDeal = FundRate.fromJson({'standard_rate': '1000元/笔'});
+      expect(perDeal.standardRate, '1000元/笔');
+      expect(perDeal.hasRate, isTrue);
+      expect(FundRate.fromJson({}).hasRate, isFalse);
     });
 
     test('字段缺失不炸、也不编：一律 null / 空列表，isEmpty 为真', () {
@@ -105,6 +131,38 @@ void main() {
         ]
       }));
       expect(missing.unitNav, isNull);
+    });
+
+    test('规模：纯数字按万/亿紧凑显示，带单位的字符串原样显示', () {
+      // 实测 021362 给的就是 261682632.55 这种没有单位的数字
+      final numeric = FundProfile.fromJson(envelope({
+        'item': [
+          {'ticker': '021362', 'fund_scale': 261682632.55}
+        ]
+      }));
+      expect(numeric.scale, '261682632.55');
+      expect(numeric.scaleText, '2.62亿');
+
+      final small = FundProfile.fromJson(envelope({
+        'item': [
+          {'ticker': 'x', 'fund_scale': 8000}
+        ]
+      }));
+      expect(small.scaleText, '8000');
+
+      final withUnit = FundProfile.fromJson(envelope({
+        'item': [
+          {'ticker': 'x', 'fund_scale': '12.34亿'}
+        ]
+      }));
+      expect(withUnit.scaleText, '12.34亿');
+
+      final none = FundProfile.fromJson(envelope({
+        'item': [
+          {'ticker': 'x'}
+        ]
+      }));
+      expect(none.scaleText, '');
     });
   });
 
@@ -189,6 +247,7 @@ void main() {
 
       expect(d.count, 2);
       expect(d.total, '0.35元/份');
+      expect(d.totalText, '0.35元/份');
       expect(d.items.length, 2);
       // 先按除息日倒序：2025 年初那次在前、2024 年初那次在后
       expect(d.items.first.perTenBeforeTax, 0.5);
@@ -210,6 +269,44 @@ void main() {
       expect(d.items, isEmpty);
       expect(d.isEmpty, isTrue);
       expect(d.confirmedEmpty, isTrue);
+    });
+
+    test('全 null 的占位记录被丢掉（021362 实测：count=0 却回了一条空记录）', () {
+      // 真凭证探到的原样：count 0 / total 0.0 / item 里一条每个字段都是 null
+      final d = FundDividends.fromJson(envelope({
+        'dividend_count': 0,
+        'dividend_total': 0.0,
+        'item': [
+          {
+            'per_ten_cash_before_tax': null,
+            'per_ten_cash_after_tax': null,
+            'progress': null,
+            'publish_date_ms': null,
+            'registration_date_ms': null,
+            'ex_dividend_date_ms': null,
+            'payment_date_ms': null,
+            'reinvestment_date_ms': null,
+            'profit_base_date_ms': null,
+            'in_dividend_date_ms': null,
+          },
+        ],
+      }));
+      expect(d.items, isEmpty, reason: '空记录不该在界面上占一行');
+      expect(d.isEmpty, isTrue);
+      expect(d.confirmedEmpty, isTrue, reason: '能放心说"这只基金没分过红"');
+      expect(d.totalText, isNull, reason: '「累计分红 0.0」不该显示');
+    });
+
+    test('有内容的记录不会被误杀（只有日期、没有金额也算有内容）', () {
+      final d = FundDividends.fromJson(envelope({
+        'dividend_count': 1,
+        'item': [
+          {'ex_dividend_date_ms': 1704153600000},
+        ],
+      }));
+      expect(d.items.length, 1);
+      expect(d.items.first.exDividendDate!.year, 2024);
+      expect(d.totalText, isNull);
     });
 
     test('count 在外层信封上也能取到（实测有的计数字段不在 data 里）', () {
