@@ -1,4 +1,5 @@
 import '../data/nav_models.dart';
+import 'returns_calendar.dart' show ReturnPoint;
 
 /// 区间收益的口径
 enum ReturnPeriod { w1, m1, m6, y1, y3, y5, inception }
@@ -175,4 +176,56 @@ YtdSeries? ytdReturnSeries(
   }
   if (values.length < 2) return null;
   return (values: values, startDate: base.date);
+}
+
+/// 一只标的在区间内的**净值累计收益率**曲线（%，起点为 0）—— 「业绩走势」图用
+///
+/// 与 [periodReturn] 同口径（优先累计净值 = 分红再投资），但给的是**整条曲线**：
+/// 基准取区间起点（含）之前最近的一条净值，所以跨边界的涨幅不会被算进来。
+/// 区间内没有任何净值点 → 返回空（界面显示空态，而不是画一条假线）。
+List<ReturnPoint> navReturnSeries(
+  List<NavPoint> navs,
+  DateTime start,
+  DateTime end,
+) {
+  if (navs.isEmpty) return const [];
+  final sorted = List<NavPoint>.from(navs)
+    ..sort((a, b) => a.date.compareTo(b.date));
+  final startKey = _key(DateTime(start.year, start.month, start.day));
+  final endKey = _key(DateTime(end.year, end.month, end.day));
+
+  double? base;
+  for (final p in sorted) {
+    if (p.date.compareTo(startKey) <= 0) {
+      if (p.value > 0) base = p.value;
+    } else {
+      break;
+    }
+  }
+  // 区间起点之前没有净值（新标的）→ 用区间内第一条当基准
+  if (base == null) {
+    for (final p in sorted) {
+      if (p.date.compareTo(endKey) > 0) break;
+      if (p.value > 0) {
+        base = p.value;
+        break;
+      }
+    }
+  }
+  if (base == null || base <= 0) return const [];
+
+  final out = <ReturnPoint>[
+    ReturnPoint(date: DateTime(start.year, start.month, start.day), pct: 0),
+  ];
+  for (final p in sorted) {
+    // 区间起点那天用上面那个 0% 锚点表示 —— 净值若正好落在同一天就不再画一个点，
+    // 否则同一个日期会出现两个值、线会凭空竖一下
+    if (p.date.compareTo(startKey) <= 0 || p.date.compareTo(endKey) > 0) {
+      continue;
+    }
+    if (p.value <= 0) continue;
+    out.add(ReturnPoint(
+        date: DateTime.parse(p.date), pct: (p.value / base - 1) * 100));
+  }
+  return out.length < 2 ? const [] : out;
 }

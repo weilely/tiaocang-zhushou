@@ -2523,6 +2523,32 @@ class AppState extends ChangeNotifier {
         end: r.end,
       );
 
+  /// 某只标的（某账户）在区间内的逐日序列 —— 持仓详情页的「资产收益」卡片用
+  ///
+  /// 与趋势图/日历**同源**（`buildDailySeries`），所以市值与累计收益的口径完全一致；
+  /// 只有这一只标的进 walker，超卖折算等既有规则照样生效。
+  /// 没有任何流水 → 返回空（界面显示空态，不编数据）。
+  List<DailyPoint> assetDailySeries({
+    required int accountId,
+    required int assetId,
+    required DateRange range,
+  }) {
+    final a = assetsById[assetId];
+    if (a == null) return const [];
+    final list = [
+      for (final t in txns)
+        if (t.assetId == assetId && t.accountId == accountId) t,
+    ];
+    if (list.isEmpty) return const [];
+    return buildDailySeries(
+      assets: [AssetSeries(asset: a, navs: navSamples[a.code] ?? const [])],
+      txns: list,
+      accountId: accountId,
+      start: range.start,
+      end: range.end,
+    );
+  }
+
   DateRange get trendRange =>
       _rangeOf(trendPreset, customStart: trendCustomStart, customEnd: trendCustomEnd);
 

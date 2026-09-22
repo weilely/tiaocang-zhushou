@@ -274,4 +274,70 @@ void main() {
       expect(s.values.last, closeTo(10, 1e-9));
     });
   });
+
+  group('业绩走势曲线（navReturnSeries）', () {
+    test('基准取区间起点（含）之前最近一条净值：起点有净值就用它', () {
+      final pts = navReturnSeries([
+        p('2026-05-01', 1.00),
+        p('2026-06-01', 1.10), // 正好落在区间起点：它就是基准，当锚点不重复画
+        p('2026-07-01', 1.20),
+      ], DateTime(2026, 6, 1), DateTime(2026, 7, 1));
+      expect(pts.length, 2);
+      expect(pts.first.date, DateTime(2026, 6, 1));
+      expect(pts.first.pct, 0);
+      expect(pts.last.date, DateTime(2026, 7, 1));
+      expect(pts.last.pct, closeTo(9.0909, 1e-3),
+          reason: '相对起点的 1.10 算，与「区间收益」同一口径');
+    });
+
+    test('区间内第一个点在起点之后：先给 0 锚点再给真实值', () {
+      final pts = navReturnSeries([
+        p('2026-05-01', 1.00),
+        p('2026-06-10', 1.05),
+        p('2026-07-01', 1.20),
+      ], DateTime(2026, 6, 1), DateTime(2026, 7, 1));
+      expect(pts.first.date, DateTime(2026, 6, 1));
+      expect(pts.first.pct, 0);
+      expect(pts[1].pct, closeTo(5, 1e-9));
+      expect(pts.last.pct, closeTo(20, 1e-9));
+    });
+
+    test('起点之前没有净值（今年新成立）：用区间内第一条当基准', () {
+      final pts = navReturnSeries([
+        p('2026-06-10', 2.00),
+        p('2026-07-01', 2.20),
+      ], DateTime(2026, 6, 1), DateTime(2026, 7, 1));
+      // 0% 锚点 + 区间内两条（第一条自己就是基准 → 0%）
+      expect(pts.length, 3);
+      expect(pts.first.date, DateTime(2026, 6, 1));
+      expect(pts.first.pct, 0);
+      expect(pts[1].pct, closeTo(0, 1e-9));
+      expect(pts.last.pct, closeTo(10, 1e-9));
+    });
+
+    test('区间外与无效净值都排除；点不够返回空（不画假线）', () {
+      // 区间内只有一条有效净值 → 不够画
+      expect(
+          navReturnSeries([
+            p('2026-07-20', 1.2),
+          ], DateTime(2026, 6, 1), DateTime(2026, 7, 1)),
+          isEmpty);
+      // 区间内没有任何净值
+      expect(
+          navReturnSeries([
+            p('2026-01-01', 1.0),
+          ], DateTime(2026, 6, 1), DateTime(2026, 7, 1)),
+          isEmpty);
+      expect(navReturnSeries(const [], DateTime(2026, 6, 1), DateTime(2026, 7, 1)),
+          isEmpty);
+    });
+
+    test('优先累计净值（分红再投资口径，与区间收益一致）', () {
+      final pts = navReturnSeries([
+        p('2026-05-01', 1.00, acc: 2.00),
+        p('2026-06-30', 0.95, acc: 2.20), // 单位净值跌了，累计净值 +10%
+      ], DateTime(2026, 6, 1), DateTime(2026, 6, 30));
+      expect(pts.last.pct, closeTo(10, 1e-9));
+    });
+  });
 }

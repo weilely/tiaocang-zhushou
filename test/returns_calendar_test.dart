@@ -64,6 +64,51 @@ void main() {
         amount: amount,
       );
 
+  group('每日市值（「资产收益」卡片的"总资产"曲线）', () {
+    test('市值 = 当日份额 × 当日净值；卖出后按剩余份额算', () {
+      final a = fund();
+      final series = [
+        AssetSeries(asset: a, navs: [
+          nav(a.code, '2026-09-08', 1.00),
+          nav(a.code, '2026-09-09', 1.10),
+          nav(a.code, '2026-09-10', 0.50),
+        ]),
+      ];
+      final txns = [
+        buy(date: '2026-09-08', amount: 1000, shares: 1000),
+        sell(date: '2026-09-10', amount: 500, shares: 500),
+      ];
+
+      final s = buildDailySeries(
+        assets: series,
+        txns: txns,
+        start: DateTime(2026, 9, 8),
+        end: DateTime(2026, 9, 10),
+      );
+
+      expect(s[0].marketValue, closeTo(1000, 1e-9));
+      expect(s[1].marketValue, closeTo(1100, 1e-9));
+      // 09-10 先按份额卖出 500 份，再按当日净值 0.50 估值 → 剩 500 × 0.50
+      expect(s[2].marketValue, closeTo(250, 1e-9));
+    });
+
+    test('没有净值的日子不算市值；累计收益照旧（两者来自同一条序列）', () {
+      final a = fund();
+      final series = [
+        AssetSeries(asset: a, navs: [nav(a.code, '2026-09-08', 1.00)]),
+      ];
+      final s = buildDailySeries(
+        assets: series,
+        txns: [buy(date: '2026-09-08', amount: 1000, shares: 1000)],
+        start: DateTime(2026, 9, 8),
+        end: DateTime(2026, 9, 10),
+      );
+      expect(s.length, 1, reason: '只有 09-08 有净值，序列只有一天');
+      expect(s.single.marketValue, closeTo(1000, 1e-9));
+      expect(s.single.cumPnl, closeTo(0, 1e-9));
+    });
+  });
+
   group('每日盈亏', () {
     test('买入后每日盈亏 = 当日份额 × 净值差', () {
       final a = fund();

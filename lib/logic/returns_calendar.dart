@@ -66,11 +66,18 @@ class DailyPoint {
   /// 累计收益率（%）；从未投入过时为 null
   final double? cumPct;
 
+  /// 当日**持仓市值**（份额 × 当日净值）
+  ///
+  /// 「资产收益」卡片的「总资产」曲线就是它 —— 值本来就在循环里算过，
+  /// 只是以前没往外给；默认 0 是为了不破坏既有构造点（测试里也在造这个对象）。
+  final double marketValue;
+
   const DailyPoint({
     required this.date,
     required this.dayPnl,
     required this.cumPnl,
     this.cumPct,
+    this.marketValue = 0,
   });
 }
 
@@ -251,6 +258,7 @@ List<DailyPoint> buildDailySeries({
       dayPnl: dayPnl,
       cumPnl: cumPnl,
       cumPct: invested > 1e-9 ? cumPnl / invested * 100 : null,
+      marketValue: value,
     ));
   }
   return out;
