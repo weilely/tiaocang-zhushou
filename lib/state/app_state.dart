@@ -34,6 +34,7 @@ import '../logic/pinyin_util.dart';
 import '../logic/portfolio.dart';
 import '../logic/quote_sync.dart';
 import '../logic/range_preset.dart';
+import '../logic/refresh_throttle.dart';
 import '../logic/nav_freshness.dart';
 import '../logic/rebalance_plan.dart';
 import '../logic/returns_calendar.dart';
@@ -55,6 +56,15 @@ class AppState extends ChangeNotifier {
   String? lastError;
   String? lastMessage;
   DateTime? lastRefresh;
+
+  /// 上次**真正联网**刷新行情的时刻（下拉刷新与切回首页自动刷新共用）
+  ///
+  /// 用户报「首页下滑刷新太平繁了」——两处叠起来会反复发请求，所以用
+  /// [refreshAllowed] 做最小间隔节流（见 logic/refresh_throttle.dart）。
+  DateTime? _lastNetRefresh;
+
+  /// 这次刷新是否被节流挡下了（给界面一句提示用）
+  int lastThrottledSeconds = 0;
 
   List<Account> accounts = [];
   List<Asset> assetList = [];
@@ -875,8 +885,21 @@ class AppState extends ChangeNotifier {
 
   final Set<String> _linkTried = {};
 
-  Future<void> refreshQuotes({bool silent = false}) async {
+  Future<void> refreshQuotes({bool silent = false, bool force = false}) async {
     if (refreshing) return;
+    // 节流：下拉刷新 + 切回首页自动刷新叠起来会反复联网（用户报太频繁）。
+    // 手动下拉被挡下时给一句提示，让他知道不是没反应；自动触发则静默跳过。
+    final now = DateTime.now();
+    if (!refreshAllowed(_lastNetRefresh, now, force: force)) {
+      lastThrottledSeconds = secondsUntilRefresh(_lastNetRefresh, now);
+      if (!silent) {
+        lastMessage = '刚更新过，$lastThrottledSeconds 秒后可再刷新';
+        notifyListeners();
+      }
+      return;
+    }
+    _lastNetRefresh = now;
+    lastThrottledSeconds = 0;
     final need = [...trackedAssets, ...linkAssets];
     if (need.isEmpty) {
       if (!silent) {
@@ -1670,7 +1693,15 @@ class AppState extends ChangeNotifier {
   /// - 场内基金（ETF / LOF）：同样走东财 push2（与持仓行情完全同一条路）
   ///
   /// 每类独立 try/catch；这次没取到的沿用上一次的值，所以不会把缓存写残。
-  Future<void> refreshIndexQuotes() async {
+  Future<void> refreshIndexQuotes({bool force = false}) async {
+    // 与 refreshQuotes 共用同一个冷却：切回首页时不再反复刷指数
+    final now0 = DateTime.now();
+    if (!refreshAllowed(_lastNetRefresh, now0, force: force)) {
+      lastThrottledSeconds = secondsUntilRefresh(_lastNetRefresh, now0);
+      return;
+    }
+    _lastNetRefresh = now0;
+    lastThrottledSeconds = 0;
     // 顺手更新宏观估值（股债利差）：它一天只变一次，内部有当日去重
     unawaited(refreshMacro());
     if (indexQuotes.isEmpty) await loadMarketIndices();
