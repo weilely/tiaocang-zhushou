@@ -223,10 +223,14 @@ class _TrendViewState extends State<_TrendView> {
   Widget build(BuildContext context) {
     final st = context.watch<AppState>();
     final points = st.trendPoints;
-    final refs = st.trendRefPoints;
-    // 点选日期的参考收益（该点的基准值）
-    final refAt =
-        _active != null && _active! < refs.length ? refs[_active!] : st.trendRefPct;
+    // **两条参考线同时画**：大盘指标（可切换）+ 自定义年化（常显）—— 用户要求
+    final market = st.trendMarketRefPoints;
+    final custom = st.trendCustomRefPoints;
+    // 点选到某天时，三条线各自在该点的值；没点选/取不到就退回整段区间的值
+    double? at(List<double?> s) =>
+        (_active != null && _active! < s.length) ? s[_active!] : null;
+    final marketAt = at(market) ?? st.trendMarketRefPct;
+    final customAt = at(custom) ?? st.trendCustomRefPct;
     // 实际收益 = 统计时段的累计收益（阶段收益），不随点选点变化
     final stage = st.stagePct;
 
@@ -255,23 +259,32 @@ class _TrendViewState extends State<_TrendView> {
           // 拖动/点击图表显示竖直指示线与浮动提示，点选变化时刷新下方两行
           ReturnsLineChart(
             points: points,
-            refs: refs,
+            // refs = 大盘指标（可切换）；refs2 = 自定义年化（一直显示）
+            refs: market,
+            refs2: custom,
             onActiveChanged: (i) => setState(() => _active = i),
           ),
           const SizedBox(height: 10),
-          // 图底部只两行：点选日期的 参考收益 与 实际收益（统计时段累计）
+          // 图底部三行读数：实际收益（统计时段累计）、大盘（点选那天）、自定义年化
+          Row(
+            children: [
+              Expanded(child: _bottomPctRow('实际收益', stage)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _bottomPctRow('大盘', marketAt, dashed: true),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
           Row(
             children: [
               Expanded(
                 child: _bottomPctRow(
-                  '参考收益',
-                  refAt,
+                  '自定义年化',
+                  customAt,
                   dashed: true,
+                  dashColor: const Color(0xFFE8A33D),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _bottomPctRow('实际收益', stage),
               ),
             ],
           ),
@@ -280,13 +293,14 @@ class _TrendViewState extends State<_TrendView> {
     );
   }
 
-  /// 图底部一行：标签 + 涨跌色的百分比
-  Widget _bottomPctRow(String label, double? value, {bool dashed = false}) {
+  /// 图底部一行：标签 + 涨跌色的百分比（[dashColor] 用于虚线段样本的颜色）
+  Widget _bottomPctRow(String label, double? value,
+      {bool dashed = false, Color dashColor = const Color(0xFF4A90D9)}) {
     final theme = Theme.of(context);
     return Row(
       children: [
         if (dashed) ...[
-          const DashedLineSample(),
+          DashedLineSample(color: dashColor),
           const SizedBox(width: 6),
         ],
         Text(label, style: TextStyle(fontSize: 12, color: theme.hintColor)),

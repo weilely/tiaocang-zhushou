@@ -2277,6 +2277,52 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  // ---- 趋势图的**两条参考线**（用户要求：自定义那条一直显示，切换只切大盘）----
+
+  /// 大盘指标那条参考线：**始终按当前选中的指数算**，与基准类型无关
+  List<double?> get trendMarketRefPoints {
+    final r = trendRange;
+    return refSeriesOn(
+      benchmark: benchmark.copyWith(kind: BenchmarkKind.marketIndex),
+      indexNavs: benchmarkNavs,
+      rangeStart: r.start,
+      dates: [for (final p in trendPoints) p.date],
+    );
+  }
+
+  /// 自定义年化那条参考线：**始终显示**
+  List<double?> get trendCustomRefPoints {
+    final r = trendRange;
+    return refSeriesOn(
+      benchmark: benchmark.copyWith(kind: BenchmarkKind.custom),
+      indexNavs: benchmarkNavs,
+      rangeStart: r.start,
+      dates: [for (final p in trendPoints) p.date],
+    );
+  }
+
+  /// 大盘指标在整段区间上的收益率（底部图例用）
+  double? get trendMarketRefPct {
+    final r = trendRange;
+    return refPctOfRange(
+      benchmark: benchmark.copyWith(kind: BenchmarkKind.marketIndex),
+      indexNavs: benchmarkNavs,
+      rangeStart: r.start,
+      rangeEnd: r.end,
+    );
+  }
+
+  /// 自定义年化在整段区间上的收益率（底部图例用）
+  double? get trendCustomRefPct {
+    final r = trendRange;
+    return refPctOfRange(
+      benchmark: benchmark.copyWith(kind: BenchmarkKind.custom),
+      indexNavs: benchmarkNavs,
+      rangeStart: r.start,
+      rangeEnd: r.end,
+    );
+  }
+
   double? get stagePct {
     final pts = trendPoints;
     if (pts.length < 2) return null;

@@ -17,6 +17,10 @@ class ReturnsLineChart extends StatefulWidget {
   /// 基准曲线，与 [points] 等长；取不到值的点为 `null`（该段基准线断开）
   final List<double?> refs;
 
+  /// **第二条参考线**：自定义年化收益率那条（用户要求它**一直显示**，
+  /// 而 [refs] 那条大盘指标是可切换的）。同样与 [points] 等长。
+  final List<double?> refs2;
+
   /// 拖动/点击时回调当前活动的点下标（`null` = 松手）
   ///
   /// 浮动提示的文案由调用方渲染，所以把下标抛出去，避免这里备一套格式。
@@ -28,6 +32,7 @@ class ReturnsLineChart extends StatefulWidget {
     super.key,
     required this.points,
     required this.refs,
+    this.refs2 = const [],
     this.onActiveChanged,
     this.height = 168,
   });
@@ -44,6 +49,9 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
 
   /// 基准线用蓝色虚线（对齐 `pic/24.jpg`；之前用的灰色与设计稿不符）
   static const Color _refColor = Color(0xFF4A90D9);
+
+  /// 第二条参考线（**自定义年化**，常显）用琥珀色虚线，和蓝色大盘线区分开
+  static const Color _ref2Color = Color(0xFFE8A33D);
 
   int get _lastIndex => widget.points.isEmpty ? 0 : widget.points.length - 1;
 
@@ -96,7 +104,8 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
         final width = c.maxWidth;
         final geo = ChartGeometry(
           points: widget.points,
-          refs: widget.refs,
+          // 两条参考线一起参与 Y 轴范围计算（ChartGeometry 只用这些值算上下界）
+          refs: [...widget.refs, ...widget.refs2],
           size: Size(width, widget.height),
         );
         // 常显：始终有一个有效的高亮点（默认最后一个）
@@ -118,9 +127,11 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
                     painter: _ChartPainter(
                       points: widget.points,
                       refs: widget.refs,
+                      refs2: widget.refs2,
                       active: active,
                       mainColor: _mainColor,
                       refColor: _refColor,
+                      ref2Color: _ref2Color,
                       hint: Theme.of(context).hintColor,
                       fillTop: _mainColor.withValues(alpha: 0.18),
                       fillBottom: _mainColor.withValues(alpha: 0.01),
@@ -132,6 +143,12 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
                   left: geo.calloutLeft(active, count: widget.points.length),
                   top: geo.calloutTop(active, points: widget.points),
                   pct: widget.points[active].pct,
+                  // 三条线的读数：自定义年化（refs2）+ 大盘（refs）
+                  custom: active < widget.refs2.length
+                      ? widget.refs2[active]
+                      : null,
+                  market:
+                      active < widget.refs.length ? widget.refs[active] : null,
                   diff: active < widget.refs.length && widget.refs[active] != null
                       ? widget.points[active].pct - widget.refs[active]!
                       : null,
@@ -148,9 +165,13 @@ class _ReturnsLineChartState extends State<ReturnsLineChart> {
 class _ChartPainter extends CustomPainter {
   final List<ReturnPoint> points;
   final List<double?> refs;
+
+  /// 第二条参考线（**自定义年化**，常显；颜色与 [refs] 区分）
+  final List<double?> refs2;
   final int? active;
   final Color mainColor;
   final Color refColor;
+  final Color ref2Color;
   final Color hint;
   final Color fillTop;
   final Color fillBottom;
@@ -158,9 +179,11 @@ class _ChartPainter extends CustomPainter {
   _ChartPainter({
     required this.points,
     required this.refs,
+    this.refs2 = const [],
     required this.active,
     required this.mainColor,
     required this.refColor,
+    this.ref2Color = const Color(0xFFE8A33D),
     required this.hint,
     required this.fillTop,
     required this.fillBottom,
@@ -205,27 +228,34 @@ class _ChartPainter extends CustomPainter {
           Offset(size.width - _padRight, yOf(0)), zero);
     }
 
-    // ---- 基准线（虚线）----
-    final refPaint = Paint()
-      ..color = refColor
-      ..strokeWidth = 1.2
-      ..style = PaintingStyle.stroke;
-    var started = false;
-    Offset? prev;
-    for (var i = 0; i < refs.length && i < points.length; i++) {
-      final v = refs[i];
-      if (v == null) {
-        started = false;
-        prev = null;
-        continue;
+    // ---- 基准线（虚线）：大盘指标 + 自定义年化，**两条都画** ----
+    // 用户要求：「自定义那条线一直显示，切换的只是大盘指标」
+    void drawRefSeries(List<double?> series, Color color) {
+      if (series.isEmpty) return;
+      final paint = Paint()
+        ..color = color
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke;
+      var started = false;
+      Offset? prev;
+      for (var i = 0; i < series.length && i < points.length; i++) {
+        final v = series[i];
+        if (v == null) {
+          started = false;
+          prev = null;
+          continue;
+        }
+        final p = Offset(xOf(i), yOf(v));
+        if (started && prev != null) {
+          _dashedLine(canvas, prev, p, paint);
+        }
+        prev = p;
+        started = true;
       }
-      final p = Offset(xOf(i), yOf(v));
-      if (started && prev != null) {
-        _dashedLine(canvas, prev, p, refPaint);
-      }
-      prev = p;
-      started = true;
     }
+
+    drawRefSeries(refs, refColor);
+    drawRefSeries(refs2, ref2Color);
 
     // ---- 组合线 + 面积渐变 ----
     final line = Path();
@@ -420,17 +450,29 @@ class ChartGeometry {
   }
 }
 
-/// 图内浮层：深色圆角卡片 + `收益` / `差值` 两行（对齐 `pic/24.jpg`）
+/// 图内浮层：**三条线的收益值**（实际 / 自定义年化 / 大盘指标）+ 实际−大盘 的差值
 class _Callout extends StatelessWidget {
   final double left;
   final double top;
+
+  /// 实际（本组合）
   final double pct;
+
+  /// 自定义年化那条线在该点的值（没有则为 null）
+  final double? custom;
+
+  /// 大盘指标那条线在该点的值（没有则为 null）
+  final double? market;
+
+  /// 实际 − 大盘 的差值（没有大盘线时为 null）
   final double? diff;
 
   const _Callout({
     required this.left,
     required this.top,
     required this.pct,
+    this.custom,
+    this.market,
     required this.diff,
   });
 
@@ -447,9 +489,19 @@ class _Callout extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _line(context, '收益', pct),
-            const SizedBox(height: 2),
-            if (diff != null) _line(context, '差值', diff!),
+            _line(context, '实际', pct),
+            if (custom != null) ...[
+              const SizedBox(height: 2),
+              _line(context, '自定义', custom!),
+            ],
+            if (market != null) ...[
+              const SizedBox(height: 2),
+              _line(context, '大盘', market!),
+            ],
+            if (diff != null) ...[
+              const SizedBox(height: 2),
+              _line(context, '差值', diff!),
+            ],
           ],
         ),
       ),
