@@ -394,6 +394,14 @@ class FundDividend {
       perTenAfterTax != null ||
       progress.isNotEmpty ||
       keyDate != null;
+
+  /// 分红进度里**能给人看的部分**。
+  ///
+  /// 实测有的是中文（「实施」），有的只是一个状态码数字（024564 回 `"2"`）——
+  /// 数字码对用户毫无意义，直接显示会变成「2 · 权益登记 2026-07-14」。
+  /// 所以纯数字的一律不显示。
+  String get progressText =>
+      progress.isNotEmpty && !RegExp(r'^\d+$').hasMatch(progress) ? progress : '';
 }
 
 /// 分红汇总（`corporate-actions/dividends`）
@@ -445,8 +453,25 @@ class FundDividends {
     final t = total.trim();
     if (t.isEmpty) return null;
     final v = double.tryParse(t);
-    if (v != null && v.abs() < 1e-9) return null;
-    return t;
+    if (v == null) return t; // 已经是带单位的字符串，原样给
+    if (v.abs() < 1e-9) return null;
+    // ⚠️ 浮点噪声：实测 024564 回的是 0.018000000000000002
+    var s = v.toStringAsFixed(6);
+    if (s.contains('.')) {
+      s = s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+    }
+    return s;
+  }
+
+  /// 「累计分红」整句的数值部分（含单位）。
+  ///
+  /// 单位判定依据（可复算）：024564 两次分红是「每10份 0.0800 / 0.1000 元」，
+  /// 而 `dividend_total = 0.018` 正好等于 0.008+0.010 —— 即**每份**累计分红（元/份）。
+  /// 已经是带单位的字符串时不重复加单位。
+  String? get totalLabel {
+    final t = totalText;
+    if (t == null) return null;
+    return double.tryParse(t) == null ? t : '$t 元/份';
   }
 }
 

@@ -332,5 +332,40 @@ void main() {
       expect(d.items.length, 1);
       expect(d.isEmpty, isFalse);
     });
+
+    test('累计分红的浮点噪声要去掉，并补上单位（024564 实测 0.018000000000000002）', () {
+      // 两次分红是「每10份 0.0800 / 0.1000 元」→ 每份累计 0.018
+      final d = FundDividends.fromJson(envelope({
+        'dividend_count': 2,
+        'dividend_total': 0.018000000000000002,
+        'item': [
+          {'per_ten_cash_before_tax': 0.08, 'ex_dividend_date_ms': 1784073600000},
+          {'per_ten_cash_before_tax': 0.1, 'ex_dividend_date_ms': 1775779200000},
+        ],
+      }));
+      expect(d.totalText, '0.018');
+      expect(d.totalLabel, '0.018 元/份');
+    });
+
+    test('累计分红已经是带单位的字符串时原样显示，不重复加单位', () {
+      final d = FundDividends.fromJson(envelope({
+        'dividend_count': 1,
+        'dividend_total': '0.35元/份',
+        'item': [
+          {'per_ten_cash_before_tax': 0.5, 'ex_dividend_date_ms': 1704067200000}
+        ],
+      }));
+      expect(d.totalLabel, '0.35元/份');
+    });
+
+    test('分红进度是纯数字状态码时不显示（024564 回的是 "2"）', () {
+      final numeric =
+          FundDividend.fromJson({'progress': '2', 'ex_dividend_date_ms': 1704067200000});
+      expect(numeric.progress, '2');
+      expect(numeric.progressText, '');
+      final chinese = FundDividend.fromJson(
+          {'progress': '实施', 'ex_dividend_date_ms': 1704067200000});
+      expect(chinese.progressText, '实施');
+    });
   });
 }

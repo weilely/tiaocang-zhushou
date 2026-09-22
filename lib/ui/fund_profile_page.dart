@@ -471,10 +471,10 @@ class _FundProfilePageState extends State<FundProfilePage> {
             )
           else
             for (final it in d.items) _dividendRow(context, it),
-          if (d.totalText != null)
+          if (d.totalLabel != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text('累计分红：${d.totalText}',
+              child: Text('累计分红：${d.totalLabel}',
                   style: TextStyle(fontSize: 11, color: theme.hintColor)),
             ),
         ],
@@ -509,7 +509,7 @@ class _FundProfilePageState extends State<FundProfilePage> {
           const SizedBox(height: 2),
           Text(
             [
-              if (it.progress.isNotEmpty) it.progress,
+              if (it.progressText.isNotEmpty) it.progressText,
               if (it.registrationDate != null) '权益登记 ${fmtDate(it.registrationDate!)}',
               if (it.paymentDate != null) '发放 ${fmtDate(it.paymentDate!)}',
               if (it.reinvestmentDate != null) '再投 ${fmtDate(it.reinvestmentDate!)}',

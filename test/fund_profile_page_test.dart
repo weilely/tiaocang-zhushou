@@ -155,7 +155,6 @@ void main() {
     expect(find.textContaining('除息 2024-01-03'), findsOneWidget);
     expect(find.textContaining('每10份'), findsOneWidget);
     expect(find.textContaining('累计分红：0.35元/份'), findsOneWidget);
-
     // 来源说明
     expect(find.textContaining('数据来自同花顺'), findsOneWidget);
     expect(tester.takeException(), isNull);
