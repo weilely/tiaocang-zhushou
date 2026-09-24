@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/format.dart';
-import '../data/models.dart';
+import '../data/asset_traits.dart';
 import '../data/nav_models.dart';
 import '../logic/portfolio.dart';
 import '../logic/period_return.dart';
@@ -420,7 +420,8 @@ class HoldingCardData {
   final String code;
 
   /// 标的类型：场外基金的份额要固定两位小数
-  final bool isFund;
+  /// 该标的的类型能力表（单位、价格从哪来、有没有估值……见 `data/asset_traits.dart`）
+  final AssetTraits traits;
 
   /// 是否拿到行情；为 false 时所有金额显示 `--`
   final bool hasQuote;
@@ -471,7 +472,7 @@ class HoldingCardData {
   const HoldingCardData({
     required this.name,
     required this.code,
-    required this.isFund,
+    required this.traits,
     required this.hasQuote,
     required this.marketValue,
     required this.ratio,
@@ -516,8 +517,10 @@ class HoldingCardData {
     final dayPct =
         (hasQuote && dayBase.abs() > 1e-9) ? p.dayPnl / dayBase * 100 : null;
 
-    // 「收益已更新」的判断：行情的净值日期是否**不落后于**本地历史净值的最后一天。
-    // 没有历史就退回"这是不是一条已公布净值"（`est` 是盘中估值，不算）。
+    // 「收益已更新」的判断：行情的价格日期是否**不落后于**本地价格历史。
+    // 场内（ETF/股票）行情是实时价 —— 只要行情带着日期就算已更新，
+    // 不该因为"本地还没抓到日线"就写成「收益待更新」（旧版就是这样误报的）。
+    final traits = p.asset.kind.traits;
     final infoDate = p.quote?.infoDate ?? '';
     final priceType = p.quote?.priceType ?? '';
     var lastNavDate = '';
@@ -526,15 +529,18 @@ class HoldingCardData {
         if (n.date.compareTo(lastNavDate) > 0) lastNavDate = n.date;
       }
     }
-    final navIsLatest = infoDate.isNotEmpty &&
-        (lastNavDate.isEmpty
-            ? priceType == 'nav'
-            : infoDate.compareTo(lastNavDate) >= 0);
+    final navIsLatest = infoDate.isEmpty
+        ? false
+        : traits.priceIsLive
+            ? (lastNavDate.isEmpty || infoDate.compareTo(lastNavDate) >= 0)
+            : (lastNavDate.isEmpty
+                ? priceType == 'nav'
+                : infoDate.compareTo(lastNavDate) >= 0);
 
     return HoldingCardData(
       name: p.asset.name.isEmpty ? p.asset.code : p.asset.name,
       code: p.asset.code,
-      isFund: p.asset.kind == AssetKind.fund,
+      traits: traits,
       hasQuote: hasQuote,
       marketValue: p.marketValue,
       ratio: ratio,
@@ -697,10 +703,11 @@ class HoldingCard extends StatelessWidget {
                     final ytd = d.ytd;
                     final metrics = Column(
                       children: [
-                        _kv(context, '最新净值', _navValue(context, d)),
+                        // 标签按类型走：场外是「最新净值 / 净值日期」，场内是「最新价 / 行情日期」
+                        _kv(context, d.traits.priceLabel, _navValue(context, d)),
                         _kv(
                             context,
-                            '净值日期',
+                            d.traits.priceDateLabel,
                             Text(d.infoDate.isNotEmpty ? d.infoDate : '--',
                                 style: const TextStyle(fontSize: 12.5))),
                         _kv(context, '当日收益', _money(context, d.dayPnl)),
@@ -731,7 +738,7 @@ class HoldingCard extends StatelessWidget {
                       children: [
                         Expanded(child: metrics),
                         const SizedBox(width: 10),
-                        SizedBox(width: w, child: _ytdColumn(context, ytd)),
+                        SizedBox(width: w, child: _ytdColumn(context, ytd, d.traits)),
                       ],
                     );
                   },
@@ -799,7 +806,8 @@ class HoldingCard extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(fmtPrice(d.price!),
+        // 场内按报价习惯显示 2 位小数，场外净值仍是 3~4 位
+        Text(fmtPrice(d.price!, digits: d.traits.priceIsLive ? 2 : null),
             style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
         if (d.changePct != null) ...[
           const SizedBox(width: 4),
@@ -811,15 +819,17 @@ class HoldingCard extends StatelessWidget {
   }
 
   /// 右侧那列：标题 + 当前值 + 迷你曲线
-  Widget _ytdColumn(BuildContext context, YtdSeries ytd) {
+  Widget _ytdColumn(BuildContext context, YtdSeries ytd, AssetTraits traits) {
     final last = ytd.values.last;
     final line = pnlColor(last);
     final y = DateTime.now().year;
     // 基准在**年初或更早**（去年的最后一条就是正常情形）→ 这就是"今年以来"；
     // 只有今年才成立的标的，基准落在年内，才如实写起始日。
+    // 场外基金叫「收益率」（净值口径），场内叫「涨跌幅」（价格口径）—— 算法同一个。
+    final word = traits.priceIsLive ? '涨跌幅' : '收益率';
     final label = ytd.startDate.compareTo('$y-01-01') <= 0
-        ? '今年以来收益率'
-        : '${ytd.startDate.substring(5)} 以来收益率';
+        ? '今年以来$word'
+        : '${ytd.startDate.substring(5)} 以来$word';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [

@@ -169,7 +169,7 @@ class _RebalancePageState extends State<RebalancePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('调仓基金市值', style: hint),
+                    Text('调仓标的市值', style: hint),
                     const SizedBox(height: 2),
                     Text(
                       fmtYuan(plan.estTotal),
@@ -382,20 +382,25 @@ class _RebalancePageState extends State<RebalancePage> {
             valueColor: t.hasTarget ? null : theme.hintColor,
           ),
           _infoRow(
-            t.estMode ? '预估净值' : '净值',
-            t.hasNav ? fmtPrice(t.nav!) : '--',
+            // 场外是「净值」、场内是「现价」；估值模式只对场外基金有意义
+            t.estMode ? '预估净值' : (isFund ? '净值' : '现价'),
+            t.hasNav
+                ? fmtPrice(t.nav!,
+                    digits: isFund ? null : 2) // 场内报价按 2 位小数
+                : '--',
             hint,
             // 日期后缀只在**有估值依据**时才有意义（说明预估是基于哪天的净值算的）；
             // 场内看现价日期，非估值模式（非交易日）干脆不写日期。
             suffix: () {
               final d = t.navDate;
               if (d == null || d.isEmpty) return null;
-              if (!isFund) return '现价 $d';
+              if (!isFund) return null; // 标签已经写明「现价」，不再重复
               return t.estMode ? '预估净值（$d）' : null;
             }(),
           ),
           _infoRow(
-            '调仓份额',
+            // 股票/ETF 说「股数」，场外基金说「份额」
+            isFund ? '调仓份额' : '调仓股数',
             line.planShares == 0 ? '--' : _num2(line.planShares),
             hint,
           ),

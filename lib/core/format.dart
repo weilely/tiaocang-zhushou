@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 final NumberFormat _money = NumberFormat('#,##0.00');
 final NumberFormat _price4 = NumberFormat('#,##0.0000');
 final NumberFormat _price3 = NumberFormat('#,##0.000');
+final NumberFormat _price2 = NumberFormat('#,##0.00');
 final NumberFormat _shares = NumberFormat('#,##0.##');
 final NumberFormat _shares2 = NumberFormat('#,##0.00');
 final NumberFormat _yuanShort = NumberFormat('#,##0');
@@ -25,8 +26,13 @@ String fmtMoneySigned(double v) {
 }
 
 /// 价格：小于 10 显示 4 位，否则 3 位
-String fmtPrice(double v) {
+///
+/// [digits] 可指定小数位：**场内（ETF/股票）报价按习惯取 2 位**，
+/// 净值那边仍用默认的 3~4 位（基金净值差一位就没法对账了）。
+String fmtPrice(double v, {int? digits}) {
   if (v.isNaN || v.isInfinite || v == 0) return '--';
+  if (digits == 2) return _price2.format(v);
+  if (digits != null) return v.toStringAsFixed(digits);
   return v.abs() < 10 ? _price4.format(v) : _price3.format(v);
 }
 

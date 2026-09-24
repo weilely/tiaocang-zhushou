@@ -323,6 +323,115 @@ void main() {
     });
   });
 
+  group('股票 / ETF 与场外基金和谐相处（2026-09-24）', () {
+    /// 场内的持仓：行情是**实时价**（priceType=price），本地日线可能还没抓到
+    Position stockPos() => Position(
+          accountId: 1,
+          asset: Asset(
+            id: 9,
+            code: '600519',
+            name: '贵州茅台',
+            kind: AssetKind.stock,
+            market: 'SH',
+          ),
+          shares: 100,
+          cost: 150000,
+          realized: 0,
+          invested: 150000,
+          returned: 0,
+          quote: Quote(
+            code: '600519',
+            kind: AssetKind.stock,
+            name: '贵州茅台',
+            price: 1680,
+            prevClose: 1660,
+            changePct: 1.2,
+            priceType: 'price',
+            infoDate: '2026-09-24',
+          ),
+          txns: const [],
+        );
+
+    testWidgets('标签按类型走：最新价 / 行情日期，不再写「最新净值」', (tester) async {
+      await tester.pumpWidget(host(HoldingCard(
+        data: HoldingCardData.from(stockPos(), totalMarketValue: 168000),
+      )));
+      expect(find.text('最新价'), findsOneWidget);
+      expect(find.text('行情日期'), findsOneWidget);
+      expect(find.text('最新净值'), findsNothing);
+      expect(find.text('净值日期'), findsNothing);
+    });
+
+    testWidgets('行情是实时价 → 收益已更新（不因"本地还没日线"误报待更新）', (tester) async {
+      // 这条正是旧版的 bug：场内没有本地净值历史 → 回落判 priceType=='nav' → 判否
+      await tester.pumpWidget(host(HoldingCard(
+        data: HoldingCardData.from(stockPos(), totalMarketValue: 168000),
+      )));
+      expect(find.text('收益已更新'), findsOneWidget);
+      expect(find.text('收益待更新'), findsNothing);
+    });
+
+    testWidgets('场内不显示「盘中估值」（有实时价，没有预估一说）', (tester) async {
+      await tester.pumpWidget(host(HoldingCard(
+        data: HoldingCardData.from(stockPos(), totalMarketValue: 168000),
+      )));
+      expect(find.text('盘中估值'), findsNothing);
+      expect(find.textContaining('预估涨幅'), findsNothing);
+    });
+
+    testWidgets('有日线时曲线标题写「涨跌幅」（价格口径），基金仍是「收益率」', (tester) async {
+      final navs = [
+        NavPoint(code: '600519', date: '2025-12-31', nav: 1500),
+        NavPoint(code: '600519', date: '2026-06-30', nav: 1600),
+        NavPoint(code: '600519', date: '2026-09-24', nav: 1680),
+      ];
+      await tester.pumpWidget(host(HoldingCard(
+        data: HoldingCardData.from(stockPos(),
+            totalMarketValue: 168000, navs: navs),
+      )));
+      expect(find.text('今年以来涨跌幅'), findsOneWidget);
+      expect(find.text('今年以来收益率'), findsNothing);
+
+      await tester.pumpWidget(host(HoldingCard(
+        data: HoldingCardData.from(pos(),
+            totalMarketValue: 100000,
+            navs: [
+              NavPoint(code: '022459', date: '2025-12-31', nav: 1.10),
+              NavPoint(code: '022459', date: '2026-06-30', nav: 1.20),
+              NavPoint(code: '022459', date: '2026-09-11', nav: 1.2319),
+            ]),
+      )));
+      expect(find.text('今年以来收益率'), findsOneWidget);
+    });
+
+    testWidgets('股票卡窄屏 320dp + 字体 1.3 倍也不溢出', (tester) async {
+      tester.view.physicalSize = const Size(320, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final navs = [
+        NavPoint(code: '600519', date: '2025-12-31', nav: 1500),
+        NavPoint(code: '600519', date: '2026-09-24', nav: 1680),
+      ];
+      await tester.pumpWidget(MaterialApp(
+        builder: (ctx, child) => MediaQuery(
+          data: MediaQuery.of(ctx)
+              .copyWith(textScaler: const TextScaler.linear(1.3)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: HoldingCard(
+              data: HoldingCardData.from(stockPos(),
+                  totalMarketValue: 168000, navs: navs),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  });
+
   group('排序行', () {
     testWidgets('四个元素齐全', (tester) async {
       await tester.pumpWidget(host(HoldingSortBar(

@@ -225,5 +225,21 @@ void main() {
       );
       expect(navFillHint(day: sat, queried: false), isNot(contains('未查到')));
     });
+
+    test('场内（ETF/股票）把那行词换成「价格」', () {
+      // 股票没有"净值"这个概念，表单上写"净值"就不对了
+      expect(
+        navFillHint(day: sat, busy: true, noun: '价格'),
+        '正在查询 2026年09月12日 的价格…',
+      );
+      expect(
+        navFillHint(day: sat, noun: '价格'),
+        '未查到 2026年09月12日 的价格，请手工填写',
+      );
+      final f = NavFill(date: '2026-09-11', nav: 1680, exact: true);
+      expect(navFillHint(day: fri, fill: f, noun: '价格'), '2026-09-11 价格 1,680.000');
+      // 默认（场外）不受影响
+      expect(navFillHint(day: fri, fill: f), '2026-09-11 净值 1,680.000');
+    });
   });
 }

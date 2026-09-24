@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/format.dart';
+import '../data/asset_traits.dart';
 import '../data/market_api.dart';
 import '../data/models.dart';
 import '../data/securities_repo.dart';
@@ -175,9 +176,15 @@ class _TxnEditPageState extends State<TxnEditPage> {
 
   // ---------------- 金额 / 份额 / 净值的联动 ----------------
 
-  /// 主字段随交易类型互换：买入先填金额，卖出先填份额
+  /// 当前标的的能力表（单位、按手、实时价、买入主字段都在这里）
+  AssetTraits get _traits => AssetTraits.of(_kind);
+
+  /// 当前的主输入字段：场外基金买入=金额，场内买入=股数，卖出=份额
+  PrimaryField get _primary => primaryFieldFor(_type, _traits);
+
+  /// 主字段随交易类型与标的类型互换（场内买入先填股数）
   void _resetDerivedFlag() {
-    switch (primaryFieldFor(_type)) {
+    switch (_primary) {
       case PrimaryField.amount:
         _autoShares = true;
         _autoAmount = false;
@@ -201,17 +208,26 @@ class _TxnEditPageState extends State<TxnEditPage> {
     _writing = false;
   }
 
-  /// 金额变了算份额（买入）；份额变了算金额（卖出）
+  /// 金额变了算份额，份额变了算金额（**谁被用户改，谁就是主字段**）
+  ///
+  /// 场外基金买入是金额主字段、场内买入是股数主字段，所以这里按
+  /// `_autoShares` / `_autoAmount` 两个开关走，不按交易类型硬判。
   void _syncDerived() {
     if (_type == TxnType.dividend) return;
     final price = double.tryParse(_price.text) ?? 0;
     if (price <= 0) return;
 
     if (_type == TxnType.buy) {
-      if (!_autoShares) return;
-      final amount = double.tryParse(_amount.text) ?? 0;
-      final s = derivedShares(amount: amount, price: price, kind: _kind);
-      if (s != null) _setText(_shares, _trim(s));
+      if (_autoShares) {
+        final amount = double.tryParse(_amount.text) ?? 0;
+        final s = derivedShares(amount: amount, price: price, traits: _traits);
+        if (s != null) _setText(_shares, _trim(s));
+      } else if (_autoAmount) {
+        // 场内买入：股数是主字段，金额跟着算（落到分）
+        final shares = double.tryParse(_shares.text) ?? 0;
+        final a = derivedAmount(shares: shares, price: price);
+        if (a != null) _setText(_amount, _trim(double.parse(a.toStringAsFixed(2))));
+      }
     } else {
       if (!_autoAmount) return;
       final shares = double.tryParse(_shares.text) ?? 0;
@@ -224,7 +240,12 @@ class _TxnEditPageState extends State<TxnEditPage> {
   void _onSharesChanged() {
     if (_writing) return;
     if (_type == TxnType.buy) {
-      _autoShares = false; // 份额被手改，不再自动推
+      if (_primary == PrimaryField.shares) {
+        _autoAmount = true; // 场内买入：股数是主字段，金额跟着算
+        _autoShares = false;
+      } else {
+        _autoShares = false; // 场外基金：份额被手改，不再自动推（金额仍是主字段）
+      }
     } else {
       _autoAmount = true; // 卖出：份额是主字段，手改后金额跟着算
     }
@@ -235,6 +256,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
     if (_writing) return;
     if (_type == TxnType.buy) {
       _autoShares = true;
+      // 场外基金买入：金额本来就是主字段；场内买入在金额上动手 → 金额成为主字段
+      if (_primary == PrimaryField.shares) _autoAmount = false;
     } else {
       _autoAmount = false;
     }
@@ -390,6 +413,9 @@ class _TxnEditPageState extends State<TxnEditPage> {
               ],
               onChanged: (v) {
                 setState(() => _kind = v ?? AssetKind.fund);
+                // 换类型会换主字段（场外基金买入填金额、场内买入填股数），
+                // 先重置"谁是派生字段"再联动一次
+                _resetDerivedFlag();
                 _syncDerived();
                 if (_code.text.trim().isNotEmpty) _syncNav();
               },
@@ -458,13 +484,14 @@ class _TxnEditPageState extends State<TxnEditPage> {
             ],
             const SizedBox(height: 16),
 
-            // 主字段随类型互换：买入先金额、卖出先份额；派生字段独占一行
+            // 主字段随类型互换：场外基金买入先填金额、场内买入先填股数、卖出先填份额；
+            // 派生字段独占一行
             if (!isDividend) ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: _type == TxnType.buy
+                    child: _primary == PrimaryField.amount
                         ? _amountField()
                         : _sharesField(),
                   ),
@@ -473,7 +500,10 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 ],
               ),
               const SizedBox(height: 16),
-              if (_type == TxnType.buy) _sharesField() else _amountField(),
+              if (_primary == PrimaryField.amount)
+                _sharesField()
+              else
+                _amountField(),
               const SizedBox(height: 16),
             ],
 
@@ -548,6 +578,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
               error: _navError,
               hasCode: hasCode,
               queried: queried,
+              // 场外是「净值」、场内是「价格」
+              noun: _traits.priceIsLive ? '价格' : '净值',
             ),
             style: TextStyle(fontSize: 11, color: color),
           ),
@@ -556,12 +588,13 @@ class _TxnEditPageState extends State<TxnEditPage> {
     );
   }
 
-  /// 净值：按交易日期自动填入，也可手改；右侧按钮可重新查询
+  /// 价格：按交易日期自动填入，也可手改；右侧按钮可重新查询
   Widget _priceField() {
     return TextFormField(
       controller: _price,
       decoration: InputDecoration(
-        labelText: '净值 / 价格',
+        // 场外填的是净值、场内填的是成交价
+        labelText: _traits.priceIsLive ? '价格' : '净值',
         helperText: '按日期自动填入',
         suffixIcon: _navBusy
             ? const Padding(
@@ -572,7 +605,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
                     child: CircularProgressIndicator(strokeWidth: 2)),
               )
             : IconButton(
-                tooltip: '按日期重新查询净值',
+                tooltip: '按日期重新查询',
                 icon: const Icon(Icons.autorenew, size: 18),
                 onPressed: _syncNav,
               ),
@@ -586,38 +619,49 @@ class _TxnEditPageState extends State<TxnEditPage> {
     );
   }
 
-  /// 份额：买入时是自动算出来的，卖出时是主输入
+  /// 份额/股数：场外基金买入时是自动算出来的，场内买入与卖出一律是主输入
   Widget _sharesField() {
-    final derived = _type == TxnType.buy;
+    final unit = _traits.unit;
+    final isBuy = _type == TxnType.buy;
+    final main = _primary == PrimaryField.shares; // 这一格是不是主输入
+    final label = isBuy ? (main ? '买入$unit' : unit) : '卖出$unit';
+    final helper = main
+        // 场内买入：先填股数，金额跟着算
+        ? (isBuy ? '按价格自动算出金额，也可手改' : '按价格自动算出金额')
+        // 场外买入：金额是主字段，这一格是算出来的
+        : '按金额和净值自动算出，可手改';
     return TextFormField(
       controller: _shares,
-      decoration: InputDecoration(
-        labelText: derived ? '份额' : '卖出份额',
-        helperText: derived ? '按金额和净值自动算出，可手改' : '按净值自动算出金额',
-      ),
+      decoration: InputDecoration(labelText: label, helperText: helper),
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       validator: (v) {
         final d = double.tryParse(v ?? '');
-        if (d == null || d <= 0) return '请输入份额';
+        if (d == null || d <= 0) return '请输入$unit';
         final max = widget.maxShares;
         if (max != null && max > 0 && d > max + 1e-9) {
-          return '最多可卖 ${fmtShares(max)} 份';
+          final t = fmtSharesOf(max, isFund: _traits.unitIsFund);
+          return '最多可卖 $t $unit';
         }
         return null;
       },
     );
   }
 
-  /// 金额：买入时是主输入，卖出时是自动算出来的，分红时是到账金额
+  /// 金额：场外基金买入时是主输入，场内买入与卖出时是自动算出来的，分红时是到账金额
   Widget _amountField({bool dividend = false}) {
-    final derived = !dividend && _type == TxnType.sell;
+    final isBuy = _type == TxnType.buy;
+    final main = _primary == PrimaryField.amount;
+    final derived = !dividend && !main;
+    final helper = dividend
+        ? '实际到账的现金'
+        : (derived
+            ? (isBuy ? '按${_traits.unit}和价格自动算出，可手改' : '按金额和净值自动算出，可手改')
+            : '按净值自动算出${_traits.unit}');
     return TextFormField(
       controller: _amount,
       decoration: InputDecoration(
-        labelText: dividend ? '分红到账金额' : (derived ? '金额' : '买入金额'),
-        helperText: dividend
-            ? '实际到账的现金'
-            : (derived ? '按份额和净值自动算出，可手改' : '按净值自动算出份额'),
+        labelText: dividend ? '分红到账金额' : (main ? '买入金额' : '金额'),
+        helperText: helper,
       ),
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       validator: (v) {

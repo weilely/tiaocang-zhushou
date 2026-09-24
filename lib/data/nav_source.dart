@@ -134,17 +134,31 @@ class NavSource {
       final close = double.tryParse((raw['close'] ?? '').toString());
       if (day.length < 10 || close == null || close <= 0) continue;
 
-      final open = double.tryParse((raw['open'] ?? '').toString()) ?? close;
       out.add(NavPoint(
         code: asset.code,
         date: day.substring(0, 10),
         nav: close,
         accNav: close,
-        changePct: open > 0 ? (close / open - 1) * 100 : 0,
+        // 涨跌幅先留空，排完序再按**前一条收盘价**补 —— 这个接口不给昨收，
+        // 拿 open 当基准算出来的是"开盘到收盘"，不是当日涨跌幅（旧版就是错的）
+        changePct: 0,
       ));
     }
     out.sort((a, b) => a.date.compareTo(b.date));
-    return out;
+    return [
+      for (var i = 0; i < out.length; i++)
+        i == 0
+            ? out[i]
+            : NavPoint(
+                code: out[i].code,
+                date: out[i].date,
+                nav: out[i].nav,
+                accNav: out[i].accNav,
+                changePct: out[i - 1].nav > 0
+                    ? (out[i].nav / out[i - 1].nav - 1) * 100
+                    : 0,
+              ),
+    ];
   }
 
   // ---------------- 增量 ----------------

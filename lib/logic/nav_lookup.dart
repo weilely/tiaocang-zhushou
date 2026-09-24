@@ -137,6 +137,7 @@ NavFill? pickNavFill({
 ///
 /// [hasCode] 为 false 表示还没填代码、[queried] 为 false 表示还没为「当前代码 +
 /// 当前日期」查过 —— 这两种都不是「查不到」，不该给用户一条红字。
+/// [noun] 按标的类型换词：场外基金是「净值」，场内（ETF/股票）是「价格」。
 String navFillHint({
   required DateTime day,
   NavFill? fill,
@@ -144,18 +145,19 @@ String navFillHint({
   String? error,
   bool hasCode = true,
   bool queried = true,
+  String noun = '净值',
 }) {
-  if (!hasCode) return '填入代码后自动按日期查净值';
-  if (!queried) return '选中标的后自动按日期查净值';
-  if (busy) return '正在查询 ${fmtDateCn(day)} 的净值…';
+  if (!hasCode) return '填入代码后自动按日期查$noun';
+  if (!queried) return '选中标的后自动按日期查$noun';
+  if (busy) return '正在查询 ${fmtDateCn(day)} 的$noun…';
   if (fill == null) {
     return error == null
-        ? '未查到 ${fmtDateCn(day)} 的净值，请手工填写'
-        : '联网查询失败，可手工填写净值';
+        ? '未查到 ${fmtDateCn(day)} 的$noun，请手工填写'
+        : '联网查询失败，可手工填写$noun';
   }
   if (fill.estimated) return '${fill.date} 盘中估值 ${fmtPrice(fill.nav)}';
   if (!fill.exact) {
-    return '该日无净值，取 ${fmtIsoMonthDay(fill.date)} 净值 ${fmtPrice(fill.nav)}';
+    return '该日无$noun，取 ${fmtIsoMonthDay(fill.date)} $noun ${fmtPrice(fill.nav)}';
   }
-  return '${fill.date} 净值 ${fmtPrice(fill.nav)}';
+  return '${fill.date} $noun ${fmtPrice(fill.nav)}';
 }

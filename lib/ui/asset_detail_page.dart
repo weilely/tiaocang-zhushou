@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/format.dart';
+import '../data/asset_traits.dart';
 import '../data/models.dart';
 import '../data/nav_models.dart';
 import '../logic/benchmark.dart';
@@ -266,7 +267,7 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
             SizedBox(
               height: 168,
               child: Center(
-                child: Text('这段时间没有这只标的的净值数据',
+                child: Text('这段时间没有这只标的的价格数据',
                     style: TextStyle(fontSize: 12, color: theme.hintColor)),
               ),
             )
@@ -456,10 +457,15 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                  child: cell('持有份额',
+                  child: cell('持有${p.asset.kind.traits.unit}',
                       fmtSharesOf(p.shares,
-                          isFund: p.asset.kind == AssetKind.fund))),
-              Expanded(child: cell('成本单价', fmtPrice(p.avgCost))),
+                          isFund: p.asset.kind.traits.unitIsFund))),
+              Expanded(
+                  child: cell(
+                '成本单价',
+                fmtPrice(p.avgCost,
+                    digits: p.asset.kind.traits.priceIsLive ? 2 : null),
+              )),
             ],
           ),
           const SizedBox(height: 10),
@@ -469,7 +475,10 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
               Expanded(
                 child: cell(
                   '最新价',
-                  p.hasQuote ? fmtPrice(p.price) : '--',
+                  p.hasQuote
+                      ? fmtPrice(p.price,
+                          digits: p.asset.kind.traits.priceIsLive ? 2 : null)
+                      : '--',
                   sub: quote == null
                       ? '无行情'
                       : '${quote.priceTypeLabel} ${quote.infoDate}',
