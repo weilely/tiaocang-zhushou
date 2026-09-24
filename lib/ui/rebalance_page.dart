@@ -120,7 +120,7 @@ class _RebalancePageState extends State<RebalancePage> {
         padding: const EdgeInsets.only(bottom: 28),
         children: [
           _header(context, st, plan, theme, hint),
-          _planHeader(context, plan, theme),
+          _planHeader(context, st, plan, theme),
           if (plan.isEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
@@ -267,15 +267,17 @@ class _RebalancePageState extends State<RebalancePage> {
     );
   }
 
-  Widget _planHeader(BuildContext context, RebalancePlan plan, ThemeData theme) {
+  Widget _planHeader(BuildContext context, AppState st, RebalancePlan plan,
+      ThemeData theme) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
-          const Text('调仓方案',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          // 调仓目标与持仓都跟着顶部账户走，标题里写明是哪个账户算的
+          Text('调仓方案（${st.accountLabel}）',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           const Spacer(),
           if (plan.buyCount > 0)
             Text('${plan.buyCount} 买入',

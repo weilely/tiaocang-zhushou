@@ -310,26 +310,46 @@ class Quote {
 /// 再平衡目标配置
 ///
 /// [key] 为 `kind:fund` 形式（按标的类型）或 `asset:<code>` 形式（按个别标的）
+///
+/// **调仓目标按账户分开存**（v8 起）：[accountId] 是它归属的账户，
+/// 同一只标的在不同账户可以有各自的目标比例，互不相干。
 class TargetAlloc {
   int? id;
+  int accountId;
   String key;
   String label;
   double ratio;
 
-  TargetAlloc({this.id, required this.key, required this.label, this.ratio = 0});
+  TargetAlloc({
+    this.id,
+    this.accountId = 1,
+    required this.key,
+    required this.label,
+    this.ratio = 0,
+  });
 
-  Map<String, Object?> toMap() =>
-      {'id': id, 'key': key, 'label': label, 'ratio': ratio};
+  Map<String, Object?> toMap() => {
+        'id': id,
+        'account_id': accountId,
+        'key': key,
+        'label': label,
+        'ratio': ratio,
+      };
 
   factory TargetAlloc.fromMap(Map<String, Object?> m) => TargetAlloc(
         id: m['id'] as int?,
+        // v4 及更早的备份里没有这一列 → 归到第一个账户（老数据全是单账户）
+        accountId: (m['account_id'] as num?)?.toInt() ?? 1,
         key: m['key'] as String,
         label: (m['label'] as String?) ?? '',
         ratio: (m['ratio'] as num?)?.toDouble() ?? 0,
       );
 
-  TargetAlloc copyWith({int? id, String? key, String? label, double? ratio}) => TargetAlloc(
+  TargetAlloc copyWith(
+          {int? id, int? accountId, String? key, String? label, double? ratio}) =>
+      TargetAlloc(
         id: id ?? this.id,
+        accountId: accountId ?? this.accountId,
         key: key ?? this.key,
         label: label ?? this.label,
         ratio: ratio ?? this.ratio,

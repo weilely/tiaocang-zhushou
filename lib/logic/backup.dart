@@ -87,6 +87,9 @@ class AppBackup {
         'assets': assets.map((e) => e.toMap()).toList(),
         'txns': txns.map((e) => e.toMap()).toList(),
         'cashTxns': cashTxns.map((e) => e.toMap()).toList(),
+        // 每条目标带 account_id（调仓目标按账户分开存）；老备份没这列，
+        // 解码时统一归到第一个账户（见 TargetAlloc.fromMap）。
+        // 纯新增字段：老版本读到会忽略，所以**不抬备份版本号**
         'targets': targets.map((e) => e.toMap()).toList(),
         'watchlist': watchlist.map((e) => e.toMap()).toList(),
         'dcaPlans': dcaPlans.map((e) => e.toMap()).toList(),
@@ -96,6 +99,12 @@ class AppBackup {
         'securities': securities,
         'navHistory': navHistory,
       };
+
+  /// 备份里的账户 id（升序）；恢复时给「没有账户归属的老目标」找家
+  List<int> get accountIds => [
+        for (final a in accounts)
+          if (a.id != null) a.id!,
+      ]..sort();
 
   /// 顶层保持缩进（便于人看），但两个大表用紧凑写法
   String encode() {

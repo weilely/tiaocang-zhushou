@@ -30,7 +30,10 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 正在联网检查更新
   bool _checkingUpdate = false;
 
-  /// 调仓目标：标的代码 → 目标占比输入框
+  /// 调仓目标：「账户 + 标的代码」→ 目标占比输入框
+  ///
+  /// 目标是**按账户分开**的，同一只标的在不同账户下要显示各自的比例，
+  /// 所以 key 里必须带账户 —— 否则切账户会把上一个账户输入的数字带过来。
   final Map<String, TextEditingController> _targetCtrl = {};
 
   /// 行情指标筹码的 key（按下拉菜单要对着它弹）
@@ -55,9 +58,12 @@ class _SettingsPageState extends State<SettingsPage> {
     super.dispose();
   }
 
-  TextEditingController _targetCtrlFor(String code, double ratio) {
+  static String _targetKey(int? accountId, String code) =>
+      '${accountId ?? 0}|$code';
+
+  TextEditingController _targetCtrlFor(int? accountId, String code, double ratio) {
     return _targetCtrl.putIfAbsent(
-      code,
+      _targetKey(accountId, code),
       () => TextEditingController(text: ratio <= 0 ? '' : _pctText(ratio)),
     );
   }
@@ -231,41 +237,73 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // ---------------- 调仓目标 ----------------
 
-  /// 按**具体标的**设目标占比（调仓页的「调仓方案」就按它算买卖金额）
+  /// 按**具体标的**给某个账户设目标占比（调仓页的「调仓方案」就按它算买卖金额）
   ///
-  /// 只列**当前还有份额**的标的：已经清仓的不需要再给它定目标比例。
+  /// **目标是按账户分开的**：每张卡只属于一个账户，只列该账户还有份额的标的、
+  /// 也只写回那个账户。「全部账户」时两个账户各出一张卡，互不相干。
   /// 卡片默认收起，免得一屏全是基金行。
   Widget _targetSection(BuildContext context, AppState st) {
-    final held = <Asset>{
-      for (final p in st.allPositions)
-        if (!p.isEmpty) p.asset,
-    }.toList()
-      ..sort((a, b) => a.code.compareTo(b.code));
-    final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
-
-    if (held.isEmpty) {
+    // 选了具体账户就只出那一张；「全部账户」时每个账户各一张
+    final shown = [
+      for (final a in st.accounts)
+        if (st.accountFilter == null || a.id == st.accountFilter) a,
+    ];
+    if (shown.isEmpty) {
       return CollapsibleSectionCard(
         title: '调仓目标',
         initiallyExpanded: false,
-        child: Text('当前没有持仓标的', style: TextStyle(fontSize: 13, color: hint.color)),
+        child: Text('还没有账户', style: TextStyle(fontSize: 13, color: Theme.of(context).hintColor)),
+      );
+    }
+    return Column(
+      children: [
+        for (final a in shown)
+          if (a.id != null) _targetCard(context, st, a.id!, a.name),
+      ],
+    );
+  }
+
+  Widget _targetCard(
+      BuildContext context, AppState st, int accountId, String accountName) {
+    final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
+    final title = '调仓目标 · $accountName';
+
+    final held = <Asset>{
+      // 这个账户的持仓（不是全账户）
+      for (final p in st.positionsOf(accountId))
+        if (!p.isEmpty) p.asset,
+    }.toList()
+      ..sort((a, b) => a.code.compareTo(b.code));
+    final tgts = st.targetsOf(accountId);
+
+    if (held.isEmpty) {
+      return CollapsibleSectionCard(
+        title: title,
+        initiallyExpanded: false,
+        child: Text('该账户当前没有持仓标的',
+            style: TextStyle(fontSize: 13, color: hint.color)),
       );
     }
 
     for (final a in held) {
-      final ratio = st.targets
+      final ratio = tgts
           .where((t) => t.key == TargetAlloc.assetKey(a.code))
           .fold<double>(0, (acc, t) => acc + t.ratio);
-      _targetCtrlFor(a.code, ratio);
+      _targetCtrlFor(accountId, a.code, ratio);
     }
 
-    final sum = _targetCtrl.values
-        .fold<double>(0, (acc, c) => acc + (double.tryParse(c.text.trim()) ?? 0));
+    // 只统计这个账户的输入框（map 里还有别的账户的条目）
+    double sum = 0;
+    for (final a in held) {
+      final c = _targetCtrl[_targetKey(accountId, a.code)];
+      sum += double.tryParse(c?.text.trim() ?? '') ?? 0;
+    }
 
     return CollapsibleSectionCard(
-      title: '调仓目标（${held.length} 只）',
+      title: '$title（${held.length} 只）',
       initiallyExpanded: false,
       trailing: TextButton.icon(
-        onPressed: () => _fillByCurrent(st, held),
+        onPressed: () => _fillByCurrent(st, accountId, held),
         icon: const Icon(Icons.auto_fix_high, size: 18),
         label: const Text('按当前占比'),
       ),
@@ -273,7 +311,8 @@ class _SettingsPageState extends State<SettingsPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('给每只基金 / 股票填目标占比，调仓页按它算需买入 / 需卖出的金额；'
-              '留空的标的按「保持现状」处理，不参与买卖建议。', style: hint),
+              '留空的标的按「保持现状」处理，不参与买卖建议。'
+              '目标按账户分开保存，切换账户各用各的。', style: hint),
           const SizedBox(height: 6),
           for (final a in held)
             Padding(
@@ -295,7 +334,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   SizedBox(
                     width: 92,
                     child: TextField(
-                      controller: _targetCtrl[a.code],
+                      controller: _targetCtrl[_targetKey(accountId, a.code)],
                       textAlign: TextAlign.right,
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
@@ -330,7 +369,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               const Spacer(),
               FilledButton.tonal(
-                onPressed: _saveTargets,
+                onPressed: () => _saveTargets(accountId),
                 child: const Text('保存'),
               ),
             ],
@@ -340,34 +379,47 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  /// 按当前市值占比一键填充（省得手填一遍）
-  void _fillByCurrent(AppState st, List<Asset> held) {
-    final total = st.summary.marketValue;
+  /// 按**该账户**的当前市值占比一键填充（省得手填一遍）
+  void _fillByCurrent(AppState st, int accountId, List<Asset> held) {
+    final total = st.marketValueOf(accountId);
     if (total <= 0) return;
     final byCode = {
-      for (final s in st.assetAllocation) s.key.replaceFirst('asset:', ''): s.value,
+      for (final s in st.allocationOf(accountId))
+        s.key.replaceFirst('asset:', ''): s.value,
     };
     setState(() {
       for (final a in held) {
         final v = byCode[a.code] ?? 0;
-        _targetCtrl[a.code]?.text = _pctText(v / total);
+        _targetCtrl[_targetKey(accountId, a.code)]?.text = _pctText(v / total);
       }
     });
   }
 
-  Future<void> _saveTargets() async {
+  /// 保存**该账户**的目标
+  ///
+  /// 只遍历这个账户当前的持仓标的 —— 目标按账户存，别的账户的输入框
+  /// （map 里同一只标的的其它条目）绝不能一起写进来。
+  Future<void> _saveTargets(int accountId) async {
     final st = context.read<AppState>();
     final names = {for (final a in st.assetList) a.code: a};
-    for (final e in _targetCtrl.entries) {
-      final pct = double.tryParse(e.value.text.trim()) ?? 0;
-      final name = names[e.key];
+    final held = <Asset>{
+      for (final p in st.positionsOf(accountId))
+        if (!p.isEmpty) p.asset,
+    };
+    for (final a in held) {
+      final c = _targetCtrl[_targetKey(accountId, a.code)];
+      if (c == null) continue;
+      final pct = double.tryParse(c.text.trim()) ?? 0;
+      final name = names[a.code];
       if (pct <= 0) {
-        await st.removeTarget(TargetAlloc.assetKey(e.key));
+        await st.removeTarget(TargetAlloc.assetKey(a.code),
+            accountId: accountId);
       } else {
         await st.setTargetRatio(
-          TargetAlloc.assetKey(e.key),
-          name == null || name.name.isEmpty ? e.key : name.name,
+          TargetAlloc.assetKey(a.code),
+          name == null || name.name.isEmpty ? a.code : name.name,
           (pct / 100).clamp(0.0, 1.0),
+          accountId: accountId,
         );
       }
     }

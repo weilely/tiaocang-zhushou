@@ -79,7 +79,14 @@ extension BackupStore on AppDatabase {
       }
       for (final t in b.targets) {
         if (t.id == null) continue;
-        await txn.insert('targets', t.toMap(),
+        // 老备份（v4 及更早）没有 account_id，模型的兜底值是 1；万一备份里的
+        // 账户不是 1（或 1 已删），把这类目标归到备份里 id 最小的账户，
+        // 免得恢复后变成谁都看不到的「无主目标」
+        final map = t.toMap();
+        if (b.accountIds.isNotEmpty && !b.accountIds.contains(t.accountId)) {
+          map['account_id'] = b.accountIds.first;
+        }
+        await txn.insert('targets', map,
             conflictAlgorithm: ConflictAlgorithm.replace);
       }
       for (final w in b.watchlist) {

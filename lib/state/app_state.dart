@@ -73,13 +73,22 @@ class AppState extends ChangeNotifier {
   Map<int, Asset> assetsById = {};
   List<Txn> txns = [];
   Map<String, Quote> quotes = {};
-  List<TargetAlloc> targets = [];
+
+  /// **所有账户的**调仓目标（调仓目标按账户分开存，v8 起）
+  ///
+  /// 界面要用的「当前账户的目标」请用 [targets] / [targetsOf] ——
+  /// 写回时一定要带上账户，别直接改这个列表。
+  List<TargetAlloc> allTargets = [];
 
   /// 再平衡告警阈值（0.05 = 5%）
   double threshold = 0.05;
 
   /// 账户筛选；null 表示全部账户
   int? accountFilter;
+
+  /// 当前账户名（全部账户时给「全部账户」），标题栏以外的地方也能直接显示
+  String get accountLabel =>
+      accountFilter == null ? '全部账户' : (accountsById[accountFilter]?.name ?? '');
 
   /// 最近一次备份时间
   DateTime? lastBackupAt;
@@ -149,6 +158,26 @@ class AppState extends ChangeNotifier {
   List<Position> get positions {
     final list = buildPositions(
       txns: txnsOfFilter,
+      assets: assetsById,
+      quotes: quotes,
+    );
+    _fillEst(list);
+    return list;
+  }
+
+  /// 指定账户的持仓市值合计（「按当前占比」填充目标时用）
+  double marketValueOf(int? accountId) =>
+      summarize(positionsOf(accountId)).marketValue;
+
+  /// 指定账户的按标的分布（同上）
+  List<AllocationSlice> allocationOf(int? accountId) =>
+      allocationByAsset(positionsOf(accountId));
+
+  /// 指定账户的持仓；[accountId] 为 null = 全部账户（同 [allPositions]）
+  List<Position> positionsOf(int? accountId) {
+    if (accountId == null) return allPositions;
+    final list = buildPositions(
+      txns: [for (final t in txns) if (t.accountId == accountId) t],
       assets: assetsById,
       quotes: quotes,
     );
@@ -283,6 +312,8 @@ class AppState extends ChangeNotifier {
     assetsById = {for (final a in assetList) if (a.id != null) a.id!: a};
     txns = await db.txns();
     cashTxns = await db.cashTxns();
+    // 账户删了，它那份调仓目标也一起没了（db.deleteAccount 里删的）
+    allTargets = await db.targets();
     _recompute();
     if (accountFilter == id) accountFilter = null;
     notifyListeners();
@@ -460,28 +491,92 @@ class AppState extends ChangeNotifier {
   }
 
   // ============================================================
-  // 调仓目标（按具体标的）
+  // 调仓目标（按账户 + 具体标的）
   // ============================================================
 
-  Future<void> setTargetRatio(String key, String label, double ratio) async {
-    if (ratio <= 0) {
-      await removeTarget(key);
-      return;
-    } else {
-      await db.saveTarget(TargetAlloc(key: key, label: label, ratio: ratio));
+  /// 当前账户（顶部筛选）的调仓目标
+  ///
+  /// 「全部账户」时给的是**按各账户市值加权合并**后的视图：一条目标的 ratio 是
+  /// 「占本账户的比例」，合并后要换算成「占所有账户的比例」——
+  /// 即 `Σ(本账户比例 × 本账户市值) / 全部市值`。这种合并值只用来**看**
+  /// （条目 `accountId == 0`，没有归属、写不回库）：设置页在「全部账户」下会给
+  /// 每个账户各发一张可编辑的卡，各写各的账户。
+  List<TargetAlloc> get targets => targetsOf(accountFilter);
+
+  /// 指定账户的调仓目标；[accountId] 为 null = 全部账户的合并视图
+  List<TargetAlloc> targetsOf(int? accountId) {
+    if (accountId != null) {
+      return [
+        for (final t in allTargets)
+          if (t.accountId == accountId) t,
+      ];
     }
-    targets = await db.targets();
-    notifyListeners();
+    if (allTargets.isEmpty) return const [];
+    final mv = _marketValueByAccount();
+    final total = mv.values.fold<double>(0, (a, b) => a + b);
+    if (total <= 0) return const [];
+    final merged = <String, TargetAlloc>{};
+    for (final t in allTargets) {
+      final w = (mv[t.accountId] ?? 0) / total;
+      // 该账户没有市值（已清仓）→ 它的目标在合并视图里没有分量
+      if (w <= 0) continue;
+      final cur = merged[t.key];
+      merged[t.key] = cur == null
+          ? TargetAlloc(
+              accountId: 0, // 合并视图不属于任何账户，也回写不了库
+              key: t.key,
+              label: t.label,
+              ratio: t.ratio * w,
+            )
+          : cur.copyWith(ratio: cur.ratio + t.ratio * w);
+    }
+    return merged.values.toList();
   }
 
-  Future<void> removeTarget(String key) async {
-    for (final t in targets) {
-      if (t.key == key && t.id != null) {
+  /// 各账户的持仓市值（合并视图算加权比例用）
+  Map<int, double> _marketValueByAccount() {
+    final out = <int, double>{};
+    for (final a in accounts) {
+      final id = a.id;
+      if (id == null) continue;
+      var v = 0.0;
+      for (final p in positionsOf(id)) {
+        if (!p.isEmpty) v += p.marketValue;
+      }
+      out[id] = v;
+    }
+    return out;
+  }
+
+  /// 设置某账户（默认当前账户）的目标比例；比例 ≤ 0 = 删掉这条
+  Future<void> setTargetRatio(String key, String label, double ratio,
+      {int? accountId}) async {
+    final acc = accountId ?? accountFilter;
+    if (acc == null) return; // 全部账户视图没有「归属」，不写库
+    if (ratio <= 0) {
+      await removeTarget(key, accountId: acc);
+      return;
+    }
+    await db.saveTarget(
+        TargetAlloc(accountId: acc, key: key, label: label, ratio: ratio));
+    await reloadTargets();
+  }
+
+  /// 删掉某账户（默认当前账户）的某条目标
+  Future<void> removeTarget(String key, {int? accountId}) async {
+    final acc = accountId ?? accountFilter;
+    if (acc == null) return;
+    for (final t in allTargets) {
+      if (t.accountId == acc && t.key == key && t.id != null) {
         await db.deleteTarget(t.id!);
         break;
       }
     }
-    targets = await db.targets();
+    await reloadTargets();
+  }
+
+  Future<void> reloadTargets() async {
+    allTargets = await db.targets();
     notifyListeners();
   }
 
@@ -2430,7 +2525,7 @@ class AppState extends ChangeNotifier {
     assetsById = {for (final a in assetList) if (a.id != null) a.id!: a};
     txns = await db.txns();
     quotes = await db.quotes();
-    targets = await db.targets();
+    allTargets = await db.targets();
     dcaPlans = await db.dcaPlans();
     watchlist = await db.watchlist();
     cashTxns = await db.cashTxns();
@@ -2697,8 +2792,12 @@ class AppState extends ChangeNotifier {
     double extra = 0,
     Map<String, double> pctOverrides = const {},
   }) {
+    // **方案跟着账户走**：调仓目标按账户存，只有持仓也按同一个账户取，
+    // 算出来的买卖金额才对得上（「全部账户」= 全部持仓 + 合并后的目标）。
+    final held = accountFilter == null ? allPositions : positions;
+    final tgts = targets;
     final merged = <String, ({double shares, Asset asset})>{};
-    for (final p in allPositions) {
+    for (final p in held) {
       if (p.isEmpty) continue;
       final prev = merged[p.asset.code];
       merged[p.asset.code] = (
@@ -2707,7 +2806,6 @@ class AppState extends ChangeNotifier {
       );
     }
 
-    final estTotal = <double>[];
     final targetsIn = <PlanTarget>[];
     for (final e in merged.entries) {
       final a = e.value.asset;
@@ -2720,7 +2818,7 @@ class AppState extends ChangeNotifier {
       final Quote? liveNav = quoteHasTodaysNav(q) ? q : null;
       final navOfToday =
           navPublishedToday(quote: q, lastNavDate: base?.date);
-      final ratio = targets
+      final ratio = tgts
           .where((t) => t.key == TargetAlloc.assetKey(a.code))
           .fold<double>(0, (acc, t) => acc + t.ratio);
 
@@ -2797,10 +2895,8 @@ class AppState extends ChangeNotifier {
       ));
     }
 
-    // 未设目标但持有的也要进方案（显示现状）
-    for (final p in allPositions) {
-      if (!p.isEmpty) estTotal.add(p.marketValue);
-    }
+    // 未设目标但持有的也要进方案（显示现状）—— 已在上面随 targetsIn 一起处理，
+    // 这里不再重复统计（plan 自己的 estTotal 由 buildRebalancePlan 算）
 
     return buildRebalancePlan(
       targets: targetsIn,
@@ -3367,7 +3463,8 @@ class AppState extends ChangeNotifier {
       // 现金流水必须一起备份：买入/卖出/分红/定投都会联动写一条，
       // 少了它恢复后余额与交易就对不上
       cashTxns: await db.cashTxns(),
-      targets: targets,
+      // 调仓目标要**全部账户**一起备份（targets 是按账户存的分账户条目）
+      targets: allTargets,
       // v3 起：关注列表（含置顶/排序）与定投计划也要进备份，
       // 否则恢复后自选和定投全丢
       watchlist: watchlist,

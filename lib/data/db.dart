@@ -12,8 +12,9 @@ class AppDatabase {
 
   /// v2 securities，v3 dca_plans，v4 watchlist/nav_history/cash_txns，
   /// v5 给 cash_txns 加 src_txn_id（交易联动的现金流水），
-  /// v6 给 assets 加 link_code，v7 macro_history（股债利差每日累积）
-  static const int _dbVersion = 7;
+  /// v6 给 assets 加 link_code，v7 macro_history（股债利差每日累积），
+  /// v8 调仓目标按账户分开（targets 加 account_id，唯一键改成 账户+标的）
+  static const int _dbVersion = 8;
 
   Database? _db;
 
@@ -90,9 +91,11 @@ class AppDatabase {
     await d.execute('''
       CREATE TABLE targets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        key TEXT NOT NULL UNIQUE,
+        account_id INTEGER NOT NULL DEFAULT 1,
+        key TEXT NOT NULL,
         label TEXT NOT NULL DEFAULT '',
-        ratio REAL NOT NULL DEFAULT 0
+        ratio REAL NOT NULL DEFAULT 0,
+        UNIQUE (account_id, key)
       )
     ''');
 
@@ -146,6 +149,79 @@ class AppDatabase {
     if (oldVersion < 7) {
       await _createMacroTable(d);
     }
+    if (oldVersion < 8) {
+      // 调仓目标改为「按账户」存：老库的 targets 是全局一张表，
+      // 唯一键还是 key（同一只标的只能有一条），必须整表重建才能改约束
+      await _migrateTargetsToAccounts(d);
+    }
+  }
+
+  /// v7 → v8：把全局的调仓目标归到**真正持有该标的的账户**
+  ///
+  /// 老库里一条目标不区分账户。这里按 `asset:<code>` 里的代码去 txns 里找
+  /// **最后一笔交易属于哪个账户**（最能代表它现在归谁），找不到就用账户列表里
+  /// id 最小的那个 —— 一条都不丢。
+  ///
+  /// 重建而不是 `ALTER TABLE`：老表的 `UNIQUE (key)` 会让两个账户不能给同一只
+  /// 标的各设一个目标，而 SQLite 改不了既有约束。
+  ///
+  /// **幂等**：已经有 `account_id` 就什么都不做。装回旧版 App 时 sqflite 会把
+  /// 版本号悄悄写回 7（降级不报错），再升上来就会又跑到这里 —— 那时表已经是
+  /// 按账户存好的，重算会把用户特意给别的账户设的目标改掉。
+  Future<void> _migrateTargetsToAccounts(Database d) async {
+    final cols = await d.rawQuery('PRAGMA table_info(targets)');
+    if (cols.any((r) => (r['name'] as String?) == 'account_id')) return;
+
+    final old = await d.query('targets', orderBy: 'id ASC');
+    final accRows = await d.query('accounts', columns: ['id'], orderBy: 'id ASC');
+    final accIds = [
+      for (final r in accRows)
+        if ((r['id'] as num?) != null) (r['id'] as num).toInt(),
+    ];
+    final fallback = accIds.isEmpty ? 1 : accIds.first;
+
+    final rows = <Map<String, Object?>>[];
+    for (final r in old) {
+      final key = (r['key'] as String?) ?? '';
+      var accountId = fallback;
+      if (key.startsWith('asset:')) {
+        final code = key.substring('asset:'.length);
+        final hit = await d.rawQuery('''
+          SELECT t.account_id AS aid FROM txns t
+          JOIN assets a ON a.id = t.asset_id
+          WHERE a.code = ?
+          ORDER BY t.date DESC, t.id DESC
+          LIMIT 1
+        ''', [code]);
+        if (hit.isNotEmpty) {
+          final aid = (hit.first['aid'] as num?)?.toInt();
+          if (aid != null && accIds.contains(aid)) accountId = aid;
+        }
+      }
+      rows.add({
+        'id': r['id'],
+        'account_id': accountId,
+        'key': key,
+        'label': (r['label'] as String?) ?? '',
+        'ratio': (r['ratio'] as num?)?.toDouble() ?? 0,
+      });
+    }
+
+    await d.execute('ALTER TABLE targets RENAME TO targets_v7');
+    await d.execute('''
+      CREATE TABLE targets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL DEFAULT 1,
+        key TEXT NOT NULL,
+        label TEXT NOT NULL DEFAULT '',
+        ratio REAL NOT NULL DEFAULT 0,
+        UNIQUE (account_id, key)
+      )
+    ''');
+    for (final r in rows) {
+      await d.insert('targets', r, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await d.execute('DROP TABLE targets_v7');
   }
 
   /// 幂等补列：已存在则跳过（`ALTER TABLE ADD COLUMN` 重复执行会报错）
@@ -297,6 +373,8 @@ class AppDatabase {
   Future<void> deleteAccount(int id) async {
     final d = await database;
     await d.delete('txns', where: 'account_id = ?', whereArgs: [id]);
+    // 调仓目标是按账户存的，账户没了目标也没意义（留着会变成无主数据）
+    await d.delete('targets', where: 'account_id = ?', whereArgs: [id]);
     await d.delete('accounts', where: 'id = ?', whereArgs: [id]);
   }
 
@@ -418,15 +496,21 @@ class AppDatabase {
 
   // ---------------- 目标配置 ----------------
 
-  Future<List<TargetAlloc>> targets() async {
+  Future<List<TargetAlloc>> targets({int? accountId}) async {
     final d = await database;
-    final rows = await d.query('targets', orderBy: 'id ASC');
+    final rows = await d.query(
+      'targets',
+      where: accountId == null ? null : 'account_id = ?',
+      whereArgs: accountId == null ? null : [accountId],
+      orderBy: 'account_id ASC, id ASC',
+    );
     return rows.map(TargetAlloc.fromMap).toList();
   }
 
   Future<void> saveTarget(TargetAlloc t) async {
     final d = await database;
     if (t.id == null) {
+      // 同一账户下同一个 key 只留一条（靠 UNIQUE(account_id, key) 覆盖）
       await d.insert('targets', t.toMap()..remove('id'),
           conflictAlgorithm: ConflictAlgorithm.replace);
     } else {
@@ -439,9 +523,14 @@ class AppDatabase {
     await d.delete('targets', where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<void> clearTargets() async {
+  /// 删某一个账户的目标（不传 = 清空全部账户）
+  Future<void> clearTargets({int? accountId}) async {
     final d = await database;
-    await d.delete('targets');
+    await d.delete(
+      'targets',
+      where: accountId == null ? null : 'account_id = ?',
+      whereArgs: accountId == null ? null : [accountId],
+    );
   }
 
   // ---------------- 宏观估值（股债利差）----------------

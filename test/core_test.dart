@@ -490,6 +490,8 @@ void main() {
       expect(back.txns[1].type, TxnType.dividend);
       expect(back.txns[1].amount, closeTo(88.8, 1e-9));
       expect(back.targets.first.ratio, closeTo(0.6, 1e-9));
+      // 调仓目标是按账户存的，备份里也要带着账户走
+      expect(back.targets.first.accountId, 1);
       expect(back.settings['threshold'], '0.05');
     });
 
