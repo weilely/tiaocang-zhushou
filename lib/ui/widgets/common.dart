@@ -335,12 +335,27 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
     setState(() => _open = !_open);
     // 存起来，下次启动保持不变
     AppDatabase.instance.setSetting(_key, _open ? '1' : '0');
-    // 收起会让卡片变矮、滚动位置可能越界。**用 keepVisibleAtStart 温和处理**：
-    // 卡片已经可见就什么都不做；不可见才最小幅度滚一下。
-    // （早先用默认的 explicit 强制"卡片顶对齐视口顶"，在收起后的短页面上做不到，
-    //   会被夹到页面底部 —— 用户看到的就是「点收起屏闪、只看见检查更新」。）
+    //
+    // 收起让卡片变矮 = 列表内容变短，而 Flutter 在内容变短时**不会**把滚动位置
+    // 夹回范围内：位置会停在新 maxScrollExtent **之外**。表现就是画面看着停在
+    // 底部（「只看见检查更新」），手指往下拖只是在倒退那段看不见的超出量，
+    // 画面一动不动 —— 用户报的「展开后把标图滚出屏幕就滚回不去」「点收起屏闪」
+    // 都是这个越界状态（模拟器实测 pixels=1229 而 max=437，差值正好是卡片收起的高度）。
+    // 所以先夹回有效范围；位置本来就正常的场合，下面这段和以前的行为一模一样。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      final pos = Scrollable.maybeOf(context)?.position;
+      if (pos != null && pos.hasPixels && pos.hasContentDimensions) {
+        if (pos.pixels > pos.maxScrollExtent) {
+          pos.jumpTo(pos.maxScrollExtent);
+          return;
+        }
+        if (pos.pixels < pos.minScrollExtent) {
+          pos.jumpTo(pos.minScrollExtent);
+          return;
+        }
+      }
+      // 卡片已经可见就什么都不做；不可见才最小幅度滚一下。
       Scrollable.ensureVisible(
         context,
         alignment: 0,

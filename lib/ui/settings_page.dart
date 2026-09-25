@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
@@ -26,6 +27,9 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
+  /// 设置页的滚动位置 —— 内容变短时要靠它把越界的位置夹回来
+  final ScrollController _scroll = ScrollController();
+
   bool _busy = false;
 
   /// 正在联网检查更新
@@ -56,7 +60,41 @@ class _SettingsPageState extends State<SettingsPage> {
     for (final c in _targetCtrl.values) {
       c.dispose();
     }
+    _scroll.dispose();
     super.dispose();
+  }
+
+  /// 把越界的滚动位置夹回有效范围
+  ///
+  /// 列表内容变短（收起卡片、统计条数刷新）时 Flutter 不会自动夹：位置会停在
+  /// 新的 maxScrollExtent 之外，看着像"卡住滚不回去"（往下拖只是在倒退那段
+  /// 看不见的超出量）。
+  ///
+  /// `ScrollMetricsNotification` 是 SDK 特意**推迟到这一帧结束之后**才发的
+  /// （scroll_position.dart 里的原话："we delay it until after the frame is complete"），
+  /// 所以正常情况下可以直接改；万一还在布局中间，就推到帧末再改。
+  void _clampScroll() {
+    final binding = WidgetsBinding.instance;
+    final phase = binding.schedulerPhase;
+    if (phase == SchedulerPhase.idle ||
+        phase == SchedulerPhase.postFrameCallbacks) {
+      _clampNow();
+      return;
+    }
+    binding.addPostFrameCallback((_) => _clampNow());
+    // 自己排一帧：这时候光加 post-frame 回调不一定有人来跑它
+    binding.ensureVisualUpdate();
+  }
+
+  void _clampNow() {
+    if (!mounted || !_scroll.hasClients) return;
+    final pos = _scroll.position;
+    if (!pos.hasPixels || !pos.hasContentDimensions) return;
+    if (pos.pixels > pos.maxScrollExtent) {
+      pos.jumpTo(pos.maxScrollExtent);
+    } else if (pos.pixels < pos.minScrollExtent) {
+      pos.jumpTo(pos.minScrollExtent);
+    }
   }
 
   static String _targetKey(int? accountId, String code) =>
@@ -86,21 +124,35 @@ class _SettingsPageState extends State<SettingsPage> {
 
     // 设置已是底部第 5 个页签，标题栏由外壳提供，所以这里不再自带 Scaffold/AppBar。
     // 忙碌进度条内联到列表顶部，保留「正在处理」的反馈。
-    return ListView(
-      // 同上：不要和别的页签共用 PrimaryScrollController
-      primary: false,
-      padding: const EdgeInsets.only(bottom: 32),
-      children: [
-        if (_busy) const LinearProgressIndicator(minHeight: 2),
-        _accountSection(context, st),
-        _targetSection(context, st),
-        _dataSection(context, st),
-        _marketSection(context, st),
-        _hithinkSection(context, st),
+    return NotificationListener<ScrollMetricsNotification>(
+      // 内容变短（收起卡片、统计条数刷新）时兜底：位置越界就夹回来。
+      // 光靠卡片自己夹不够 —— 页面刚进来时各卡片的折叠状态还是默认值，
+      // 异步读回上次状态后内容会整体缩水，位置一样可能停在 max 之外。
+      onNotification: (n) {
+        final m = n.metrics;
+        if (m.pixels > m.maxScrollExtent + 0.5 ||
+            m.pixels < m.minScrollExtent - 0.5) {
+          _clampScroll();
+        }
+        return false;
+      },
+      child: ListView(
+        controller: _scroll,
+        // 同上：不要和别的页签共用 PrimaryScrollController
+        primary: false,
+        padding: const EdgeInsets.only(bottom: 32),
+        children: [
+          if (_busy) const LinearProgressIndicator(minHeight: 2),
+          _accountSection(context, st),
+          _targetSection(context, st),
+          _dataSection(context, st),
+          _marketSection(context, st),
+          _hithinkSection(context, st),
           _securitySection(context, st),
-        _appearanceSection(context, st),
-        _aboutSection(context),
-      ],
+          _appearanceSection(context, st),
+          _aboutSection(context),
+        ],
+      ),
     );
   }
 
