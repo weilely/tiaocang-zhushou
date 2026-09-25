@@ -64,9 +64,6 @@ class _TxnEditPageState extends State<TxnEditPage> {
   /// 佣金费率输入框（万分之几，按账户存）
   final _feeRateCtrl = TextEditingController();
 
-  /// 手续费是否还跟着成交金额自动算（用户手改过 / 编辑既有流水 → 不再自动覆盖）
-  bool _autoFee = true;
-
   bool _autoAmount = false;
   bool _autoShares = true;
 
@@ -161,17 +158,15 @@ class _TxnEditPageState extends State<TxnEditPage> {
     _shares.addListener(_onSharesChanged);
     _price.addListener(_onPriceChanged);
     _amount.addListener(_onAmountChanged);
-    _fee.addListener(_onFeeChanged);
-    // 编辑既有流水：手续费是既成事实，不许被费率自动算覆盖
-    _autoFee = widget.existing == null;
     _feeRateCtrl.text = _wanText(st.feeRateOf(_accountId));
+    // 「实际」手续费默认为 0（用户要求）；编辑既有流水则沿用记录里的值
+    if (widget.existing == null) _fee.text = '0';
 
     // 进来就带着标的（从持仓详情页）时，先按当前日期查一次净值
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // 预填的场景（从详情页卖出）不会有"变更事件"，这里补算一次手续费，
-      // 否则会出现"助手写着 ¥5.00、框里却是空的"
-      _syncFee();
+      // 预填的场景（从详情页卖出）不会有"变更事件"，这里刷一次，
+      // 让「预测」那一格按已填的金额/费率算出来
       setState(() {});
       if (widget.existing == null && _code.text.isNotEmpty) _syncNav();
     });
@@ -183,7 +178,6 @@ class _TxnEditPageState extends State<TxnEditPage> {
     _shares.removeListener(_onSharesChanged);
     _price.removeListener(_onPriceChanged);
     _amount.removeListener(_onAmountChanged);
-    _fee.removeListener(_onFeeChanged);
     for (final c in [
       _code,
       _name,
@@ -273,51 +267,53 @@ class _TxnEditPageState extends State<TxnEditPage> {
     return s;
   }
 
-  /// 用户手改过手续费 → 之后不再按费率覆盖（与份额/金额同一套"谁是主字段"逻辑）
-  void _onFeeChanged() {
-    if (_writing) return;
-    _autoFee = false;
-    setState(() {}); // helper 文案要跟着变
-  }
-
   void _onFeeRateChanged(String v) {
     // **即时生效**（不做防抖）：setFeeRate 会先把值写进内存再落库，
-    // 所以紧接着的 _syncFee 就能用它算出金额；防抖的话当次填完费率是算不出来的
+    // 所以紧接着的预测值立刻就能按新费率算出来
     final acc = _accountId;
     if (acc != null) {
       unawaited(context.read<AppState>().setFeeRate(acc, double.tryParse(v.trim())));
     }
     setState(() {});
-    _syncFee();
   }
 
-  /// 按「成交金额 × 费率」自动填手续费；**没设费率/金额为空就什么都不做**（不猜）
-  void _syncFee() {
-    if (_type == TxnType.dividend) return;
-    if (!_autoFee) return;
-    final acc = _accountId;
-    if (acc == null) return;
-    final st = context.read<AppState>();
-    final amount = double.tryParse(_amount.text) ?? 0;
-    final fee = st.feeForAmount(accountId: acc, kind: _kind, amount: amount);
-    if (fee == null) return;
-    _setText(_fee, fee.toStringAsFixed(2));
-  }
-
-  /// 手续费下面那行说明：把"这个数是怎么来的"摆出来，免得猜
-  String? _feeHint() {
+  /// **预测**手续费（只读）：按「成交金额 × 费率」算；
+  /// 没设费率 / 金额为空 → null（**不猜**，那一栏显示 `--`）
+  double? _predictedFee() {
     if (_type == TxnType.dividend) return null;
     final st = context.read<AppState>();
+    return st.feeForAmount(
+      accountId: _accountId,
+      kind: _kind,
+      amount: double.tryParse(_amount.text) ?? 0,
+    );
+  }
+
+  /// 「一键导入预测值」：把预测那一栏的数抄进**实际**手续费（之后可以再手改）
+  void _applyPredictedFee() {
+    final fee = _predictedFee();
+    if (fee == null) return;
+    setState(() => _fee.text = fee.toStringAsFixed(2));
+  }
+
+  /// 「手续费（预测）」那一格：样式跟别的输入框一致，但**不可改**
+  Widget _predictedFeeBox(BuildContext context, AppState st) {
     final wan = st.feeRateOf(_accountId);
-    if (wan == null) return '留空即可；要自动算就在下面填佣金费率';
-    final amount = double.tryParse(_amount.text) ?? 0;
-    final fee = st.feeForAmount(accountId: _accountId, kind: _kind, amount: amount);
-    if (fee == null) return '按万${_wanText(wan)} 算（先填金额 / 股数×价格）';
+    final fee = _predictedFee();
     final min = _kind.isExchange && !st.feeWaiveMinOf(_accountId)
-        ? '（不足 5 元按 5 元）'
+        ? '，不足 5 元按 5 元'
         : '';
-    return '按万${_wanText(wan)} 算 = ¥${fee.toStringAsFixed(2)}$min'
-        '${_autoFee ? '' : ' · 已按你手改的填'}';
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: '手续费（预测）',
+        helperText: wan == null ? '填了佣金费率才有预测' : '按万${_wanText(wan)}$min',
+        enabled: false, // 灰掉，表明这一格不可改
+      ),
+      child: Text(
+        fee == null ? '--' : '¥${fee.toStringAsFixed(2)}',
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+      ),
+    );
   }
 
   void _onSharesChanged() {
@@ -333,7 +329,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
       _autoAmount = true; // 卖出：份额是主字段，手改后金额跟着算
     }
     _syncDerived();
-    _syncFee();
+    setState(() {}); // 「预测」那一格要跟着金额/份额重算
   }
 
   void _onAmountChanged() {
@@ -346,13 +342,13 @@ class _TxnEditPageState extends State<TxnEditPage> {
       _autoAmount = false;
     }
     _syncDerived();
-    _syncFee();
+    setState(() {});
   }
 
   void _onPriceChanged() {
     if (_writing) return;
     _syncDerived();
-    _syncFee();
+    setState(() {});
   }
 
   // ---------------- 按交易日期查净值 ----------------
@@ -386,9 +382,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
     if (fill != null) {
       _setText(_price, _trim(fill.nav));
       _syncDerived();
-      // 价格是程序化写入的（`_setText` 期间监听器不动作），所以这里要显式补算一次
-      // 手续费 —— 从详情页卖出时"助手写着 ¥5.00、框里却是空的"就是少了这一步
-      _syncFee();
+      // 价格是程序化写入的（`_setText` 期间监听器不动作），这里得显式刷一次，
+      // 否则「预测」手续费会停在旧金额上
       if (mounted) setState(() {});
     }
   }
@@ -464,7 +459,6 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 _resetDerivedFlag();
                 if (_type == TxnType.dividend) _navGen++; // 作废在途查询
                 _syncDerived();
-                _syncFee();
               }),
             ),
             const SizedBox(height: 20),
@@ -481,12 +475,12 @@ class _TxnEditPageState extends State<TxnEditPage> {
                         DropdownMenuItem(value: a.id, child: Text(a.name)),
                     ],
                     onChanged: (v) {
-                      setState(() => _accountId = v);
-                      // 费率是**券商（账户）属性**：换账户要把输入框换成那家的，
-                      // 顺带按新费率重算一次手续费
-                      _feeRateCtrl.text =
-                          _wanText(context.read<AppState>().feeRateOf(v));
-                      _syncFee();
+                      setState(() {
+                        _accountId = v;
+                        // 费率是**券商（账户）属性**：换账户要把输入框换成那家的
+                        _feeRateCtrl.text =
+                            _wanText(context.read<AppState>().feeRateOf(v));
+                      });
                     },
                     validator: (v) => v == null ? '请选择账户' : null,
                   ),
@@ -515,7 +509,6 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 // 先重置"谁是派生字段"再联动一次
                 _resetDerivedFlag();
                 _syncDerived();
-                _syncFee();
                 if (_code.text.trim().isNotEmpty) _syncNav();
               },
             ),
@@ -609,18 +602,15 @@ class _TxnEditPageState extends State<TxnEditPage> {
             if (isDividend) ...[
               _amountField(dividend: true),
               const SizedBox(height: 16),
-            ],
-
-            TextFormField(
-              controller: _fee,
-              decoration: InputDecoration(
-                labelText: '手续费（可选）',
-                helperText: _feeHint(),
+              // 分红没有手续费，这一格只是留着（渠道扣费之类）
+              TextFormField(
+                controller: _fee,
+                decoration: const InputDecoration(labelText: '手续费（可选）'),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
               ),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            ),
-            if (!isDividend) ...[
-              const SizedBox(height: 8),
+            ] else ...[
+              // ① 佣金费率 + 免五（用户要求：紧跟**金额**后面）
               Row(
                 children: [
                   Expanded(
@@ -628,7 +618,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
                       controller: _feeRateCtrl,
                       decoration: const InputDecoration(
                         labelText: '佣金费率（万分之几）',
-                        helperText: '如 2.5 = 万2.5；留空则不自动算',
+                        helperText: '如 2.5 = 万2.5；留空则不预测',
                         isDense: true,
                       ),
                       keyboardType:
@@ -654,10 +644,35 @@ class _TxnEditPageState extends State<TxnEditPage> {
                                 await context
                                     .read<AppState>()
                                     .setFeeWaiveMin(_accountId!, v);
-                                _syncFee();
+                                if (mounted) setState(() {});
                               },
                       ),
                     ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              // ② 手续费：左「预测」（只读）· 右「实际」（默认为 0、可改、一键导入）
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: _predictedFeeBox(context, state)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _fee,
+                      decoration: InputDecoration(
+                        labelText: '手续费（实际）',
+                        helperText: '计入成本的那个数',
+                        suffixIcon: IconButton(
+                          tooltip: '一键导入预测值',
+                          icon: const Icon(Icons.south, size: 18),
+                          onPressed: _applyPredictedFee,
+                        ),
+                      ),
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                    ),
                   ),
                 ],
               ),

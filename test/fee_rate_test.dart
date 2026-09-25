@@ -1,6 +1,9 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/state/app_state.dart';
+import 'package:invest_tracker/ui/txn_edit_page.dart';
+import 'package:provider/provider.dart';
 
 /// 记一笔里的「佣金费率 + 免五」（用户 2026-09-25 要求）
 ///
@@ -68,6 +71,42 @@ void main() {
       final st = build(wan: 1, waive: true);
       expect(st.feeForAmount(accountId: 1, kind: AssetKind.stock, amount: 12345),
           closeTo(1.23, 1e-9));
+    });
+  });
+
+  // 用户 2026-09-25：「把佣金费率和免五开关放在金额后面，手续费分两栏，预测和实际，
+  // 同一行显示，预测在前，不可改，实际默认为 0，一键导入预测值，可改，作为真实手续费计入成本」
+  group('记一笔的费率区（布局）', () {
+    testWidgets('费率/免五 与 手续费（预测｜实际）都在，窄屏大字体不溢出', (tester) async {
+      tester.view.physicalSize = const Size(320, 2200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final st = AppState()..loading = false;
+      st.accounts = [Account(id: 1, name: '测试账户')];
+      st.accountFilter = 1;
+      st.feeRates[1] = 2.5;
+
+      await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
+        value: st,
+        child: MaterialApp(
+          builder: (ctx, child) => MediaQuery(
+            data: MediaQuery.of(ctx)
+                .copyWith(textScaler: const TextScaler.linear(1.3)),
+            child: child!,
+          ),
+          home: const TxnEditPage(),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('佣金费率（万分之几）'), findsOneWidget);
+      expect(find.text('免五'), findsOneWidget);
+      expect(find.text('手续费（预测）'), findsOneWidget);
+      expect(find.text('手续费（实际）'), findsOneWidget);
+      // 实际默认为 0
+      expect(find.text('0'), findsWidgets);
+      expect(tester.takeException(), isNull, reason: '窄屏 + 字体 1.3 倍不许溢出');
     });
   });
 }
