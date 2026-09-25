@@ -289,6 +289,61 @@ class _TxnEditPageState extends State<TxnEditPage> {
     );
   }
 
+  /// 佣金费率框 —— **免五圆点开关就嵌在这个框里**（用户要求：圆点样式、省地方）
+  ///
+  /// 圆点：空心 = 不免五（不足 5 元按 5 元）、实心 = 免五。
+  Widget _feeRateField(AppState st) {
+    final on = st.feeWaiveMinOf(_accountId);
+    final accent = Theme.of(context).colorScheme.primary;
+    final idle = Theme.of(context).hintColor;
+    return TextFormField(
+      controller: _feeRateCtrl,
+      decoration: InputDecoration(
+        labelText: '佣金费率（万分之几）',
+        helperText: '填 2.5 = 万2.5；点亮圆点=免五',
+        isDense: true,
+        suffix: Tooltip(
+          message:
+              on ? '免五：已开启（豁免最低 5 元佣金）' : '免五：点击开启（豁免最低 5 元佣金）',
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: _accountId == null
+                ? null
+                : () async {
+                    await context
+                        .read<AppState>()
+                        .setFeeWaiveMin(_accountId!, !on);
+                    if (mounted) setState(() {});
+                  },
+            child: Padding(
+              padding:
+                  const EdgeInsets.only(left: 6, right: 2, top: 6, bottom: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('免五',
+                      style: TextStyle(fontSize: 12, color: on ? accent : idle)),
+                  const SizedBox(width: 5),
+                  Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: on ? accent : Colors.transparent,
+                      border: Border.all(color: on ? accent : idle, width: 1.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      onChanged: _onFeeRateChanged,
+    );
+  }
+
   /// 「一键导入预测值」：把预测那一栏的数抄进**实际**手续费（之后可以再手改）
   void _applyPredictedFee() {
     final fee = _predictedFee();
@@ -592,10 +647,21 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 ],
               ),
               const SizedBox(height: 16),
-              if (_primary == PrimaryField.amount)
-                _sharesField()
-              else
-                _amountField(),
+              // 派生字段（场内买入/卖出的**金额**、场外买入的**份额**、卖出金额）
+              // 与**费率框同一行** —— 用户要求：「统一放在金额/份额后面，同一行显示」，
+              // 免五开关也做成了框里的圆点（见 _feeRateField）
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: _primary == PrimaryField.amount
+                        ? _sharesField()
+                        : _amountField(),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(child: _feeRateField(state)),
+                ],
+              ),
               const SizedBox(height: 16),
             ],
 
@@ -610,65 +676,33 @@ class _TxnEditPageState extends State<TxnEditPage> {
                     const TextInputType.numberWithOptions(decimal: true),
               ),
             ] else ...[
-              // ① 佣金费率 + 免五（用户要求：紧跟**金额**后面）
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _feeRateCtrl,
-                      decoration: const InputDecoration(
-                        labelText: '佣金费率（万分之几）',
-                        helperText: '如 2.5 = 万2.5；留空则不预测',
-                        isDense: true,
-                      ),
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      onChanged: _onFeeRateChanged,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // 免五：券商豁免"最低 5 元佣金"
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('免五',
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: Theme.of(context).hintColor)),
-                      Switch(
-                        value: state.feeWaiveMinOf(_accountId),
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        onChanged: _accountId == null
-                            ? null
-                            : (v) async {
-                                await context
-                                    .read<AppState>()
-                                    .setFeeWaiveMin(_accountId!, v);
-                                if (mounted) setState(() {});
-                              },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              // ② 手续费：左「预测」（只读）· 右「实际」（默认为 0、可改、一键导入）
+              // 手续费：左「预测」（只读）· 中间向右双箭头（把预测搬进实际）· 右「实际」
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(child: _predictedFeeBox(context, state)),
-                  const SizedBox(width: 10),
+                  // 用户要求：箭头改成**向右双箭头**、放在预测与实际**之间**
+                  Padding(
+                    padding: const EdgeInsets.only(top: 14),
+                    child: Tooltip(
+                      message: '把预测值填入实际手续费',
+                      child: IconButton(
+                        onPressed: _applyPredictedFee,
+                        icon: const Icon(Icons.keyboard_double_arrow_right,
+                            size: 22),
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        constraints: const BoxConstraints(
+                            minWidth: 36, minHeight: 36),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
                   Expanded(
                     child: TextFormField(
                       controller: _fee,
-                      decoration: InputDecoration(
+                      decoration: const InputDecoration(
                         labelText: '手续费（实际）',
                         helperText: '计入成本的那个数',
-                        suffixIcon: IconButton(
-                          tooltip: '一键导入预测值',
-                          icon: const Icon(Icons.south, size: 18),
-                          onPressed: _applyPredictedFee,
-                        ),
                       ),
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
