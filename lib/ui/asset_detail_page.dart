@@ -435,7 +435,8 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
         presetAccountId: p.accountId,
         presetType: type,
         presetNote: note,
-        maxShares: type == TxnType.sell ? p.shares : null,
+        // T+1：当日买的那部分当天不能卖，所以给的是**可卖份额**而不是全部持仓
+        maxShares: type == TxnType.sell ? sellableShares(p) : null,
       ),
     ));
   }

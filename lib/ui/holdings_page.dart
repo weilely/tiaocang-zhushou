@@ -33,7 +33,7 @@ class HoldingsPage extends StatelessWidget {
     if (state.txns.isEmpty) {
       return const EmptyHint(
         icon: Icons.pie_chart_outline,
-        text: '还没有持仓\n记一笔买入，或用顶部的「添加基金」录入期初持仓',
+        text: '还没有持仓\n记一笔买入，或用顶部的「添加资产」录入期初持仓',
       );
     }
 
@@ -107,7 +107,7 @@ class HoldingsPage extends StatelessWidget {
           _tool(context,
               icon: Icons.add,
               line1: '添加',
-              line2: '基金',
+              line2: '资产',
               onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const HoldingImportPage()),
                   )),

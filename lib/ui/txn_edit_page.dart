@@ -61,6 +61,12 @@ class _TxnEditPageState extends State<TxnEditPage> {
   final _fee = TextEditingController();
   final _note = TextEditingController();
 
+  /// 佣金费率输入框（万分之几，按账户存）
+  final _feeRateCtrl = TextEditingController();
+
+  /// 手续费是否还跟着成交金额自动算（用户手改过 / 编辑既有流水 → 不再自动覆盖）
+  bool _autoFee = true;
+
   bool _autoAmount = false;
   bool _autoShares = true;
 
@@ -155,11 +161,20 @@ class _TxnEditPageState extends State<TxnEditPage> {
     _shares.addListener(_onSharesChanged);
     _price.addListener(_onPriceChanged);
     _amount.addListener(_onAmountChanged);
+    _fee.addListener(_onFeeChanged);
+    // 编辑既有流水：手续费是既成事实，不许被费率自动算覆盖
+    _autoFee = widget.existing == null;
+    _feeRateCtrl.text = _wanText(st.feeRateOf(_accountId));
 
     // 进来就带着标的（从持仓详情页）时，先按当前日期查一次净值
-    if (widget.existing == null && _code.text.isNotEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _syncNav());
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // 预填的场景（从详情页卖出）不会有"变更事件"，这里补算一次手续费，
+      // 否则会出现"助手写着 ¥5.00、框里却是空的"
+      _syncFee();
+      setState(() {});
+      if (widget.existing == null && _code.text.isNotEmpty) _syncNav();
+    });
   }
 
   @override
@@ -168,7 +183,17 @@ class _TxnEditPageState extends State<TxnEditPage> {
     _shares.removeListener(_onSharesChanged);
     _price.removeListener(_onPriceChanged);
     _amount.removeListener(_onAmountChanged);
-    for (final c in [_code, _name, _shares, _price, _amount, _fee, _note]) {
+    _fee.removeListener(_onFeeChanged);
+    for (final c in [
+      _code,
+      _name,
+      _shares,
+      _price,
+      _amount,
+      _fee,
+      _note,
+      _feeRateCtrl,
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -237,6 +262,64 @@ class _TxnEditPageState extends State<TxnEditPage> {
     }
   }
 
+  // ---------------- 手续费 / 佣金费率（用户 2026-09-25 要求） ----------------
+
+  static String _wanText(double? wan) {
+    if (wan == null || wan <= 0) return '';
+    var s = wan.toStringAsFixed(4);
+    if (s.contains('.')) {
+      s = s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+    }
+    return s;
+  }
+
+  /// 用户手改过手续费 → 之后不再按费率覆盖（与份额/金额同一套"谁是主字段"逻辑）
+  void _onFeeChanged() {
+    if (_writing) return;
+    _autoFee = false;
+    setState(() {}); // helper 文案要跟着变
+  }
+
+  void _onFeeRateChanged(String v) {
+    // **即时生效**（不做防抖）：setFeeRate 会先把值写进内存再落库，
+    // 所以紧接着的 _syncFee 就能用它算出金额；防抖的话当次填完费率是算不出来的
+    final acc = _accountId;
+    if (acc != null) {
+      unawaited(context.read<AppState>().setFeeRate(acc, double.tryParse(v.trim())));
+    }
+    setState(() {});
+    _syncFee();
+  }
+
+  /// 按「成交金额 × 费率」自动填手续费；**没设费率/金额为空就什么都不做**（不猜）
+  void _syncFee() {
+    if (_type == TxnType.dividend) return;
+    if (!_autoFee) return;
+    final acc = _accountId;
+    if (acc == null) return;
+    final st = context.read<AppState>();
+    final amount = double.tryParse(_amount.text) ?? 0;
+    final fee = st.feeForAmount(accountId: acc, kind: _kind, amount: amount);
+    if (fee == null) return;
+    _setText(_fee, fee.toStringAsFixed(2));
+  }
+
+  /// 手续费下面那行说明：把"这个数是怎么来的"摆出来，免得猜
+  String? _feeHint() {
+    if (_type == TxnType.dividend) return null;
+    final st = context.read<AppState>();
+    final wan = st.feeRateOf(_accountId);
+    if (wan == null) return '留空即可；要自动算就在下面填佣金费率';
+    final amount = double.tryParse(_amount.text) ?? 0;
+    final fee = st.feeForAmount(accountId: _accountId, kind: _kind, amount: amount);
+    if (fee == null) return '按万${_wanText(wan)} 算（先填金额 / 股数×价格）';
+    final min = _kind.isExchange && !st.feeWaiveMinOf(_accountId)
+        ? '（不足 5 元按 5 元）'
+        : '';
+    return '按万${_wanText(wan)} 算 = ¥${fee.toStringAsFixed(2)}$min'
+        '${_autoFee ? '' : ' · 已按你手改的填'}';
+  }
+
   void _onSharesChanged() {
     if (_writing) return;
     if (_type == TxnType.buy) {
@@ -250,6 +333,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
       _autoAmount = true; // 卖出：份额是主字段，手改后金额跟着算
     }
     _syncDerived();
+    _syncFee();
   }
 
   void _onAmountChanged() {
@@ -262,11 +346,13 @@ class _TxnEditPageState extends State<TxnEditPage> {
       _autoAmount = false;
     }
     _syncDerived();
+    _syncFee();
   }
 
   void _onPriceChanged() {
     if (_writing) return;
     _syncDerived();
+    _syncFee();
   }
 
   // ---------------- 按交易日期查净值 ----------------
@@ -300,6 +386,10 @@ class _TxnEditPageState extends State<TxnEditPage> {
     if (fill != null) {
       _setText(_price, _trim(fill.nav));
       _syncDerived();
+      // 价格是程序化写入的（`_setText` 期间监听器不动作），所以这里要显式补算一次
+      // 手续费 —— 从详情页卖出时"助手写着 ¥5.00、框里却是空的"就是少了这一步
+      _syncFee();
+      if (mounted) setState(() {});
     }
   }
 
@@ -374,6 +464,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 _resetDerivedFlag();
                 if (_type == TxnType.dividend) _navGen++; // 作废在途查询
                 _syncDerived();
+                _syncFee();
               }),
             ),
             const SizedBox(height: 20),
@@ -389,7 +480,14 @@ class _TxnEditPageState extends State<TxnEditPage> {
                       for (final a in state.accounts)
                         DropdownMenuItem(value: a.id, child: Text(a.name)),
                     ],
-                    onChanged: (v) => setState(() => _accountId = v),
+                    onChanged: (v) {
+                      setState(() => _accountId = v);
+                      // 费率是**券商（账户）属性**：换账户要把输入框换成那家的，
+                      // 顺带按新费率重算一次手续费
+                      _feeRateCtrl.text =
+                          _wanText(context.read<AppState>().feeRateOf(v));
+                      _syncFee();
+                    },
                     validator: (v) => v == null ? '请选择账户' : null,
                   ),
                 ),
@@ -417,6 +515,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 // 先重置"谁是派生字段"再联动一次
                 _resetDerivedFlag();
                 _syncDerived();
+                _syncFee();
                 if (_code.text.trim().isNotEmpty) _syncNav();
               },
             ),
@@ -514,9 +613,55 @@ class _TxnEditPageState extends State<TxnEditPage> {
 
             TextFormField(
               controller: _fee,
-              decoration: const InputDecoration(labelText: '手续费（可选）'),
+              decoration: InputDecoration(
+                labelText: '手续费（可选）',
+                helperText: _feeHint(),
+              ),
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
             ),
+            if (!isDividend) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _feeRateCtrl,
+                      decoration: const InputDecoration(
+                        labelText: '佣金费率（万分之几）',
+                        helperText: '如 2.5 = 万2.5；留空则不自动算',
+                        isDense: true,
+                      ),
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      onChanged: _onFeeRateChanged,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // 免五：券商豁免"最低 5 元佣金"
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('免五',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: Theme.of(context).hintColor)),
+                      Switch(
+                        value: state.feeWaiveMinOf(_accountId),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        onChanged: _accountId == null
+                            ? null
+                            : (v) async {
+                                await context
+                                    .read<AppState>()
+                                    .setFeeWaiveMin(_accountId!, v);
+                                _syncFee();
+                              },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 16),
 
             TextFormField(
@@ -627,7 +772,11 @@ class _TxnEditPageState extends State<TxnEditPage> {
     final label = isBuy ? (main ? '买入$unit' : unit) : '卖出$unit';
     final helper = main
         // 场内买入：先填股数，金额跟着算
-        ? (isBuy ? '按价格自动算出金额，也可手改' : '按价格自动算出金额')
+        ? (isBuy
+            ? '按价格自动算出金额，也可手改'
+            // 卖出：这里说的就是**可卖份额**（T+1 当日买入的不能卖）
+            : '可卖 ${fmtSharesOf(widget.maxShares ?? 0, isFund: _traits.unitIsFund)} '
+                '$unit（当日买入的 T+1 后才能卖）')
         // 场外买入：金额是主字段，这一格是算出来的
         : '按金额和净值自动算出，可手改';
     return TextFormField(
@@ -637,8 +786,9 @@ class _TxnEditPageState extends State<TxnEditPage> {
       validator: (v) {
         final d = double.tryParse(v ?? '');
         if (d == null || d <= 0) return '请输入$unit';
+        // 可卖份额（T+1：当日买的那部分当天不能卖）；0 也要拦，别让"可卖 0"被跳过
         final max = widget.maxShares;
-        if (max != null && max > 0 && d > max + 1e-9) {
+        if (max != null && d > max + 1e-9) {
           final t = fmtSharesOf(max, isFund: _traits.unitIsFund);
           return '最多可卖 $t $unit';
         }
@@ -731,7 +881,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
                   Text(
                     '${asset?.code ?? ''} · ${asset?.kind.label ?? ''}'
                     '${account == null ? '' : ' · ${account.name}'}'
-                    '${_type == TxnType.sell && maxShares > 0 ? ' · 可卖 ${fmtShares(maxShares)}' : ''}',
+                    '${_type == TxnType.sell && widget.maxShares != null ? ' · 可卖 ${fmtSharesOf(maxShares, isFund: _traits.unitIsFund)}' : ''}',
                     style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
                   ),
                 ],
@@ -798,6 +948,24 @@ class _TxnEditPageState extends State<TxnEditPage> {
   void _setSubFilter(String? sub) {
     setState(() => _subFilter = sub);
     _runSearch();
+  }
+
+  /// 基础数据库里搜不到时的出口：**把用户填的代码当作新标的**
+  ///
+  /// 保存时 `saveTxnWithCash` 会按 (代码,类型) 走 `ensureAsset` —— 库里没有就
+  /// 新建一条，所以这里只要把「已选中某个已有标的」的痕迹清掉、收起结果面板，
+  /// 然后照常按日期查一次净值/价格（查不到也不影响保存）。
+  void _addAsNewAsset() {
+    setState(() {
+      _assetId = null;
+      _navHasTarget = true;
+      _showResults = false;
+      _results = const [];
+      _clsFilter = null;
+      _subFilter = null;
+    });
+    _syncNav();
+    _syncDerived();
   }
 
   void _applyResult(SecurityRow r) {
@@ -900,11 +1068,26 @@ class _TxnEditPageState extends State<TxnEditPage> {
             ],
             const SizedBox(height: 6),
             if (_results.isEmpty)
-              Text(
-                _searchError != null
-                    ? '联网搜索失败，可先去「设置 → 数据维护中心」更新基础数据'
-                    : '没有匹配的标的',
-                style: hint,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _searchError != null
+                        ? '联网搜索失败，可先去「设置 → 数据维护中心」更新基础数据'
+                        : '基础数据库里没有这个标的',
+                    style: hint,
+                  ),
+                  // 搜不到也能记：按你填的代码/类型新建标的（保存时入库）
+                  const SizedBox(height: 6),
+                  ActionChip(
+                    avatar: const Icon(Icons.add, size: 14),
+                    label: Text(
+                      '直接添加「${_code.text.trim()}」为新标的',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    onPressed: _addAsNewAsset,
+                  ),
+                ],
               )
             else
               ConstrainedBox(

@@ -61,6 +61,28 @@ double xirr(List<CashFlow> flows) {
   return (lo + hi) / 2;
 }
 
+/// **可卖份额**（用户 2026-09-25 要求：「关于 T+1 份额卖出的事」）
+///
+/// 场内（股票/ETF）是 **T+1** 交易制度、场外基金申购也是 **T+1 确认** ——
+/// 两个口径合起来是同一句话：**当日买入的份额/股数当天不能卖**。
+/// 其余（以前买的）都能卖；当日卖出只是减少持仓，不会让"可卖"变成负数。
+///
+/// 只按持仓自己的流水算（`Position.txns` 就是该账户该标的的流水）——
+/// 别的账户买的跟这个账户能不能卖无关。
+double sellableShares(Position p, {DateTime? asOf}) {
+  final now = asOf ?? DateTime.now();
+  final day = DateTime(now.year, now.month, now.day);
+  var todayBought = 0.0;
+  for (final t in p.txns) {
+    if (t.type != TxnType.buy) continue;
+    final d = DateTime(t.date.year, t.date.month, t.date.day);
+    if (!d.isAtSameMomentAs(day)) continue;
+    todayBought += t.shares;
+  }
+  final v = p.shares - todayBought;
+  return v > 0 ? v : 0.0;
+}
+
 /// 一个「账户 + 标的」的持仓（由交易流水推导）
 class Position {
   final int accountId;

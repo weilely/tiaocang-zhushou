@@ -90,6 +90,14 @@ class AppState extends ChangeNotifier {
   /// 哪些账户开了「股债平衡」（默认关；设置页与调仓页两个入口共用这一份状态）
   final Set<int> equityBondOn = {};
 
+  /// 各账户的**佣金费率**（万分之几，例如 2.5 = 万2.5）；没设就没有这个 key
+  ///
+  /// 费率是**券商属性**，所以按账户存（他两个账户就是两家券商）。
+  Map<int, double> feeRates = {};
+
+  /// 哪些账户**免五**（券商豁免"最低 5 元佣金"）
+  final Set<int> feeWaiveMin = {};
+
   /// 再平衡告警阈值（0.05 = 5%）
   double threshold = 0.05;
 
@@ -610,6 +618,77 @@ class AppState extends ChangeNotifier {
           if (e.key.startsWith(_kEquityBond) && e.value == '1')
             int.tryParse(e.key.substring(_kEquityBond.length)) ?? -1,
       ]..removeWhere((i) => i < 0);
+
+  // ---- 佣金费率 / 免五（记一笔里按账户算手续费）----
+
+  static const String _kFeeRate = 'feeRate:';
+  static const String _kFeeWaive = 'feeWaiveMin:';
+
+  static Map<int, double> _parseFeeRates(Map<String, String> s) {
+    final out = <int, double>{};
+    for (final e in s.entries) {
+      if (!e.key.startsWith(_kFeeRate)) continue;
+      final id = int.tryParse(e.key.substring(_kFeeRate.length));
+      final v = double.tryParse(e.value);
+      if (id != null && v != null && v > 0) out[id] = v;
+    }
+    return out;
+  }
+
+  static List<int> _parseFeeWaive(Map<String, String> s) => [
+        for (final e in s.entries)
+          if (e.key.startsWith(_kFeeWaive) && e.value == '1')
+            int.tryParse(e.key.substring(_kFeeWaive.length)) ?? -1,
+      ]..removeWhere((i) => i < 0);
+
+  /// 某账户的佣金费率（**万分之几**）；没设过返回 null（记一笔就不自动算手续费）
+  double? feeRateOf(int? accountId) =>
+      accountId == null ? null : feeRates[accountId];
+
+  /// 某账户是否**免五**（券商豁免"最低 5 元佣金"）
+  bool feeWaiveMinOf(int? accountId) =>
+      accountId != null && feeWaiveMin.contains(accountId);
+
+  Future<void> setFeeRate(int accountId, double? wan) async {
+    if (wan == null || wan <= 0) {
+      feeRates.remove(accountId);
+      await db.setSetting('$_kFeeRate$accountId', '');
+    } else {
+      feeRates[accountId] = wan;
+      await db.setSetting('$_kFeeRate$accountId', wan.toString());
+    }
+    notifyListeners();
+  }
+
+  Future<void> setFeeWaiveMin(int accountId, bool on) async {
+    if (on) {
+      feeWaiveMin.add(accountId);
+    } else {
+      feeWaiveMin.remove(accountId);
+    }
+    await db.setSetting('$_kFeeWaive$accountId', on ? '1' : '0');
+    notifyListeners();
+  }
+
+  /// 按「成交金额 × 费率」算手续费（元）。
+  ///
+  /// 规则（用户 2026-09-25 要求「设置费率功能，免五标记」）：
+  /// - 场外基金：成交金额 × 费率，**没有最低**（最低 5 元是券商佣金的概念）
+  /// - 场内（ETF/股票）：成交金额 × 费率，不足 5 元时按 **5 元**，除非该账户**免五**
+  /// - 没设费率 / 金额非法 → 返回 null（**不猜**，手续费那一格保持用户自己填的）
+  double? feeForAmount({
+    required int? accountId,
+    required AssetKind kind,
+    required double amount,
+  }) {
+    final wan = feeRateOf(accountId);
+    if (wan == null || wan <= 0) return null;
+    if (amount <= 0 || amount.isNaN || amount.isInfinite) return null;
+    var fee = amount * wan / 10000;
+    if (kind.isExchange && !feeWaiveMinOf(accountId) && fee < 5) fee = 5;
+    // 钱落到分
+    return double.parse(fee.toStringAsFixed(2));
+  }
 
   /// 标的的资产大类；没标过按**权益**算
   AssetClass assetClassOf(String code) =>
@@ -2677,6 +2756,10 @@ class AppState extends ChangeNotifier {
     equityBondOn
       ..clear()
       ..addAll(_parseEquityBondAccounts(settings));
+    feeRates = _parseFeeRates(settings);
+    feeWaiveMin
+      ..clear()
+      ..addAll(_parseFeeWaive(settings));
     navRowCount = await db.navCount();
     final nu = await db.setting('navUpdatedAt');
     final nuMs = nu == null ? null : int.tryParse(nu);

@@ -6,6 +6,7 @@ import '../data/models.dart';
 import '../data/securities_source.dart';
 import '../logic/holding_import.dart';
 import '../state/app_state.dart';
+import 'txn_edit_page.dart';
 import 'widgets/common.dart';
 import 'widgets/cn_date_picker.dart';
 
@@ -29,6 +30,21 @@ class _HoldingImportPageState extends State<HoldingImportPage> {
   DateTime _date = DateTime.now();
   bool _busy = false;
 
+  /// 代码/名称输入框的控制器
+  ///
+  /// **必须用 controller**：`TextFormField.initialValue` 只在首次 build 生效，
+  /// 搜索到结果后改 `r.code`/`r.name` 框里的字是不会变的 —— 那正是"自动填入
+  /// 信息"看起来没生效的原因（2026-09-25 用户要求时才发现）。
+  final Map<HoldingImportRow, TextEditingController> _codeCtrls = {};
+  final Map<HoldingImportRow, TextEditingController> _nameCtrls = {};
+
+  TextEditingController _ctrlFor(
+    Map<HoldingImportRow, TextEditingController> map,
+    HoldingImportRow r,
+    String initial,
+  ) =>
+      map.putIfAbsent(r, () => TextEditingController(text: initial));
+
   @override
   void initState() {
     super.initState();
@@ -37,6 +53,14 @@ class _HoldingImportPageState extends State<HoldingImportPage> {
     final st = context.read<AppState>();
     _accountId = st.accountFilter ??
         (st.accounts.isNotEmpty ? st.accounts.first.id : null);
+  }
+
+  @override
+  void dispose() {
+    for (final c in [..._codeCtrls.values, ..._nameCtrls.values]) {
+      c.dispose();
+    }
+    super.dispose();
   }
 
   @override
@@ -49,9 +73,14 @@ class _HoldingImportPageState extends State<HoldingImportPage> {
       appBar: AppBar(
         title: const Text('期初持仓导入'),
         actions: [
+          // 这里原来是「添加一行」，按用户要求改成**记一笔**：
+          // 期初导入是"补历史持仓"，平时新买一笔就走记一笔
+          //（底部仍保留「添加一行」，两种用法都在）
           IconButton(
-            tooltip: '添加一行',
-            onPressed: () => setState(() => _rows.add(HoldingImportRow())),
+            tooltip: '记一笔',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const TxnEditPage()),
+            ),
             icon: const Icon(Icons.add),
           ),
         ],
@@ -170,7 +199,7 @@ class _HoldingImportPageState extends State<HoldingImportPage> {
             children: [
               Expanded(
                 child: TextFormField(
-                  initialValue: r.code,
+                  controller: _ctrlFor(_codeCtrls, r, r.code),
                   decoration: _dec('代码', weak: r.weak.contains('code')),
                   onChanged: (v) => setState(() => r.code = v.trim()),
                 ),
@@ -185,7 +214,7 @@ class _HoldingImportPageState extends State<HoldingImportPage> {
           ),
           const SizedBox(height: 10),
           TextFormField(
-            initialValue: r.name,
+            controller: _ctrlFor(_nameCtrls, r, r.name),
             decoration: _dec('名称', weak: r.weak.contains('name')),
             onChanged: (v) => setState(() => r.name = v.trim()),
           ),
@@ -212,6 +241,8 @@ class _HoldingImportPageState extends State<HoldingImportPage> {
                       r.market = cand.market;
                       r.matched = true;
                       r.weak.removeAll(['code', 'name']);
+                      _codeCtrls[r]?.text = cand.code;
+                      _nameCtrls[r]?.text = cand.name;
                     }),
                   ),
               ],
@@ -306,17 +337,23 @@ class _HoldingImportPageState extends State<HoldingImportPage> {
     if (picked != null) setState(() => _date = picked);
   }
 
-  /// 用基础数据库补全代码/名称/类型
+  /// 用**本地基础数据库**补全代码/名称/类型（本地没有才联网兜底）
+  ///
+  /// 自动填第一条；同时把其余候选摆到行内（`candidates`），万一点错了能直接改选。
+  /// 一个都没命中也不拦着 —— 下面那行照样能导入，导入时会按你填的代码/名称新建标的。
   Future<void> _lookup(AppState state, HoldingImportRow r) async {
     final kw = r.code.isNotEmpty ? r.code : r.name;
     if (kw.isEmpty) return;
     setState(() => _busy = true);
-    final res = await state.searchAssets(kw, limit: 5);
+    final res = await state.searchAssets(kw, limit: 8);
     if (!mounted) return;
     setState(() => _busy = false);
     if (res.rows.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('没找到，可先去「设置 → 数据维护中心」更新基础数据')),
+        SnackBar(
+          content: Text('基础数据库里没找到「$kw」——可以直接填名称和类型，'
+              '导入时会新建这个标的'),
+        ),
       );
       return;
     }
@@ -328,6 +365,12 @@ class _HoldingImportPageState extends State<HoldingImportPage> {
       r.market = r0.market;
       r.category = assetCategoryFor(r0);
       r.matched = true;
+      // 命中多条时把候选也摆出来，方便改选（自动填的是第一条）
+      r.candidates = res.rows.length > 1 ? res.rows : const [];
+      r.weak.removeAll(['code', 'name']);
+      // 框里的字也要跟着变（initialValue 不会跟着 r 走，见上面的控制器注释）
+      _codeCtrls[r]?.text = r0.code;
+      _nameCtrls[r]?.text = r0.name;
     });
   }
 
