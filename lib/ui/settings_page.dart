@@ -7,9 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../core/app_info.dart';
 import '../core/format.dart';
-import '../data/apk_updater.dart';
 import '../data/file_store.dart';
-import '../data/update_source.dart';
 import '../data/models.dart';
 import '../data/nav_models.dart';
 import '../logic/backup.dart';
@@ -17,6 +15,7 @@ import '../logic/macro_allocation.dart';
 import '../state/app_state.dart';
 import 'all_txns_page.dart';
 import 'dividend_check_page.dart';
+import 'update_page.dart';
 import 'widgets/common.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -31,9 +30,6 @@ class _SettingsPageState extends State<SettingsPage> {
   final ScrollController _scroll = ScrollController();
 
   bool _busy = false;
-
-  /// 正在联网检查更新
-  bool _checkingUpdate = false;
 
   /// 调仓目标：「账户 + 标的代码」→ 目标占比输入框
   ///
@@ -150,7 +146,7 @@ class _SettingsPageState extends State<SettingsPage> {
           _hithinkSection(context, st),
           _securitySection(context, st),
           _appearanceSection(context, st),
-          _aboutSection(context),
+          _aboutSection(context, st),
         ],
       ),
     );
@@ -1669,9 +1665,13 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _aboutSection(BuildContext context) {
+  Widget _aboutSection(BuildContext context, AppState st) {
+    // 后台检查到的新版本：这里要**看得见**（红点 + 文案），点进「更新」页面看更新条目
+    final hasNew = st.hasNewVersion;
+    final latest = st.knownLatestVersion ?? '';
+    final errColor = Theme.of(context).colorScheme.error;
     return CollapsibleSectionCard(
-      title: '关于',
+      title: hasNew ? '关于 · 有新版本' : '关于',
       initiallyExpanded: true,
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       child: Column(
@@ -1697,225 +1697,43 @@ class _SettingsPageState extends State<SettingsPage> {
           ListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
-            leading: const Icon(Icons.system_update_alt, size: 20),
+            leading: Icon(Icons.system_update_alt,
+                size: 20, color: hasNew ? errColor : null),
             title: const Text('检查更新', style: TextStyle(fontSize: 14)),
             subtitle: Text(
-              '联网查一下有没有新版本（只查看，不会自动下载安装）',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+              hasNew
+                  ? '有新版本 v$latest —— 点这里看更新内容'
+                  : '联网查一下有没有新版本（能看到每一版更新了什么）',
+              style: TextStyle(
+                  fontSize: 11,
+                  color: hasNew ? errColor : Theme.of(context).hintColor),
             ),
-            trailing: _checkingUpdate
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.chevron_right, size: 20),
-            onTap: _checkingUpdate ? null : _checkUpdate,
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 检查更新：只查最新版号并给出下载页，绝不静默下载安装
-  Future<void> _checkUpdate() async {
-    setState(() => _checkingUpdate = true);
-    // 传设备 ABI：拆分打包后发行版里有多个架构的包，要挑对的那个
-    final abi = await ApkUpdater.deviceAbi();
-    final res = await checkUpdate(deviceAbi: abi);
-    if (!mounted) return;
-    setState(() => _checkingUpdate = false);
-
-    if (res == null) {
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('检查更新失败'),
-          content: const Text(
-            '没能连上代码托管平台（GitHub / Gitee）。\n\n'
-            '常见原因：当前网络访问 GitHub 受限。可以去 Gitee 镜像仓库手动看最新版本。',
-            style: TextStyle(fontSize: 13, height: 1.6),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-          ],
-        ),
-      );
-      return;
-    }
-
-    final info = res.newest;
-    // 发布策略是"只在值得的版本传附件"，所以最新版常常没有安装包；
-    // 这时若更早的版本有包，就把那一版指出来 —— 否则应用内更新
-    // 只在刚发完包的那阵子可用。
-    final inst = res.installable;
-    final hasNew = isNewerVersion(info.latest, appVersion);
-    // 可安装的那版比当前还新，才算"能用应用内升级"
-    final canAuto = inst != null && isNewerVersion(inst.latest, appVersion);
-
-    if (!hasNew && !canAuto) {
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('已是最新版本'),
-          content: Text(
-            '当前版本：v$appVersion\n'
-            '最新版本：v${info.latest}（来源 ${info.source}）\n\n'
-            '暂时不用更新。',
-            style: const TextStyle(fontSize: 13, height: 1.6),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-          ],
-        ),
-      );
-      return;
-    }
-
-    final target = canAuto ? inst : info;
-    final olderThanNewest = canAuto && target.latest != info.latest;
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('发现新版本 v${canAuto ? target.latest : info.latest}'),
-        content: Text(
-          '当前版本：v$appVersion\n'
-          '最新版本：v${info.latest}（来源 ${info.source}）\n'
-          '${olderThanNewest ? '可安装版本：v${target.latest}（这一版提供了安装包）\n' : ''}'
-          '\n'
-          '${canAuto ? '可以直接在应用内下载并安装（下载完系统会让你确认一次安装）。'
-              '新版与当前包同签名，装上会直接覆盖、数据不丢。' : '这个最新版没有适配你机型的安装包'
-              '（发布时没上传附件，或只出了别的 CPU 架构的包）。'
-              '可以打开下载页手动看看：\n\n${info.url}'}',
-          style: const TextStyle(fontSize: 13, height: 1.6),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false), child: const Text('稍后')),
-          if (canAuto)
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('下载并安装'),
-            )
-          else
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('知道了'),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (hasNew)
+                  Container(
+                    width: 8,
+                    height: 8,
+                    margin: const EdgeInsets.only(right: 6),
+                    decoration:
+                        BoxDecoration(color: errColor, shape: BoxShape.circle),
+                  ),
+                const Icon(Icons.chevron_right, size: 20),
+              ],
             ),
-        ],
-      ),
-    );
-
-    if (go != true || !canAuto || !context.mounted) return;
-    await _downloadAndInstall(target);
-  }
-
-  /// 下载 APK 并拉起系统安装器
-  Future<void> _downloadAndInstall(UpdateInfo info) async {
-    // 先确认系统允许本应用「安装未知应用」，没开就引导过去
-    if (!await ApkUpdater.canInstall()) {
-      if (!mounted) return;
-      final go = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('需要先允许安装'),
-          content: const Text(
-            'Android 要求手动允许「安装未知应用」，否则下载完也装不上。\n\n'
-            '下一步会打开系统设置，请把「调仓助手」这一项打开，再回来重新点「检查更新」。',
-            style: TextStyle(fontSize: 13, height: 1.6),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('取消')),
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('去设置')),
-          ],
-        ),
-      );
-      if (go == true) await ApkUpdater.openInstallSettings();
-      return;
-    }
-
-    // 进度用 ValueNotifier 驱动，避免 StatefulBuilder 里轮询刷新的土办法
-    final progress = ValueNotifier<double>(0);
-    var cancelled = false;
-    var dialogOpen = true;
-    final dialog = showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('正在下载新版'),
-        content: ValueListenableBuilder<double>(
-          valueListenable: progress,
-          builder: (_, v, _) => Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              LinearProgressIndicator(value: v > 0 ? v : null),
-              const SizedBox(height: 10),
-              Text(
-                v > 0 ? '${(v * 100).toStringAsFixed(0)}%' : '连接中…',
-                style: const TextStyle(fontSize: 13),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              cancelled = true;
-              Navigator.pop(ctx);
-              dialogOpen = false;
-            },
-            child: const Text('取消'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const UpdatePage()),
+            ),
           ),
         ],
       ),
     );
-
-    String? path;
-    Object? err;
-    try {
-      path = await ApkUpdater.download(
-        info.apkUrl!,
-        fileName: 'tiaocang-zhushou-v${info.latest}.apk',
-        onProgress: (v) => progress.value = v ?? 0,
-        isCancelled: () => cancelled,
-      );
-    } catch (e) {
-      err = e;
-    }
-
-    // 关掉进度窗（用户点「取消」时它已经关了，别重复 pop）
-    if (dialogOpen && mounted) {
-      Navigator.of(context, rootNavigator: true).pop();
-    }
-    await dialog;
-    progress.dispose();
-
-    if (cancelled) {
-      _snack('已取消下载');
-      return;
-    }
-    if (err != null) {
-      _snack(isCancelledError(err) ? '已取消下载' : '下载失败：$err');
-      return;
-    }
-    if (path == null) {
-      _snack('下载失败：没有拿到文件');
-      return;
-    }
-    if (!mounted) return;
-    try {
-      await ApkUpdater.install(path);
-      _snack('已交给系统安装器，请按提示确认安装');
-    } catch (e) {
-      _snack('拉起安装器失败：$e');
-    }
   }
+
+
+
+
 
   /// 关于明细：默认不铺在设置页上，点一下才弹
   Future<void> _showAboutDetail(BuildContext context) async {

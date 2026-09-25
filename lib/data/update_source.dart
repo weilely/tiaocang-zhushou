@@ -30,15 +30,26 @@ class UpdateInfo {
   /// 该版本 APK 附件的**直链**；仓库里没传附件时为 null
   final String? apkUrl;
 
+  /// 发行说明（Release 的 body）；只发了 tag、没建发行版时为 null
+  final String? notes;
+
+  /// 发行时间（Release 的 published_at / created_at 解析而来）；解析不出来为 null
+  final DateTime? publishedAt;
+
   const UpdateInfo({
     required this.latest,
     required this.url,
     required this.source,
     this.apkUrl,
+    this.notes,
+    this.publishedAt,
   });
 
   /// 能不能在应用内直接下载安装
   bool get hasApk => apkUrl != null && apkUrl!.isNotEmpty;
+
+  /// 有没有可显示的更新条目
+  bool get hasNotes => notes != null && notes!.trim().isNotEmpty;
 }
 
 /// 把 `v1.0.2` / `1.0.2` / `release-1.0.2` 这类串解析成 `[1,0,2]`
@@ -92,6 +103,9 @@ typedef UpdateCheck = ({
 
   /// 最新**带可用安装包**的版本（可能比 [newest] 旧，也可能相等、也可能没有）
   UpdateInfo? installable,
+
+  /// 查到过的**所有发行条目**（新→旧，同版本去重）—— 更新页面用它列「更新条目」
+  List<UpdateInfo> releases,
 });
 
 /// 查最新版本；全都失败返回 null（调用方按「查不到」提示，不报错）
@@ -103,7 +117,8 @@ typedef UpdateCheck = ({
 /// GitHub 上常常只有 tag 没有附件，若它先返回就会把 Gitee 上**带附件**的
 /// 同一版本盖掉 —— 应用内更新明明能用，却退化成"只能手动下载"。
 ///
-/// 返回 [UpdateCheck]：除了最新版本，还挑出**最新那个带安装包的版本**。
+/// 返回 [UpdateCheck]：除了最新版本，还挑出**最新那个带安装包的版本**，
+/// 以及**所有发行条目**（含发行说明，供更新页面展示「更新条目」）。
 /// 因为发布策略是"只在值得的版本传附件"，最新版很可能没附件，
 /// 这时能直接安装的往往是更早的那一版 —— 界面上要能把它指出来，
 /// 否则应用内更新只在刚发完包的那阵子可用。
@@ -114,13 +129,12 @@ Future<UpdateCheck?> checkUpdate({
   Duration timeout = const Duration(seconds: 12),
 }) async {
   final all = <UpdateInfo>[];
-  for (final t in <Future<UpdateInfo?> Function()>[
+  for (final t in <Future<List<UpdateInfo>> Function()>[
     () => _github(githubRepo, timeout, deviceAbi),
     () => _gitee(giteeRepo, timeout, deviceAbi),
   ]) {
     try {
-      final r = await t();
-      if (r != null) all.add(r);
+      all.addAll(await t());
     } catch (_) {
       // 这个源不可用，换下一个
     }
@@ -131,8 +145,42 @@ Future<UpdateCheck?> checkUpdate({
     for (final e in all)
       if (e.hasApk) e,
   ]);
-  return (newest: newest, installable: installable);
+  return (newest: newest, installable: installable, releases: mergeReleases(all));
 }
+
+/// 把多个源查到的条目按版本号合并去重，**新→旧**排序
+///
+/// 同一版本两个源都有时（GitHub 有 tag、Gitee 建了发行版带说明），
+/// 留「信息更全」的那条：先看有没有发行说明，再看有没有安装包 ——
+/// 否则更新条目里会出现两行同一个版本、或者有说明的那条被没说明的盖掉。
+List<UpdateInfo> mergeReleases(List<UpdateInfo> all) {
+  final byVersion = <String, UpdateInfo>{};
+  for (final e in all) {
+    final old = byVersion[e.latest];
+    byVersion[e.latest] = old == null ? e : _richer(old, e);
+  }
+  final list = byVersion.values.toList();
+  list.sort((a, b) {
+    if (isNewerVersion(a.latest, b.latest)) return -1; // 更新的排前面
+    if (isNewerVersion(b.latest, a.latest)) return 1;
+    return 0;
+  });
+  return list;
+}
+
+/// 同版本两条记录里留哪条：有发行说明的优先，其次有安装包的
+UpdateInfo _richer(UpdateInfo a, UpdateInfo b) {
+  if (a.hasNotes != b.hasNotes) return a.hasNotes ? a : b;
+  if (a.hasApk != b.hasApk) return a.hasApk ? a : b;
+  return a;
+}
+
+/// 比 [current] 新的那些发行条目（保持新→旧顺序）—— 更新页面显示这些
+List<UpdateInfo> releasesNewerThan(List<UpdateInfo> releases, String current) =>
+    [
+      for (final e in releases)
+        if (isNewerVersion(e.latest, current)) e,
+    ];
 
 /// 只要最新版本号（老调用点用；不需要「可安装版本」时用这个）
 Future<UpdateInfo?> fetchLatestVersion({
@@ -152,12 +200,71 @@ Future<UpdateInfo?> fetchLatestVersion({
 
 // ==================== GitHub ====================
 
-Future<UpdateInfo?> _github(String repo, Duration timeout, String abi) async {
-  if (repo.isEmpty) return null;
+/// 把一个 GitHub Release（JSON map）解析成 [UpdateInfo]（纯函数，便于单测）
+///
+/// 解析不出合法版本号 → null（不带版本号的 release 直接跳过）。
+UpdateInfo? githubReleaseToInfo(Map m, String repo, String abi) {
+  final v = parseVersion((m['tag_name'] ?? '').toString());
+  if (v == null) return null;
+  final page = (m['html_url'] ?? '').toString();
+  return UpdateInfo(
+    latest: '${v[0]}.${v[1]}.${v[2]}',
+    url: page.isNotEmpty ? page : 'https://github.com/$repo/releases',
+    source: 'GitHub',
+    apkUrl: pickApkAssetForAbi(m['assets'], abi),
+    notes: _notesOf(m),
+    publishedAt: _dateOf(m),
+  );
+}
+
+/// 把一个 Gitee Release（JSON map）解析成 [UpdateInfo]（纯函数，便于单测）
+UpdateInfo? giteeReleaseToInfo(Map m, String repo, String abi) {
+  final v = parseVersion((m['tag_name'] ?? '').toString());
+  if (v == null) return null;
+  return UpdateInfo(
+    latest: '${v[0]}.${v[1]}.${v[2]}',
+    url: 'https://gitee.com/$repo/releases',
+    source: 'Gitee',
+    apkUrl: _giteeApkOf(m, abi),
+    notes: _notesOf(m),
+    publishedAt: _dateOf(m),
+  );
+}
+
+/// tag 条目（tags 接口只有名字，没有发行说明/时间）
+UpdateInfo? tagToInfo(String rawTag, {required String url, required String source}) {
+  final v = parseVersion(rawTag);
+  if (v == null) return null;
+  return UpdateInfo(
+    latest: '${v[0]}.${v[1]}.${v[2]}',
+    url: url,
+    source: source,
+  );
+}
+
+/// Release 里的发行说明文字（GitHub 与 Gitee 都叫 `body`）
+String? _notesOf(Map m) {
+  final raw = (m['body'] ?? m['description'] ?? '').toString().trim();
+  return raw.isEmpty ? null : raw;
+}
+
+/// Release 的发行时间：优先 `published_at`，退回 `created_at`
+DateTime? _dateOf(Map m) {
+  for (final k in const ['published_at', 'created_at']) {
+    final s = (m[k] ?? '').toString().trim();
+    if (s.isEmpty) continue;
+    final d = DateTime.tryParse(s);
+    if (d != null) return d.toLocal();
+  }
+  return null;
+}
+
+Future<List<UpdateInfo>> _github(String repo, Duration timeout, String abi) async {
+  if (repo.isEmpty) return const [];
   const headers = {'Accept': 'application/vnd.github+json'};
   final found = <UpdateInfo>[];
 
-  // ① releases 列表（不用 releases/latest：要顺便把 APK 附件直链捞出来）
+  // ① releases 列表（不用 releases/latest：要顺便把发行说明与 APK 附件直链捞出来）
   try {
     final rel = await http.get(
       Uri.parse('https://api.github.com/repos/$repo/releases?per_page=30'),
@@ -168,15 +275,8 @@ Future<UpdateInfo?> _github(String repo, Duration timeout, String abi) async {
       if (list is List) {
         for (final m in list) {
           if (m is! Map) continue;
-          final v = parseVersion((m['tag_name'] ?? '').toString());
-          if (v == null) continue;
-          final page = (m['html_url'] ?? '').toString();
-          found.add(UpdateInfo(
-            latest: '${v[0]}.${v[1]}.${v[2]}',
-            url: page.isNotEmpty ? page : 'https://github.com/$repo/releases',
-            source: 'GitHub',
-            apkUrl: pickApkAssetForAbi(m['assets'], abi),
-          ));
+          final info = githubReleaseToInfo(m, repo, abi);
+          if (info != null) found.add(info);
         }
       }
     }
@@ -195,13 +295,12 @@ Future<UpdateInfo?> _github(String repo, Duration timeout, String abi) async {
       if (list is List) {
         for (final e in list) {
           if (e is! Map || e['name'] == null) continue;
-          final v = parseVersion(e['name'].toString());
-          if (v == null) continue;
-          found.add(UpdateInfo(
-            latest: '${v[0]}.${v[1]}.${v[2]}',
+          final info = tagToInfo(
+            e['name'].toString(),
             url: 'https://github.com/$repo/releases',
             source: 'GitHub',
-          ));
+          );
+          if (info != null) found.add(info);
         }
       }
     }
@@ -209,13 +308,13 @@ Future<UpdateInfo?> _github(String repo, Duration timeout, String abi) async {
     // 忽略
   }
 
-  return _newestOf(found);
+  return found;
 }
 
 // ==================== Gitee ====================
 
-Future<UpdateInfo?> _gitee(String repo, Duration timeout, String abi) async {
-  if (repo.isEmpty) return null;
+Future<List<UpdateInfo>> _gitee(String repo, Duration timeout, String abi) async {
+  if (repo.isEmpty) return const [];
   final found = <UpdateInfo>[];
 
   // Gitee 的 releases 列表（`releases/latest` 在没建发行版时会 404）
@@ -228,14 +327,8 @@ Future<UpdateInfo?> _gitee(String repo, Duration timeout, String abi) async {
       if (list is List) {
         for (final m in list) {
           if (m is! Map) continue;
-          final v = parseVersion((m['tag_name'] ?? '').toString());
-          if (v == null) continue;
-          found.add(UpdateInfo(
-            latest: '${v[0]}.${v[1]}.${v[2]}',
-            url: 'https://gitee.com/$repo/releases',
-            source: 'Gitee',
-            apkUrl: _giteeApkOf(m, abi),
-          ));
+          final info = giteeReleaseToInfo(m, repo, abi);
+          if (info != null) found.add(info);
         }
       }
     }
@@ -254,13 +347,12 @@ Future<UpdateInfo?> _gitee(String repo, Duration timeout, String abi) async {
           if (e is! Map) continue;
           final raw = (e['name'] ?? e['tag_name'])?.toString();
           if (raw == null) continue;
-          final v = parseVersion(raw);
-          if (v == null) continue;
-          found.add(UpdateInfo(
-            latest: '${v[0]}.${v[1]}.${v[2]}',
+          final info = tagToInfo(
+            raw,
             url: 'https://gitee.com/$repo/releases',
             source: 'Gitee',
-          ));
+          );
+          if (info != null) found.add(info);
         }
       }
     }
@@ -268,7 +360,7 @@ Future<UpdateInfo?> _gitee(String repo, Duration timeout, String abi) async {
     // 忽略
   }
 
-  return _newestOf(found);
+  return found;
 }
 
 // ==================== 公共小件 ====================

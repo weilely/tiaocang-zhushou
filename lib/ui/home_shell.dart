@@ -79,6 +79,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       } catch (_) {
         // 静默：诊断信息由 refreshIndexQuotes 自己记录
       }
+      // 顺手后台查一次新版本（12 小时内不重复联网，失败静默）——
+      // 查到了就在「设置」页签上点一个红点，用户不用自己去翻设置页
+      if (!mounted) return;
+      try {
+        await context.read<AppState>().checkUpdateInBackground();
+      } catch (_) {
+        // 静默：后台检查失败只是没红点，用户手动进「检查更新」还能再试
+      }
     });
   }
 
@@ -191,12 +199,25 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         destinations: [
           for (final t in kShellTabs)
             NavigationDestination(
-              icon: Icon(t.icon),
-              selectedIcon: Icon(t.selectedIcon),
+              icon: _tabIcon(t.icon, t.label, state),
+              selectedIcon: _tabIcon(t.selectedIcon, t.label, state),
               label: t.label,
             ),
         ],
       ),
+    );
+  }
+
+  /// 页签图标；「设置」上挂一个小红点 = 后台查到了新版本
+  ///
+  /// 只在设置页签上标：新版本这件事的入口就在设置页的「检查更新」里，
+  /// 别在首页/持仓上乱点红点（用户会以为行情出问题了）。
+  Widget _tabIcon(IconData icon, String label, AppState st) {
+    final show = label == '设置' && st.hasNewVersion;
+    return Badge(
+      isLabelVisible: show,
+      smallSize: 8,
+      child: Icon(icon),
     );
   }
 

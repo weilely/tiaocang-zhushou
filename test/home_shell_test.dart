@@ -105,6 +105,54 @@ void main() {
     });
   });
 
+  group('新版本标记（后台查到的版本要看得见）', () {
+    Future<void> pumpWith(WidgetTester tester, String? knownLatest) async {
+      final st = AppState()
+        ..loading = false
+        ..knownLatestVersion = knownLatest;
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppState>.value(
+          value: st,
+          child: const MaterialApp(home: HomeShell()),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    int visibleBadges(WidgetTester tester) =>
+        tester.widgetList<Badge>(find.byType(Badge)).where((b) => b.isLabelVisible).length;
+
+    testWidgets('后台查到新版本时，「设置」页签上有一个红点', (tester) async {
+      await pumpWith(tester, '9.9.9');
+      expect(visibleBadges(tester), 1,
+          reason: '只该在「设置」页签上点红点（新版本的入口在设置页）');
+    });
+
+    testWidgets('最新版不比当前新 → 不点红点', (tester) async {
+      await pumpWith(tester, '1.0.0'); // 比当前 v$appVersion 旧
+      expect(visibleBadges(tester), 0);
+    });
+
+    testWidgets('从没查过（knownLatestVersion 为 null）→ 不点红点', (tester) async {
+      await pumpWith(tester, null);
+      expect(visibleBadges(tester), 0);
+    });
+
+    testWidgets('设置页「检查更新」那行会写出新版本号', (tester) async {
+      await pumpWith(tester, '9.9.9');
+      await tester.tap(find.text('设置').last);
+      await tester.pumpAndSettle();
+      // 「关于」卡片在设置页最下面，得先滚下去才在布局里
+      await tester.dragUntilVisible(
+        find.textContaining('有新版本 v9.9.9'),
+        find.byType(ListView).first,
+        const Offset(0, -400),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('有新版本 v9.9.9'), findsOneWidget);
+    });
+  });
+
   group('首页只有它有账户下拉与跑马灯', () {
     testWidgets('首页显示账户下拉', (tester) async {
       await pumpShell(tester);

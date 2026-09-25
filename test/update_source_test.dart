@@ -180,4 +180,129 @@ void main() {
       expect(isNewerVersion(inst.latest, '1.0.5'), isFalse);
     });
   });
+
+  group('发行版 JSON → UpdateInfo（含更新条目与日期）', () {
+    Map<String, Object?> release({
+      String tag = 'v1.1.8',
+      String? body = '## 新功能\n- 检查更新看得到更新条目了',
+      String? published = '2026-09-25T10:00:00Z',
+      List<String> assets = const [],
+    }) =>
+        {
+          'tag_name': tag,
+          'html_url': 'https://example.com/releases/tag/$tag',
+          'body': body,
+          'published_at': published,
+          'assets': [
+            for (final n in assets)
+              {'name': n, 'browser_download_url': 'https://e/$n'},
+          ],
+        };
+
+    test('GitHub：版本号/发行说明/日期/附件都捞到', () {
+      final info = githubReleaseToInfo(
+        release(assets: ['tiaocang-zhushou-v1.1.8-arm64-v8a.apk']),
+        'weilely/tiaocang-zhushou',
+        'arm64-v8a',
+      )!;
+      expect(info.latest, '1.1.8');
+      expect(info.source, 'GitHub');
+      expect(info.hasNotes, isTrue);
+      expect(info.notes, contains('更新条目'));
+      expect(info.publishedAt, isNotNull);
+      expect(info.hasApk, isTrue);
+      expect(info.url, contains('releases/tag/v1.1.8'));
+    });
+
+    test('Gitee：字段名一样，也能解析', () {
+      final info = giteeReleaseToInfo(
+        release(tag: 'v1.1.9', assets: ['x-arm64-v8a.apk']),
+        'weilely/tiaocang-zhushou',
+        'arm64-v8a',
+      )!;
+      expect(info.source, 'Gitee');
+      expect(info.latest, '1.1.9');
+      expect(info.hasApk, isTrue);
+    });
+
+    test('没有 body / 日期解析不出来 → 不炸，只是没条目', () {
+      final info = githubReleaseToInfo(
+        release(body: '', published: '不是日期'),
+        'weilely/tiaocang-zhushou',
+        'arm64-v8a',
+      )!;
+      expect(info.hasNotes, isFalse);
+      expect(info.publishedAt, isNull);
+    });
+
+    test('tag 不带版本号 → 跳过（返回 null）', () {
+      expect(
+        githubReleaseToInfo(
+            release(tag: 'nightly'), 'weilely/tiaocang-zhushou', ''),
+        isNull,
+      );
+      expect(tagToInfo('abc', url: 'u', source: 'GitHub'), isNull);
+    });
+
+    test('tags 接口的条目：只有版本号和页面地址', () {
+      final info =
+          tagToInfo('v1.1.8', url: 'https://e/releases', source: 'Gitee')!;
+      expect(info.latest, '1.1.8');
+      expect(info.hasNotes, isFalse);
+      expect(info.hasApk, isFalse);
+    });
+  });
+
+  group('更新条目合并与筛选（更新页面就用这两个）', () {
+    UpdateInfo info(String v, {String? notes, String? apk}) => UpdateInfo(
+          latest: v,
+          url: 'https://e/$v',
+          source: 'Gitee',
+          notes: notes,
+          apkUrl: apk,
+        );
+
+    test('同版本去重：留带发行说明的那条（不然更新条目会是空的）', () {
+      final merged = mergeReleases([
+        info('1.1.8'), // GitHub 只有 tag
+        info('1.1.8', notes: '修复了滚动问题'), // Gitee 建了发行版
+      ]);
+      expect(merged.length, 1);
+      expect(merged.single.hasNotes, isTrue);
+      expect(merged.single.notes, contains('滚动'));
+    });
+
+    test('都有说明时留带安装包的那条', () {
+      final merged = mergeReleases([
+        info('1.1.8', notes: 'A'),
+        info('1.1.8', notes: 'B', apk: 'https://e/x.apk'),
+      ]);
+      expect(merged.single.hasApk, isTrue);
+    });
+
+    test('新→旧排序（不是按返回顺序）', () {
+      final merged = mergeReleases([
+        info('1.0.9'),
+        info('1.10.0'),
+        info('1.1.0'),
+      ]);
+      expect(merged.map((e) => e.latest).toList(), ['1.10.0', '1.1.0', '1.0.9']);
+    });
+
+    test('releasesNewerThan：只留比当前新的，顺序不变', () {
+      final all = mergeReleases([
+        info('1.1.9', notes: '最新'),
+        info('1.1.8', notes: '次新'),
+        info('1.1.7', notes: '当前这版'),
+        info('1.1.6', notes: '老版本'),
+      ]);
+      final newer = releasesNewerThan(all, '1.1.7');
+      expect(newer.map((e) => e.latest).toList(), ['1.1.9', '1.1.8']);
+    });
+
+    test('已是最新时，更新条目为空', () {
+      final all = mergeReleases([info('1.1.7'), info('1.1.6')]);
+      expect(releasesNewerThan(all, '1.1.7'), isEmpty);
+    });
+  });
 }

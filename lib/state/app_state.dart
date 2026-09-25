@@ -6,6 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:local_auth/local_auth.dart';
 import 'package:local_auth_android/local_auth_android.dart';
 
+import '../core/app_info.dart';
+import '../data/apk_updater.dart';
 import '../data/backup_store.dart';
 import '../data/db.dart';
 import '../data/dca_models.dart';
@@ -22,6 +24,7 @@ import '../data/nav_repo.dart';
 import '../data/nav_source.dart';
 import '../data/securities_repo.dart';
 import '../data/securities_source.dart';
+import '../data/update_source.dart';
 import '../logic/backup.dart';
 import '../logic/benchmark.dart';
 import '../logic/cash_flow.dart';
@@ -59,6 +62,61 @@ class AppState extends ChangeNotifier {
   String? lastError;
   String? lastMessage;
   DateTime? lastRefresh;
+
+  // ---------------- 应用内更新 ----------------
+
+  /// 后台查到的最新版本（本次启动内有效；null = 还没查到 / 查不到）
+  UpdateCheck? updateCheck;
+
+  /// 上次查到的「最新版本号」—— **持久化**，所以重启后不用等联网就能显示红点
+  String? knownLatestVersion;
+
+  /// 上次检查的时刻（毫秒）；节流用，持久化
+  int? updateCheckedAt;
+
+  /// 正在检查（界面转圈用）
+  bool checkingUpdate = false;
+
+  /// 有没有新版本可用（红点/提醒都看它）
+  ///
+  /// 只比版本号，不管"这一版有没有传安装包"：没包也该提醒（更新页面会说明
+  /// 只能手动下载）—— 否则用户永远不知道有新版本。
+  bool get hasNewVersion => isNewerVersion(knownLatestVersion ?? '', appVersion);
+
+  /// 后台静默检查更新（App 起来后调一次）
+  ///
+  /// **失败绝不打扰用户**：网络不通、GitHub 被墙、没网 —— 一律静默，红点不亮而已，
+  /// 用户手动进「检查更新」页面还能再试。节流 [minGap] 内不重复联网
+  /// （默认 12 小时；手动进页面用 `force: true` 绕过）。
+  Future<void> checkUpdateInBackground({
+    bool force = false,
+    Duration minGap = const Duration(hours: 12),
+  }) async {
+    if (checkingUpdate) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = updateCheckedAt;
+    if (!force && last != null && now - last < minGap.inMilliseconds) return;
+
+    checkingUpdate = true;
+    notifyListeners();
+    try {
+      // 传设备 ABI：拆分打包后发行版里有多个架构的包，要挑对的那个
+      final abi = await ApkUpdater.deviceAbi();
+      final res = await checkUpdate(deviceAbi: abi);
+      if (res != null) {
+        updateCheck = res;
+        knownLatestVersion = res.newest.latest;
+        updateCheckedAt = now;
+        await db.setSetting(_kUpdateCheckedAt, '$now');
+        await db.setSetting(_kUpdateLatest, res.newest.latest);
+      }
+    } catch (_) {
+      // 后台检查失败：静默（不写 lastError，不弹提示）
+    } finally {
+      checkingUpdate = false;
+      notifyListeners();
+    }
+  }
 
   /// 上次**真正联网**刷新行情的时刻（下拉刷新与切回首页自动刷新共用）
   ///
@@ -624,6 +682,14 @@ class AppState extends ChangeNotifier {
   static const String _kFeeRate = 'feeRate:';
   static const String _kFeeWaive = 'feeWaiveMin:';
 
+  // ---- 应用内更新（后台检查的节流与「上次看到的最新版本」）----
+
+  /// 上次检查更新的时刻（毫秒）—— 节流用
+  static const String _kUpdateCheckedAt = 'updateCheckedAt';
+
+  /// 上次查到的最新版本号 —— 持久化，重启后立刻能亮红点
+  static const String _kUpdateLatest = 'updateLatestVersion';
+
   static Map<int, double> _parseFeeRates(Map<String, String> s) {
     final out = <int, double>{};
     for (final e in s.entries) {
@@ -1063,6 +1129,9 @@ class AppState extends ChangeNotifier {
       holdingsSortKey = await db.setting('holdingsSortKey') ?? 'marketValue';
       holdingsSortDesc = (await db.setting('holdingsSortDesc') ?? '0') == '1';
       dcaAutoRun = (await db.setting('dcaAutoRun') ?? '1') == '1';
+      // 上次后台查到的最新版本（持久化的）：先亮红点，再让后台检查去刷新
+      knownLatestVersion = await db.setting(_kUpdateLatest);
+      updateCheckedAt = int.tryParse(await db.setting(_kUpdateCheckedAt) ?? '');
       final savedView = await db.setting('statsView');
       statsView = StatsView.values.firstWhere(
         (v) => v.name == savedView,
