@@ -182,6 +182,21 @@ List<UpdateInfo> releasesNewerThan(List<UpdateInfo> releases, String current) =>
         if (isNewerVersion(e.latest, current)) e,
     ];
 
+/// 把发行说明里的 Markdown 记号去掉，留成能看的纯文本
+///
+/// 发版时习惯写 `## 标题` / `**新增：xxx**` / `- 条目`，而 App 不解析 Markdown
+/// —— 原样显示就是一屏星号（v1.1.8 的说明实测就是这样，只好回去把发行版
+/// 说明改成纯文本）。这里只做**最保守**的处理：去掉加粗与标题记号、
+/// 无序列表换成中点；别的（链接、表格）一概不碰，免得弄巧成拙。
+String plainNotes(String raw) {
+  var s = raw.replaceAll('\r\n', '\n');
+  s = s.replaceAll('**', '').replaceAll('__', '');
+  s = s.replaceAll(RegExp(r'^#{1,6}\s*', multiLine: true), '');
+  s = s.replaceAll(RegExp(r'^\s*[-*+]\s+', multiLine: true), '· ');
+  s = s.replaceAll(RegExp(r'[ \t]+$', multiLine: true), '');
+  return s.trim();
+}
+
 /// 只要最新版本号（老调用点用；不需要「可安装版本」时用这个）
 Future<UpdateInfo?> fetchLatestVersion({
   String githubRepo = UpdateSource.githubRepo,

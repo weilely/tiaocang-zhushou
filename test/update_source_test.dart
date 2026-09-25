@@ -305,4 +305,20 @@ void main() {
       expect(releasesNewerThan(all, '1.1.7'), isEmpty);
     });
   });
+
+  group('发行说明转纯文本（App 不解析 Markdown）', () {
+    test('去掉加粗与标题记号，无序列表换成中点', () {
+      final out = plainNotes('## 标题\n**新增：X**\n- 一条\n- 两条\n');
+      expect(out, '标题\n新增：X\n· 一条\n· 两条');
+    });
+
+    test('本来就没记号的不动（含中文与空行）', () {
+      expect(plainNotes('普通说明\n\n第二段'), '普通说明\n\n第二段');
+    });
+
+    test('只有空白 → 空串，不炸', () {
+      expect(plainNotes('   \n  '), '');
+      expect(plainNotes(''), '');
+    });
+  });
 }

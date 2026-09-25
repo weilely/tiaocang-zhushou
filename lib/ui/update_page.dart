@@ -246,10 +246,10 @@ class _UpdatePageState extends State<UpdatePage> {
           ),
           const SizedBox(height: 6),
           if (e.hasNotes)
-            // 发行说明是纯文本（Markdown 里的 # / - 号原样显示也不难看，
-            // 这里不做解析，免得自己写一版不完整的 Markdown 渲染）
+            // 发行说明是纯文本：发版时写的 `**加粗**`/`- 条目` 这类 Markdown
+            // 记号这里先抹掉，否则界面上就是一屏星号（App 不做 Markdown 渲染）
             Text(
-              e.notes!,
+              plainNotes(e.notes!),
               style: const TextStyle(fontSize: 12, height: 1.7),
             )
           else
