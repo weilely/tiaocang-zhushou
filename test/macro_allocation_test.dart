@@ -96,68 +96,120 @@ void main() {
     });
   });
 
-  group('twoLayerTargets：大层（权益比例）× 小层（内部相对比例）', () {
-    // 用户真实的权益内部关系 10 : 60 : 30
-    final within = {'021362': 0.10, '025497': 0.60, '027858': 0.30};
-    final bond = {'007xxx': 1.0};
+  group('classBasedEquityBondTargets：按大类折算（分母＝持仓市值，现金不进计划）', () {
+    // 用户 2026-09-24 的真实持仓（易稳易增）：4 只全是权益，其中 007751 留空
+    const total = 320193.26;
+    final mv = <String, double>{
+      '021362': 31997.76,
+      '025497': 187716.09,
+      '027858': 100459.58,
+      '007751': 19.83,
+    };
+    final rel = <String, double>{
+      '021362': 0.10,
+      '025497': 0.60,
+      '027858': 0.30,
+    };
 
-    test('权益 65% 时按小层等比缩放，另一份给债券腿', () {
-      final t = twoLayerTargets(
-        equityRelative: within,
-        nonEquityRelative: bond,
-        equityWeight: 0.65,
+    test('真实场景：权益池 73%，三只按 10:60:30，留空那只保持现状', () {
+      final r = classBasedEquityBondTargets(
+        marketValue: mv,
+        classes: const {},
+        relative: rel,
+        equityTarget: 0.73,
       );
-      expect(t['021362'], closeTo(0.065, 1e-9));
-      expect(t['025497'], closeTo(0.39, 1e-9));
-      expect(t['027858'], closeTo(0.195, 1e-9));
-      expect(t['007xxx'], closeTo(0.35, 1e-9));
-      expect(t.values.reduce((a, b) => a + b), closeTo(1.0, 1e-9));
+      // 没填相对比例 → 保持现状（19.83 元原样留着，不会被"卖光"）
+      expect(r.targets['007751']! * total, closeTo(19.83, 0.01));
+      final pool = 0.73 * total - 19.83;
+      expect(r.targets['021362']! * total, closeTo(pool * 0.10, 0.05));
+      expect(r.targets['025497']! * total, closeTo(pool * 0.60, 0.05));
+      expect(r.targets['027858']! * total, closeTo(pool * 0.30, 0.05));
+      expect(r.equityWeight, closeTo(0.73, 1e-9));
+      expect(r.bondWeight, closeTo(0.27, 1e-9));
+      // 一只债券都没标 → 明确提示，而不是自己造一个标的
+      expect(r.hint, contains('债券'));
     });
 
-    test('小层只要求相对关系：3 : 7 与 0.3 : 0.7 等价', () {
-      final a = twoLayerTargets(
-        equityRelative: {'x': 3, 'y': 7},
-        nonEquityRelative: const {},
-        equityWeight: 0.5,
+    test('标了一只债券腿（市值 5 万）→ 它拿满 27%，权益池相应少一块', () {
+      final mv2 = {...mv, '110011': 50000.0};
+      final classes = {'110011': AssetClass.bond};
+      final r = classBasedEquityBondTargets(
+        marketValue: mv2,
+        classes: classes,
+        relative: {...rel, '110011': 0.9}, // 债券类只有一只，填多少都归一
+        equityTarget: 0.73,
       );
-      expect(a['x'], closeTo(0.15, 1e-9));
-      expect(a['y'], closeTo(0.35, 1e-9));
+      final total2 = total + 50000;
+      expect(r.targets['110011']! * total2, closeTo(0.27 * total2, 0.05));
+      expect(r.hint, isNull);
+      expect(r.targets.values.fold<double>(0, (a, b) => a + b),
+          closeTo(1.0, 1e-9));
     });
 
-    test('**没有债券腿时不硬凑**：总和 < 1，由调用方提示缺腿', () {
-      final t = twoLayerTargets(
-        equityRelative: within,
-        nonEquityRelative: const {},
-        equityWeight: 0.65,
+    test('黄金/其它不参与折算：目标 = 当前占比（保持现状）', () {
+      final mv2 = {...mv, '518850': 50000.0};
+      final classes = {'518850': AssetClass.gold};
+      final r = classBasedEquityBondTargets(
+        marketValue: mv2,
+        classes: classes,
+        relative: rel,
+        equityTarget: 0.73,
       );
-      expect(t.keys, isNot(contains('007xxx')));
-      expect(t.values.fold<double>(0, (a, b) => a + b), closeTo(0.65, 1e-9));
+      final total2 = total + 50000;
+      expect(r.targets['518850']! * total2, closeTo(50000, 0.01));
+      // 池子是扣掉黄金之后的（320,193.26），所以权益合计 = 0.73 × 池子 / 总额
+      expect(r.equityWeight * total2, closeTo(0.73 * total, 0.05));
     });
 
-    test('非正的比例被忽略（不产生负数仓位）', () {
-      final t = twoLayerTargets(
-        equityRelative: {'x': 0, 'y': -1},
-        nonEquityRelative: const {},
-        equityWeight: 0.5,
+    test('整类都没填相对比例 → 整池按当前市值比例分（只调总量、内部不动）', () {
+      final r = classBasedEquityBondTargets(
+        marketValue: mv,
+        classes: const {},
+        relative: const {},
+        equityTarget: 0.50,
       );
-      expect(t, isEmpty);
+      for (final e in mv.entries) {
+        expect(r.targets[e.key]! * total,
+            closeTo(e.value / total * 0.5 * total, 0.05),
+            reason: '${e.key} 的内部占比应保持不变');
+      }
     });
 
-    test('权益 0%（全给债券）或 100% 也不出错', () {
-      final all = twoLayerTargets(
-        equityRelative: within,
-        nonEquityRelative: bond,
-        equityWeight: 1.0,
+    test('权益池比"保持现状"的持仓还小 → 可用部分归零并给提示', () {
+      final r = classBasedEquityBondTargets(
+        marketValue: mv,
+        classes: const {},
+        // 只给 021362 填了比例，其余三只（28.8 万）要保持现状
+        relative: const {'021362': 1.0},
+        equityTarget: 0.20,
       );
-      expect(all['007xxx'], isNull);
-      expect(all.values.fold<double>(0, (a, b) => a + b), closeTo(1.0, 1e-9));
-      final none = twoLayerTargets(
-        equityRelative: within,
-        nonEquityRelative: bond,
-        equityWeight: 0.0,
+      expect(r.targets['021362'], closeTo(0.0, 1e-9));
+      expect(r.hint, isNotNull);
+      expect(r.targets['025497']! * total, closeTo(187716.09, 0.05));
+    });
+
+    test('空持仓 → 空结果 + 提示', () {
+      final r = classBasedEquityBondTargets(
+        marketValue: const {},
+        classes: const {},
+        relative: const {},
+        equityTarget: 0.73,
       );
-      expect(none['021362'], isNull);
-      expect(none['007xxx'], closeTo(1.0, 1e-9));
+      expect(r.targets, isEmpty);
+      expect(r.hint, isNotNull);
+    });
+
+    test('大类解析：未知/空字符串回 null，由调用方决定默认值', () {
+      expect(AssetClassInfo.parse('bond'), AssetClass.bond);
+      expect(AssetClassInfo.parse('gold'), AssetClass.gold);
+      expect(AssetClassInfo.parse(''), isNull);
+      expect(AssetClassInfo.parse(null), isNull);
+      expect(AssetClassInfo.parse('xxx'), isNull);
+      expect(AssetClass.equity.inEquityBond, isTrue);
+      expect(AssetClass.bond.inEquityBond, isTrue);
+      expect(AssetClass.gold.inEquityBond, isFalse);
+      expect(AssetClass.other.inEquityBond, isFalse);
+      expect(AssetClass.bond.label, '债券');
     });
   });
 

@@ -30,6 +30,7 @@ import '../logic/dca.dart';
 import '../logic/dividend.dart';
 import '../logic/dividend_check.dart';
 import '../logic/link_etf.dart';
+import '../logic/macro_allocation.dart';
 import '../logic/nav_lookup.dart';
 import '../logic/period_return.dart';
 import '../logic/pinyin_util.dart';
@@ -79,6 +80,15 @@ class AppState extends ChangeNotifier {
   /// 界面要用的「当前账户的目标」请用 [targets] / [targetsOf] ——
   /// 写回时一定要带上账户，别直接改这个列表。
   List<TargetAlloc> allTargets = [];
+
+  /// 标的的**资产大类**（code → 类，见 `logic/macro_allocation.dart`）
+  ///
+  /// 只有用户在设置页改过的才存；没标的默认按**权益**算
+  /// （他的持仓 100% 是权益，这个默认值与现实一致；黄金/其它要他自己改）。
+  Map<String, AssetClass> assetClasses = {};
+
+  /// 哪些账户开了「股债平衡」（默认关；设置页与调仓页两个入口共用这一份状态）
+  final Set<int> equityBondOn = {};
 
   /// 再平衡告警阈值（0.05 = 5%）
   double threshold = 0.05;
@@ -578,6 +588,137 @@ class AppState extends ChangeNotifier {
   Future<void> reloadTargets() async {
     allTargets = await db.targets();
     notifyListeners();
+  }
+
+  // ---- 股债平衡（设置页与调仓页共用这一份状态）----
+
+  static const String _kAssetClass = 'assetClass:';
+  static const String _kEquityBond = 'equityBondBalance:';
+
+  static Map<String, AssetClass> _parseAssetClasses(Map<String, String> s) {
+    final out = <String, AssetClass>{};
+    for (final e in s.entries) {
+      if (!e.key.startsWith(_kAssetClass)) continue;
+      final cls = AssetClassInfo.parse(e.value);
+      if (cls != null) out[e.key.substring(_kAssetClass.length)] = cls;
+    }
+    return out;
+  }
+
+  static List<int> _parseEquityBondAccounts(Map<String, String> s) => [
+        for (final e in s.entries)
+          if (e.key.startsWith(_kEquityBond) && e.value == '1')
+            int.tryParse(e.key.substring(_kEquityBond.length)) ?? -1,
+      ]..removeWhere((i) => i < 0);
+
+  /// 标的的资产大类；没标过按**权益**算
+  AssetClass assetClassOf(String code) =>
+      assetClasses[code] ?? AssetClass.equity;
+
+  /// 某个账户是否开了「股债平衡」（「全部账户」视图没有归属 → false）
+  bool equityBondEnabledFor(int? accountId) =>
+      accountId != null && equityBondOn.contains(accountId);
+
+  Future<void> setAssetClass(String code, AssetClass? cls) async {
+    if (cls == null) {
+      assetClasses.remove(code);
+    } else {
+      assetClasses[code] = cls;
+    }
+    // 空串 = 没标过（不用新增删除设置的 DAO）
+    await db.setSetting('$_kAssetClass$code', cls?.name ?? '');
+    notifyListeners();
+  }
+
+  Future<void> setEquityBondEnabled(int? accountId, bool on) async {
+    if (accountId == null) return; // 全部账户视图不写库
+    if (on) {
+      equityBondOn.add(accountId);
+    } else {
+      equityBondOn.remove(accountId);
+    }
+    await db.setSetting('$_kEquityBond$accountId', on ? '1' : '0');
+    notifyListeners();
+  }
+
+  /// 把当前账户的持仓按大类折算成标的级目标；开关没开 / 没有分位 → null
+  ClassTargetResult? equityBondTargetsFor(List<Position> held) {
+    if (!equityBondEnabledFor(accountFilter)) return null;
+    final x = equityTargetRatio(macroErpPercentile);
+    if (x == null) return null;
+    final mv = <String, double>{};
+    for (final p in held) {
+      if (p.isEmpty) continue;
+      mv[p.asset.code] = (mv[p.asset.code] ?? 0) + p.marketValue;
+    }
+    if (mv.isEmpty) return null;
+    // 用户填的目标比例在这里当**类内相对比例**用（10 : 60 : 30）
+    final rel = <String, double>{};
+    for (final t in targets) {
+      final code =
+          t.key.startsWith('asset:') ? t.key.substring('asset:'.length) : '';
+      if (code.isNotEmpty && t.ratio > 0) rel[code] = t.ratio;
+    }
+    return classBasedEquityBondTargets(
+      marketValue: mv,
+      classes: assetClasses,
+      relative: rel,
+      equityTarget: x,
+    );
+  }
+
+  /// 调仓页那张「股债平衡」卡要用的数字。
+  ///
+  /// 开关没开 / 没有分位（样本不足）/ 没有账户 / 没有持仓 → null（界面就整块不显示）。
+  /// [amountToMove] 正数 = 还要往权益里加多少钱，负数 = 该从权益挪出去多少钱。
+  ({
+    double percentile,
+    double targetEquity,
+    double currentEquity,
+    double totalMarket,
+    double amountToMove,
+    String? hint,
+  })? get equityBondAdvice {
+    if (!equityBondEnabledFor(accountFilter)) return null;
+    final pct = macroErpPercentile;
+    if (pct == null) return null;
+    final x = equityTargetRatio(pct);
+    if (x == null) return null;
+    final held = positions;
+    final conv = equityBondTargetsFor(held);
+    if (conv == null) return null;
+    var total = 0.0;
+    var equity = 0.0;
+    for (final p in held) {
+      if (p.isEmpty) continue;
+      total += p.marketValue;
+      if (assetClassOf(p.asset.code) == AssetClass.equity) {
+        equity += p.marketValue;
+      }
+    }
+    if (total <= 0) return null;
+    final current = equity / total;
+    // 提示要说清是"还没标债券"还是"标了但还没买"——下一步动作不一样
+    var hint = conv.hint;
+    final heldBond = held.any((p) =>
+        !p.isEmpty && assetClassOf(p.asset.code) == AssetClass.bond);
+    if (!heldBond) {
+      final marked = [
+        for (final e in assetClasses.entries)
+          if (e.value == AssetClass.bond) e.key,
+      ]..sort();
+      if (marked.isNotEmpty) {
+        hint = '债券腿（${marked.join('、')}）还没有持仓，记一笔买入它就会出现在方案里';
+      }
+    }
+    return (
+      percentile: pct,
+      targetEquity: x,
+      currentEquity: current,
+      totalMarket: total,
+      amountToMove: (conv.equityWeight - current) * total,
+      hint: hint,
+    );
   }
 
   // ============================================================
@@ -2529,6 +2670,13 @@ class AppState extends ChangeNotifier {
     dcaPlans = await db.dcaPlans();
     watchlist = await db.watchlist();
     cashTxns = await db.cashTxns();
+    // 股债平衡的配置：标的的资产大类（`assetClass:<code>`，空串=没标）
+    // 与哪些账户开了开关（`equityBondBalance:<账户id>` = '1'）
+    final settings = await db.allSettings();
+    assetClasses = _parseAssetClasses(settings);
+    equityBondOn
+      ..clear()
+      ..addAll(_parseEquityBondAccounts(settings));
     navRowCount = await db.navCount();
     final nu = await db.setting('navUpdatedAt');
     final nuMs = nu == null ? null : int.tryParse(nu);
@@ -2796,6 +2944,9 @@ class AppState extends ChangeNotifier {
     // 算出来的买卖金额才对得上（「全部账户」= 全部持仓 + 合并后的目标）。
     final held = accountFilter == null ? allPositions : positions;
     final tgts = targets;
+    // 开了「股债平衡」：目标比例改成按大类折算出来的（权益池 × 类内相对比例），
+    // 引擎、进度条、▲刻度、触发阈值全都不用改
+    final conv = equityBondTargetsFor(held);
     final merged = <String, ({double shares, Asset asset})>{};
     for (final p in held) {
       if (p.isEmpty) continue;
@@ -2818,9 +2969,11 @@ class AppState extends ChangeNotifier {
       final Quote? liveNav = quoteHasTodaysNav(q) ? q : null;
       final navOfToday =
           navPublishedToday(quote: q, lastNavDate: base?.date);
-      final ratio = tgts
-          .where((t) => t.key == TargetAlloc.assetKey(a.code))
-          .fold<double>(0, (acc, t) => acc + t.ratio);
+      final ratio = conv != null
+          ? (conv.targets[a.code] ?? 0)
+          : tgts
+              .where((t) => t.key == TargetAlloc.assetKey(a.code))
+              .fold<double>(0, (acc, t) => acc + t.ratio);
 
       if (a.kind == AssetKind.fund) {
         final link = a.linkCode.trim();

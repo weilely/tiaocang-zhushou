@@ -12,6 +12,7 @@ import '../data/update_source.dart';
 import '../data/models.dart';
 import '../data/nav_models.dart';
 import '../logic/backup.dart';
+import '../logic/macro_allocation.dart';
 import '../state/app_state.dart';
 import 'all_txns_page.dart';
 import 'dividend_check_page.dart';
@@ -263,6 +264,69 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// 「股债平衡」开关（设置页这一处 + 调仓页那处，共用 AppState 里的同一份状态）
+  ///
+  /// 开了以后：调仓页的目标比例不再直接用你填的数，而是先由**股债利差分位**定出
+  /// 「权益 : 债券」，再乘上你填的类内相对比例 —— 你填的关系一个字都不用改。
+  Widget _equityBondSwitch(
+      BuildContext context, AppState st, int accountId, TextStyle hint) {
+    final on = st.equityBondEnabledFor(accountId);
+    final pct = st.macroErpPercentile;
+    final advice = st.equityBondAdvice; // 只在当前账户上有值
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('股债平衡', style: TextStyle(fontSize: 14)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                on
+                    ? (pct == null
+                        ? '已开启 · 等利差分位算出来'
+                        : '已开启 · 按利差分位 ${(pct * 100).round()}% 折算权益占比')
+                    : '关闭时按你填的占比算（互不影响）',
+                maxLines: 2,
+                style: hint,
+              ),
+            ),
+            Switch(
+              value: on,
+              onChanged: (v) => st.setEquityBondEnabled(accountId, v),
+            ),
+          ],
+        ),
+        if (on)
+          Text(
+            '权益 = 利差分位（按 20%~80% 截平，显示在调仓页）；债券 = 剩下的；'
+            '黄金/其它不参与折算、保持现状；现金不进计划。'
+            '${advice?.hint == null ? '' : '⚠️ ${advice!.hint}'}',
+            style: hint,
+          ),
+      ],
+    );
+  }
+
+  /// 资产大类下拉（紧凑；放在「代码 · 类型」那一行的右端，窄屏也不会挤到名称）
+  Widget _classPicker(AppState st, String code, TextStyle hint) {
+    final cls = st.assetClassOf(code);
+    return SizedBox(
+      height: 26,
+      child: DropdownButton<AssetClass>(
+        value: cls,
+        isDense: true,
+        underline: const SizedBox.shrink(),
+        style: hint.copyWith(fontSize: 11),
+        items: [
+          for (final c in AssetClass.values)
+            DropdownMenuItem<AssetClass>(value: c, child: Text(c.label)),
+        ],
+        onChanged: (v) => st.setAssetClass(code, v),
+      ),
+    );
+  }
+
   Widget _targetCard(
       BuildContext context, AppState st, int accountId, String accountName) {
     final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
@@ -313,7 +377,10 @@ class _SettingsPageState extends State<SettingsPage> {
           Text('给每只基金 / 股票填目标占比，调仓页按它算需买入 / 需卖出的金额；'
               '留空的标的按「保持现状」处理，不参与买卖建议。'
               '目标按账户分开保存，切换账户各用各的。', style: hint),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
+          // 「股债平衡」开关（调仓页也有一个，两处共用同一份状态）
+          _equityBondSwitch(context, st, accountId, hint),
+          const Divider(height: 20),
           for (final a in held)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 3),
@@ -327,7 +394,18 @@ class _SettingsPageState extends State<SettingsPage> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 14)),
-                        Text('${a.code} · ${a.kind.label}', style: hint),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text('${a.code} · ${a.kind.label}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: hint),
+                            ),
+                            // 资产大类：股债平衡按它归类（权益/债券参与折算，黄金/其它保持现状）
+                            _classPicker(st, a.code, hint),
+                          ],
+                        ),
                       ],
                     ),
                   ),

@@ -140,6 +140,79 @@ class _RebalancePageState extends State<RebalancePage> {
 
   // ---------------- 顶部汇总 ----------------
 
+  /// 「股债平衡」开关 + 折算读数（只给建议，不动用户填的目标）
+  ///
+  /// 开了以后：目标比例由**股债利差分位**定「权益 : 债券」，再乘用户在设置页填的
+  /// 类内相对比例。这里把折算依据摆出来（分位 / 目标 / 当前 / 该挪多少钱），
+  /// 免得用户对着一堆百分比猜这套数是怎么来的。
+  Widget _equityBondRow(
+      BuildContext context, AppState st, ThemeData theme, TextStyle hint) {
+    final acc = st.accountFilter;
+    final on = st.equityBondEnabledFor(acc);
+    final advice = st.equityBondAdvice;
+    final pct = st.macroErpPercentile;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('股债平衡',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                acc == null
+                    ? '「全部账户」视图不支持，先在顶部选一个账户'
+                    : (pct == null
+                        ? '利差分位样本不足，暂不折算'
+                        : '按利差分位 ${(pct * 100).round()}% 定权益占比'),
+                maxLines: 2,
+                style: hint,
+              ),
+            ),
+            Switch(
+              value: on,
+              onChanged: acc == null
+                  ? null // 全部账户没有归属，不让点
+                  : (v) => st.setEquityBondEnabled(acc, v),
+            ),
+          ],
+        ),
+        if (on && advice != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            '权益：当前 ${(advice.currentEquity * 100).toStringAsFixed(1)}%'
+            ' → 目标 ${(advice.targetEquity * 100).toStringAsFixed(0)}%'
+            '（分母是持仓市值 ${fmtYuan(advice.totalMarket)}，现金不进计划）',
+            style: hint,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            advice.amountToMove < -1
+                ? '需从权益挪出 ${fmtYuan(-advice.amountToMove)} 到债券腿'
+                : (advice.amountToMove > 1
+                    ? '权益还差 ${fmtYuan(advice.amountToMove)}'
+                    : '权益占比已在目标附近，不用动'),
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: advice.amountToMove < -1
+                  ? const Color(0xFF1A9C5B)
+                  : (advice.amountToMove > 1
+                      ? const Color(0xFFD93A3A)
+                      : theme.hintColor),
+            ),
+          ),
+          if (advice.hint != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('⚠️ ${advice.hint}', style: hint),
+            ),
+        ],
+      ],
+    );
+  }
+
   Widget _header(
     BuildContext context,
     AppState st,
@@ -155,6 +228,9 @@ class _RebalancePageState extends State<RebalancePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 「股债平衡」开关（设置页也有一处，共用同一份状态）
+          _equityBondRow(context, st, theme, hint),
+          const SizedBox(height: 12),
           Text('调仓总金额', style: hint),
           const SizedBox(height: 2),
           Text(
@@ -463,31 +539,38 @@ class _RebalancePageState extends State<RebalancePage> {
 
           const SizedBox(height: 10),
           // 需追加买入 / 需减仓卖出 + 偏离
+          // 左半边用 Expanded + FittedBox：窄屏 + 大字体时金额会自动缩一点，
+          // 而不是把右边那列挤出屏幕（实测 320dp + 字体 1.3 倍会溢出 17px）
           Row(
             children: [
-              if (line.hasAction)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.10),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '${line.isBuy ? '需追加买入' : '需减仓卖出'} '
-                    '${fmtYuan(line.diff.abs())}',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: color),
-                  ),
-                )
-              else
-                Text(
-                  t.hasTarget ? '已达标，不用动' : '未设目标，暂不调整',
-                  style: TextStyle(fontSize: 13, color: theme.hintColor),
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: line.hasAction
+                      ? Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '${line.isBuy ? '需追加买入' : '需减仓卖出'} '
+                            '${fmtYuan(line.diff.abs())}',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: color),
+                          ),
+                        )
+                      : Text(
+                          t.hasTarget ? '已达标，不用动' : '未设目标，暂不调整',
+                          style: TextStyle(fontSize: 13, color: theme.hintColor),
+                        ),
                 ),
-              const Spacer(),
+              ),
+              const SizedBox(width: 8),
               if (t.hasTarget)
                 Text.rich(
                   TextSpan(children: [

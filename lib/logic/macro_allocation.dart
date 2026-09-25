@@ -68,40 +68,161 @@ double? equityTargetRatio(
   return double.parse(raw.toStringAsFixed(4)).clamp(lo, hi);
 }
 
-/// 两层目标折算成**标的级**目标占比（同一 code 只出现一次，总和 ≤ 1）。
-///
-/// 大层由股债利差分位给（[equityWeight]，通常来自 [equityTargetRatio]），
-/// 小层是用户原来填的相对比例（如 10 : 60 : 30 = 权益内部谁多谁少）；
-/// 两者相乘才是标的级目标 —— 这样分位天天变，也只要重算大层，用户填的小层
-/// 关系一个字都不用改（现有的调仓引擎照旧吃标的级目标）。
-///
-/// **缺一类时不要硬凑**：某一类为空（例如他还没买债券基金）时，那一份权重就
-/// 不分配、结果总和会小于 1；调用方据此提示「缺少债券腿」，而不是自己造一个
-/// 标的出来（"失败/缺失"不能当成"有数据"）。
-Map<String, double> twoLayerTargets({
-  required Map<String, double> equityRelative,
-  required Map<String, double> nonEquityRelative,
-  required double equityWeight,
-}) {
-  final e = equityWeight.clamp(0.0, 1.0);
-  final out = <String, double>{};
+/// 标的的**资产大类**（用户自己在设置页标）。只有 [equity]/[bond] 参与股债平衡；
+/// [gold]/[other] 一律**保持现状**（不参与折算）。
+enum AssetClass { equity, bond, gold, other }
 
-  void spread(Map<String, double> rel, double weight) {
-    if (weight <= 0) return;
-    var sum = 0.0;
-    for (final v in rel.values) {
-      if (v > 0) sum += v;
+extension AssetClassInfo on AssetClass {
+  String get label => switch (this) {
+        AssetClass.equity => '权益',
+        AssetClass.bond => '债券',
+        AssetClass.gold => '黄金',
+        AssetClass.other => '其它',
+      };
+
+  /// 是否参与股债平衡的折算
+  bool get inEquityBond =>
+      this == AssetClass.equity || this == AssetClass.bond;
+
+  /// 从设置里读回来的字符串（未知/为空 → null，由调用方决定默认值）
+  static AssetClass? parse(String? raw) {
+    for (final c in AssetClass.values) {
+      if (c.name == raw) return c;
     }
-    if (sum <= 0) return;
-    rel.forEach((code, v) {
-      if (v <= 0) return;
-      out[code] = (out[code] ?? 0) + v / sum * weight;
-    });
+    return null;
+  }
+}
+
+/// 折算结果：每个 code 的**目标占比**（相对「持仓市值合计」）+ 要告诉用户的原因。
+///
+/// [targets] 里出现的每个 code 都是"有目标的"；**不参与折算的类**与**没填相对
+/// 比例的标的**都以"当前占比"出现（等价于保持现状，方案里 diff=0、不会乱买卖）。
+class ClassTargetResult {
+  final Map<String, double> targets;
+
+  /// 权益/债券两类各自的目标占比（相对总持仓市值）
+  final double equityWeight;
+  final double bondWeight;
+
+  /// 需要提示给用户的原因（null = 一切正常）：缺债券腿、目标比现有持仓还小…
+  final String? hint;
+
+  const ClassTargetResult({
+    required this.targets,
+    required this.equityWeight,
+    required this.bondWeight,
+    this.hint,
+  });
+
+  bool get isEmpty => targets.isEmpty;
+}
+
+/// 按「大类」把权益/债券两池折算成**标的级目标占比**（纯函数，可单测）。
+///
+/// 口径（与界面上的说明必须一致）：
+/// 1. 分母是**持仓市值合计**（用户定的：现金不纳入计划）；
+/// 2. 黄金/其它（不参与类）与**没填相对比例的标的** → 目标 = 当前占比（保持现状），
+///    它们的市值先从池子里扣掉；
+/// 3. 剩下的池子按 [equityTarget] 分成权益池与债券池；
+/// 4. 每类内部：填了相对比例的按比例分，没填的保持现状；**整类都没填** → 整池
+///    按当前市值比例分（等价于只调这一类总量、内部不动）；
+/// 5. 缺哪类就**不硬凑**：类里一个标的都没有时那一池不分配，并给出 [hint]
+///    （例如"还没有标「债券」的标的"）——绝不自己造一个标的出来。
+ClassTargetResult classBasedEquityBondTargets({
+  required Map<String, double> marketValue,
+  required Map<String, AssetClass> classes,
+  required Map<String, double> relative,
+  required double equityTarget,
+}) {
+  final mv = <String, double>{
+    for (final e in marketValue.entries)
+      if (e.value > 0) e.key: e.value,
+  };
+  final total = mv.values.fold<double>(0, (a, b) => a + b);
+  if (total <= 0) {
+    return const ClassTargetResult(
+      targets: {},
+      equityWeight: 0,
+      bondWeight: 0,
+      hint: '当前没有持仓市值，算不出比例',
+    );
   }
 
-  spread(equityRelative, e);
-  spread(nonEquityRelative, 1 - e);
-  return out;
+  AssetClass clsOf(String code) => classes[code] ?? AssetClass.equity;
+
+  final out = <String, double>{};
+  var passive = 0.0;
+  for (final e in mv.entries) {
+    if (!clsOf(e.key).inEquityBond) {
+      out[e.key] = e.value / total; // 黄金/其它：保持现状
+      passive += e.value;
+    }
+  }
+
+  final x = equityTarget.clamp(0.0, 1.0);
+  final pool = total - passive; // 可能为 0（全是黄金/其它）
+  final eqPool = pool * x;
+  final bondPool = pool * (1 - x);
+
+  String? hint;
+
+  void spread(AssetClass cls, double poolAmount) {
+    final codes = [
+      for (final e in mv.entries)
+        if (clsOf(e.key) == cls) e.key,
+    ];
+    if (codes.isEmpty) return;
+
+    var relSum = 0.0;
+    var pinned = 0.0;
+    for (final c in codes) {
+      final r = relative[c] ?? 0;
+      if (r > 0) {
+        relSum += r;
+      } else {
+        pinned += mv[c]!;
+      }
+    }
+
+    // 整类都没填相对比例 → 整池按当前市值比例分（只调总量，内部不动）
+    if (relSum <= 0) {
+      final mvSum = codes.fold<double>(0, (a, c) => a + mv[c]!);
+      for (final c in codes) {
+        final w = mvSum > 0 ? mv[c]! / mvSum : 1 / codes.length;
+        out[c] = w * poolAmount / total;
+      }
+      return;
+    }
+
+    final rest = poolAmount - pinned;
+    if (rest < -1e-6) {
+      hint ??= '「${cls.label}」的目标比现有持仓还小，这一类先别动';
+    }
+    final usable = rest > 0 ? rest : 0.0;
+    for (final c in codes) {
+      final r = relative[c] ?? 0;
+      if (r > 0) {
+        out[c] = r / relSum * usable / total;
+      } else {
+        out[c] = mv[c]! / total; // 保持现状
+      }
+    }
+  }
+
+  spread(AssetClass.equity, eqPool);
+  spread(AssetClass.bond, bondPool);
+
+  final hasBond = mv.keys.any((c) => clsOf(c) == AssetClass.bond);
+  if (!hasBond && bondPool > 1e-9) {
+    hint = '还没有标成「债券」的标的，先把一只债券基金在设置里标成债券';
+  }
+
+  return ClassTargetResult(
+    targets: out,
+    equityWeight: eqPool / total,
+    bondWeight: bondPool / total,
+    hint: hint,
+  );
 }
 
 /// 该不该在方案里提示「股债再平衡」：目标权益占比与**当前实际**权益占比
