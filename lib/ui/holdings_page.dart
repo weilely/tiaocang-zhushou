@@ -12,6 +12,7 @@ import '../state/app_state.dart';
 import 'asset_detail_page.dart';
 import 'dca_manage_page.dart';
 import 'holding_import_page.dart';
+import 'redeem_fee_sheet.dart';
 import 'widgets/common.dart';
 import 'widgets/inline_marquee.dart';
 
@@ -76,6 +77,12 @@ class HoldingsPage extends StatelessWidget {
                     assetId: p.asset.id!,
                   ),
                 ),
+              ),
+              // 「费率」入口（用户 2026-09-28：持仓页要能看卖出费率分布）
+              onRedeemFee: () => showRedeemFeeSheet(
+                context,
+                accountId: p.accountId,
+                assetId: p.asset.id!,
               ),
             ),
           if (list.isEmpty)
@@ -596,7 +603,10 @@ class HoldingCard extends StatelessWidget {
   final HoldingCardData data;
   final VoidCallback? onTap;
 
-  const HoldingCard({super.key, required this.data, this.onTap});
+  /// 卡片右上角的「费率」入口：弹出「卖出费率分布」（按持有天数分档 + 先进先出）
+  final VoidCallback? onRedeemFee;
+
+  const HoldingCard({super.key, required this.data, this.onTap, this.onRedeemFee});
 
   @override
   Widget build(BuildContext context) {
@@ -642,6 +652,28 @@ class HoldingCard extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (onRedeemFee != null)
+                    InkWell(
+                      onTap: onRedeemFee,
+                      borderRadius: BorderRadius.circular(10),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 2),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.percent,
+                                size: 15, color: theme.colorScheme.primary),
+                            const SizedBox(width: 2),
+                            Text('费率',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: theme.colorScheme.primary)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  const SizedBox(width: 2),
                   Icon(Icons.chevron_right, size: 20, color: theme.hintColor),
                 ],
               ),

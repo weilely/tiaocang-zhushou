@@ -10,8 +10,10 @@ import '../data/models.dart';
 import '../data/securities_repo.dart';
 import '../data/securities_source.dart';
 import '../logic/nav_lookup.dart';
+import '../logic/redeem_fee.dart';
 import '../logic/txn_form.dart';
 import '../state/app_state.dart';
+import 'redeem_fee_sheet.dart';
 import 'widgets/cn_date_picker.dart';
 
 class TxnEditPage extends StatefulWidget {
@@ -67,6 +69,14 @@ class _TxnEditPageState extends State<TxnEditPage> {
   /// 「待确认」：场外基金当天净值还没公布时，先只记金额、份额留空，
   /// 等净值公布后由 `AppState.fillPendingTxns()` 自动补（用户 2026-09-28 选的做法）
   bool _pending = false;
+
+  /// 场外**卖出**用的赎回档位（异步从基金档案取；取到前先按内置默认档估）
+  List<RedeemTier> _redeemTiers = kDefaultRedeemTiers;
+  String _tiersSource = '';
+  bool _tiersLoaded = false;
+
+  /// 用户有没有手改过「手续费（实际）」：没改过才跟着 FIFO 估算自动走
+  bool _feeTouched = false;
 
   bool _autoAmount = false;
   bool _autoShares = true;
@@ -174,6 +184,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
       // 让「预测」那一格按已填的金额/费率算出来
       setState(() {});
       if (widget.existing == null && _code.text.isNotEmpty) _syncNav();
+      // 场外卖出：把该基金的赎回档位取回来（用户改过 → 档案 → 默认），再算预估
+      unawaited(_loadRedeemTiers());
     });
   }
 
@@ -316,10 +328,13 @@ class _TxnEditPageState extends State<TxnEditPage> {
     return s;
   }
 
-  /// **预测**手续费（只读）：场内按佣金率、场外按申购/赎回费率；
+  /// **预测**手续费（只读）：场内按佣金率+税费、场外买入按申购费率、
+  /// 场外卖出按**持有天数档 + 先进先出**估的赎回费；
   /// 没设费率 / 金额为空 → null（**不猜**，那一栏显示 `--`）
   double? _predictedFee() {
     if (_type == TxnType.dividend) return null;
+    // 场外卖出：FIFO × 持有天数档（档位来自基金档案，拿不到用默认档）
+    if (_type == TxnType.sell && !_kind.isExchange) return _fifoRedeemFee();
     final st = context.read<AppState>();
     return st.feeForTxn(
       accountId: _accountId,
@@ -330,6 +345,61 @@ class _TxnEditPageState extends State<TxnEditPage> {
     );
   }
 
+  /// 场外卖出的预估赎回费（按本次卖出的份额、当日净值、FIFO 批次与档位）
+  double? _fifoRedeemFee() {
+    final shares = double.tryParse(_shares.text.trim()) ?? 0;
+    final nav = double.tryParse(_price.text.trim()) ?? 0;
+    final acc = _accountId;
+    final aid = _assetId;
+    if (shares <= 0 || nav <= 0 || acc == null || aid == null) return null;
+    return context.read<AppState>().estimateRedeemFeeFor(
+          accountId: acc,
+          assetId: aid,
+          shares: shares,
+          date: _date,
+          nav: nav,
+          tiers: _redeemTiers,
+        );
+  }
+
+  /// 取该基金的赎回档位（用户改过 → 基金档案 → 内置默认），取到后重算预估
+  Future<void> _loadRedeemTiers() async {
+    if (_kind.isExchange || _type != TxnType.sell) return;
+    final code = _code.text.trim();
+    if (code.isEmpty) return;
+    final st = context.read<AppState>();
+    final r = await st.redeemTiersFor(code);
+    if (!mounted) return;
+    setState(() {
+      _redeemTiers = r.tiers;
+      _tiersSource = r.source;
+      _tiersLoaded = true;
+    });
+    _autoFillFee();
+  }
+
+  String _redeemTiersHint() {
+    if (!_tiersLoaded) return '正在取档位…';
+    if (_tiersSource.startsWith('基金档案')) return '按持有天数自动算（档位来自基金档案）';
+    if (_tiersSource.startsWith('你手动')) return '按持有天数自动算（档位是你设的）';
+    return '按持有天数自动算（档位用内置默认）';
+  }
+
+  /// 把 FIFO 估出来的赎回费**自动填进「手续费（实际）」**（用户 2026-09-28 选的 B）
+  ///
+  /// 只在「场外卖出 + 用户还没手改过实际值」时同步；用户一动那个框就不再覆盖。
+  void _autoFillFee() {
+    if (_feeTouched) return;
+    if (_type != TxnType.sell || _kind.isExchange) return;
+    final fee = _fifoRedeemFee();
+    if (fee == null) return;
+    final text = fee.toStringAsFixed(2);
+    if (_fee.text != text) {
+      _fee.text = text;
+      if (mounted) setState(() {});
+    }
+  }
+
   /// 费率框 —— 场内是「佣金费率（万分之几）」（免五圆点嵌在框里）；
   /// 场外是「申购费率（%）」/「赎回费率（%）」，**没有免五**（最低 5 元是券商佣金概念）。
   ///
@@ -338,11 +408,37 @@ class _TxnEditPageState extends State<TxnEditPage> {
   Widget _feeRateField(AppState st) {
     if (_feeByFund) {
       final isSell = _type == TxnType.sell;
+      // **场外卖出**：赎回费不再手填一个固定费率 —— 按**持有天数档 + 先进先出**自动估算
+      // （用户 2026-09-28：参考基金档案的赎回费率、按持仓天数估费），
+      // 档位从基金档案取（拿不到用默认档），「档位」按钮能看分布并改。
+      if (isSell) {
+        return InputDecorator(
+          decoration: InputDecoration(
+            labelText: '赎回费档位',
+            helperText: _redeemTiersHint(),
+            isDense: true,
+            suffix: TextButton(
+              onPressed: _accountId == null || _assetId == null
+                  ? null
+                  : () => showRedeemFeeSheet(
+                        context,
+                        accountId: _accountId!,
+                        assetId: _assetId!,
+                      ),
+              child: const Text('档位', style: TextStyle(fontSize: 12)),
+            ),
+          ),
+          child: Text(
+            _tiersLoaded ? '按持有天数自动算' : '取档位中…',
+            style: const TextStyle(fontSize: 13),
+          ),
+        );
+      }
       return TextFormField(
         controller: _feeRateCtrl,
-        decoration: InputDecoration(
-          labelText: isSell ? '赎回费率（%）' : '申购费率（%）',
-          helperText: '填 0.1 = ${isSell ? '赎回费' : '申购费'} 0.1%；留空 = 不计',
+        decoration: const InputDecoration(
+          labelText: '申购费率（%）',
+          helperText: '填 0.1 = 申购费 0.1%；留空 = 不计',
           isDense: true,
         ),
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -404,7 +500,11 @@ class _TxnEditPageState extends State<TxnEditPage> {
   void _applyPredictedFee() {
     final fee = _predictedFee();
     if (fee == null) return;
-    setState(() => _fee.text = fee.toStringAsFixed(2));
+    setState(() {
+      _fee.text = fee.toStringAsFixed(2);
+      // 这是用户主动搬过来的 → 之后就按"手改过"对待，不再被自动估算覆盖
+      _feeTouched = true;
+    });
   }
 
   /// 「手续费（预测）」那一格：样式跟别的输入框一致，但**不可改**
@@ -419,10 +519,14 @@ class _TxnEditPageState extends State<TxnEditPage> {
     final String helper;
     if (rate == null) {
       helper = byFund
-          ? '填了${_type == TxnType.sell ? '赎回' : '申购'}费率才有预测'
+          ? (_type == TxnType.sell
+              ? _redeemTiersHint()
+              : '填了申购费率才有预测')
           : '填了佣金费率才有预测';
     } else if (byFund) {
-      helper = '按${_type == TxnType.sell ? '赎回' : '申购'}费 ${_pctText(rate)}%';
+      helper = _type == TxnType.sell
+          ? _redeemTiersHint()
+          : '按申购费 ${_pctText(rate)}%';
     } else {
       final min = _kind.isExchange && !st.feeWaiveMinOf(_accountId)
           ? '，不足 5 元按 5 元'
@@ -478,6 +582,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
     // 用户手填了净值 → 这笔不再是「待确认」
     if (_pending && _price.text.trim().isNotEmpty) _pending = false;
     _syncDerived();
+    _autoFillFee();
     setState(() {});
   }
 
@@ -512,6 +617,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
     if (fill != null) {
       _setText(_price, _trim(fill.nav));
       _syncDerived();
+      // 净值到手 → 场外卖出的赎回费可以按 FIFO 估了（自动填「实际」）
+      _autoFillFee();
       // 价格是程序化写入的（`_setText` 期间监听器不动作），这里得显式刷一次，
       // 否则「预测」手续费会停在旧金额上
       if (mounted) setState(() {});
@@ -796,6 +903,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
                       ),
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
+                      // 用户手改过实际手续费 → 不再用 FIFO 估算覆盖它
+                      onChanged: (_) => _feeTouched = true,
                     ),
                   ),
                 ],

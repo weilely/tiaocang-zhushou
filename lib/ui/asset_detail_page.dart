@@ -12,6 +12,7 @@ import '../logic/range_preset.dart';
 import '../state/app_state.dart';
 import 'dca_plan_sheet.dart';
 import 'fund_profile_page.dart';
+import 'redeem_fee_sheet.dart';
 import 'txn_edit_page.dart';
 import 'asset_edit_page.dart';
 import 'widgets/asset_value_chart.dart';
@@ -115,6 +116,9 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
           else
             _perfCard(context, state, asset),
           _metricsCard(context, p),
+          // 场外基金：卖出费率分布（按持有天数分档 + 先进先出） —— 与持仓卡片上的入口同一个弹框
+          if (asset.kind == AssetKind.fund)
+            _redeemFeeEntry(context, asset, p),
           // 基金档案（同花顺详情接口，点进去才拉）：场外基金与场内 ETF/LOF 都有
           if (asset.kind == AssetKind.fund || asset.kind == AssetKind.etf)
             _fundProfileEntry(context, asset),
@@ -290,6 +294,46 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
   ///
   /// 只在基金与场内 ETF/LOF 上出现 —— 同花顺的基金详情接口只认基金，
   /// 股票/黄金点进去只会得到「标的不存在」。
+  /// 场外基金：「卖出费率分布」入口（与持仓卡片右上角那个是同一个弹框）
+  ///
+  /// 用户 2026-09-28：持仓页与详情页**两处都要**能看这张表。
+  Widget _redeemFeeEntry(BuildContext context, Asset asset, Position p) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Material(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => showRedeemFeeSheet(
+            context,
+            accountId: p.accountId,
+            assetId: asset.id!,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            child: Row(
+              children: [
+                Icon(Icons.percent_outlined,
+                    size: 20, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('卖出费率分布（按持有天数）',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                ),
+                Icon(Icons.chevron_right, size: 20, color: theme.hintColor),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _fundProfileEntry(BuildContext context, Asset asset) {
     final theme = Theme.of(context);
     return Padding(

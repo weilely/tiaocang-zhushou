@@ -41,6 +41,7 @@ import '../logic/pinyin_util.dart';
 import '../logic/portfolio.dart';
 import '../logic/quote_sync.dart';
 import '../logic/range_preset.dart';
+import '../logic/redeem_fee.dart';
 import '../logic/refresh_throttle.dart';
 import '../logic/nav_freshness.dart';
 import '../logic/rebalance_plan.dart';
@@ -1715,6 +1716,119 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  // ---------------- 场外赎回档位（用户 2026-09-28：得参考基金档案赎回费率） ----------------
+
+  /// 用户**手动改过**的赎回档位（键 = 基金代码）。没改过就为空 → 走档案 / 默认。
+  final Map<String, List<RedeemTier>> userRedeemTiers = {};
+
+  static const String _kRedeemTiers = 'redeemTiers:';
+
+  static Map<String, List<RedeemTier>> _parseRedeemTiers(
+      Map<String, String> s) {
+    final out = <String, List<RedeemTier>>{};
+    for (final e in s.entries) {
+      if (!e.key.startsWith(_kRedeemTiers)) continue;
+      final code = e.key.substring(_kRedeemTiers.length);
+      if (code.isEmpty || e.value.isEmpty) continue;
+      try {
+        final raw = jsonDecode(e.value);
+        if (raw is! List) continue;
+        final tiers = [
+          // 空值元素（解析不出来的行直接丢掉）
+          for (final r in raw) ?RedeemTier.fromJson(r),
+        ]..sort((a, b) => a.minDays.compareTo(b.minDays));
+        if (tiers.isNotEmpty) out[code] = tiers;
+      } catch (_) {
+        // 坏数据跳过（当没设过）
+      }
+    }
+    return out;
+  }
+
+  /// 手动设置 / 清除（传 null 或空 = 恢复「跟着基金档案走」）
+  Future<void> setUserRedeemTiers(String code, List<RedeemTier>? tiers) async {
+    final c = code.trim();
+    if (c.isEmpty) return;
+    if (tiers == null || tiers.isEmpty) {
+      userRedeemTiers.remove(c);
+      await db.setSetting('$_kRedeemTiers$c', '');
+    } else {
+      userRedeemTiers[c] = tiers;
+      await db.setSetting(
+          '$_kRedeemTiers$c', jsonEncode([for (final t in tiers) t.toJson()]));
+    }
+    notifyListeners();
+  }
+
+  /// 该基金的赎回档位 + **来源**：用户改过 → 基金档案（同花顺）→ 内置默认
+  ///
+  /// 档案是按需拉的（有配额，`loadFundDetail` 自带内存缓存），所以这里只在
+  /// 「用户没改过 + 档案还没缓存」时才真的联网一次；拿不到就**如实回落**到默认档，
+  /// 并把原因带回去给界面显示（不许把"没取到"画成"没有档位"）。
+  Future<({List<RedeemTier> tiers, String source, String? error})>
+      redeemTiersFor(String code, {bool force = false}) async {
+    final c = code.trim();
+    final mine = userRedeemTiers[c];
+    if (mine != null && mine.isNotEmpty) {
+      return (tiers: mine, source: '你手动设置的档位', error: null);
+    }
+    try {
+      final bundle = await loadFundDetail(c, otc: true, force: force);
+      final parsed = parseRedeemTiers(bundle.profile.rates);
+      if (parsed.isNotEmpty) {
+        return (tiers: parsed, source: '基金档案（同花顺）', error: null);
+      }
+      return (
+        tiers: kDefaultRedeemTiers,
+        source: '内置默认档（档案里没有赎回档位）',
+        error: null,
+      );
+    } on HithinkException catch (e) {
+      return (
+        tiers: kDefaultRedeemTiers,
+        source: '内置默认档（档案取不到）',
+        error: e.message,
+      );
+    } catch (e) {
+      return (
+        tiers: kDefaultRedeemTiers,
+        source: '内置默认档（档案取不到）',
+        error: '$e',
+      );
+    }
+  }
+
+  /// 该账户该标的的 FIFO 批次（**已排除当天买入的 T+1 部分**）
+  List<RedeemLot> redeemLotsOf(int accountId, int assetId,
+      {DateTime? asOf}) {
+    final p = positionOf(accountId, assetId);
+    if (p == null) return const [];
+    return fifoLots(p.txns, asOf: asOf ?? DateTime.now());
+  }
+
+  /// 卖出 [shares] 份时按 FIFO 估的赎回费（元）
+  ///
+  /// [nav] 是当天的净值；拿不到净值（0）时返回 null —— 界面显示 `--`，不猜。
+  double? estimateRedeemFeeFor({
+    required int accountId,
+    required int assetId,
+    required double shares,
+    required DateTime date,
+    required double nav,
+    required List<RedeemTier> tiers,
+  }) {
+    if (nav <= 0 || shares <= 0) return null;
+    final lots = redeemLotsOf(accountId, assetId, asOf: date);
+    if (lots.isEmpty) return null;
+    return estimateRedeemFee(
+      lots: lots,
+      sellShares: shares,
+      date: date,
+      nav: nav,
+      tiers: tiers,
+    ).fee;
+  }
+
   /// 拉一只基金的「档案 / 重仓股 / 分红」（同花顺详情接口，**按需**调用）
   ///
   /// - 档案是**必须**的：取不到就抛 [HithinkException]，页面如实说原因
@@ -2920,6 +3034,9 @@ class AppState extends ChangeNotifier {
     redeemFeeRates
       ..clear()
       ..addAll(_parseCodeRates(settings, _kRedeemFeeRate));
+    userRedeemTiers
+      ..clear()
+      ..addAll(_parseRedeemTiers(settings));
     feeWaiveMin
       ..clear()
       ..addAll(_parseFeeWaive(settings));
@@ -3903,14 +4020,27 @@ class AppState extends ChangeNotifier {
       );
       if (fill == null) continue;
 
-      // 卖出且没填手续费、但该基金设了赎回费率 → 按费率补上（与记一笔同一公式）
+      // 卖出且没填手续费 → 按**持有天数档 + 先进先出**补上
+      // （档位同样走「用户改过 → 基金档案 → 内置默认」；估算时要**先排除这笔自己**，
+      //   否则它已经吃掉的份额会被算第二遍）
       var fee = t.fee;
       if (t.type == TxnType.sell && fee <= 0) {
-        fee = fundTradeFee(
-              ratePct: redeemFeeRateOf(asset.code),
-              amount: fill.amount,
-            ) ??
-            0;
+        final tiers = (await redeemTiersFor(asset.code)).tiers;
+        final lots = fifoLots(
+          [
+            for (final x in (positionOf(t.accountId, t.assetId)?.txns ??
+                const <Txn>[]))
+              if (x.id != t.id) x,
+          ],
+          asOf: t.date,
+        );
+        fee = estimateRedeemFee(
+          lots: lots,
+          sellShares: fill.shares,
+          date: t.date,
+          nav: fill.price,
+          tiers: tiers,
+        ).fee;
       }
       final filled = t.copyWith(
         price: fill.price,

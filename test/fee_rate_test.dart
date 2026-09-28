@@ -310,11 +310,12 @@ void main() {
       expect(find.text('佣金费率（万分之几）'), findsNothing);
       expect(find.text('免五'), findsNothing, reason: '最低 5 元是券商佣金概念，场外没有');
 
-      // 切到卖出 → 换成赎回费率
+      // 切到卖出 → 赎回费改成「按持有天数档自动算」，不再手填固定费率
       await tester.tap(find.text('卖出'));
       await tester.pumpAndSettle();
-      expect(find.text('赎回费率（%）'), findsOneWidget);
+      expect(find.text('赎回费档位'), findsOneWidget);
       expect(find.text('申购费率（%）'), findsNothing);
+      expect(find.text('档位'), findsOneWidget, reason: '能从这里看分布/改档位');
     });
   });
 }
