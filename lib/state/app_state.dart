@@ -3862,8 +3862,13 @@ class AppState extends ChangeNotifier {
 
   // ---------------- 「待确认」记账的自动补全 ----------------
 
-  /// 场外基金当天净值没公布时，先只记金额（`Txn.pending = true`）；
-  /// 净值公布后由这里把份额与净值补上，并解除待确认。
+  /// 「待确认」记账的自动补全（**买入与卖出都要**，用户 2026-09-28 追问卖出那条）
+  ///
+  /// 场外基金当天净值没公布时：买入先只记金额、卖出先只记份额（`Txn.pending = true`）；
+  /// 净值公布后由这里把缺的那一半补上并解除待确认：
+  /// - 买入：补份额（现金当天已经扣了，不动）
+  /// - 卖出：补**金额**（`份额 × 当日净值`）与手续费，并**补写现金入账**
+  ///   （待确认期间金额还不知道、赎回款也还没到账，所以当时没写现金流水）
   ///
   /// 取价口径与定投补记一致（`pendingFill` → `resolveDcaPrice`）：
   /// 所选日当天有值用当天，否则顺延到之后第一个有值日，**绝不用所选日之前的价**。
@@ -3873,6 +3878,7 @@ class AppState extends ChangeNotifier {
     if (pending.isEmpty) return 0;
     final today = DateTime.now();
     var n = 0;
+    var cashTouched = false;
     for (final t in pending) {
       final asset = assetsById[t.assetId];
       if (asset == null || t.id == null) continue;
@@ -3887,22 +3893,45 @@ class AppState extends ChangeNotifier {
         continue;
       }
       final fill = pendingFill(
+        type: t.type,
         date: t.date,
         today: today,
         priceByDay: prices,
         amount: t.amount,
+        shares: t.shares,
         traits: AssetTraits.of(asset.kind),
       );
       if (fill == null) continue;
-      await db.saveTxn(t.copyWith(
+
+      // 卖出且没填手续费、但该基金设了赎回费率 → 按费率补上（与记一笔同一公式）
+      var fee = t.fee;
+      if (t.type == TxnType.sell && fee <= 0) {
+        fee = fundTradeFee(
+              ratePct: redeemFeeRateOf(asset.code),
+              amount: fill.amount,
+            ) ??
+            0;
+      }
+      final filled = t.copyWith(
         price: fill.price,
+        amount: fill.amount,
         shares: fill.shares,
+        fee: fee,
         pending: false,
-      ));
+      );
+      await db.saveTxn(filled);
+      // 卖出：待确认期间**没写现金流水**（金额都还不知道），这里补上；
+      // 已经有流水的不重复写（免得补出两条入账）
+      if (t.type == TxnType.sell &&
+          !cashTxns.any((c) => c.srcTxnId == t.id)) {
+        await _linkCashFor(filled);
+        cashTouched = true;
+      }
       n++;
     }
     if (n > 0) {
       txns = await db.txns();
+      if (cashTouched) cashTxns = await db.cashTxns();
       _recompute();
       lastMessage = '已按公布净值补上 $n 笔待确认记账';
       notifyListeners();

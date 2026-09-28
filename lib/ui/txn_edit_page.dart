@@ -838,11 +838,14 @@ class _TxnEditPageState extends State<TxnEditPage> {
 
   // ---------------- 表单字段 ----------------
 
-  /// 这一笔能不能按「待确认」记：**场外基金买入**，且所选日期的净值不是精确命中
-  /// （今天还没公布 → 查到的多半是上一交易日的）
+  /// 这一笔能不能按「待确认」记：**场外基金的买入与卖出**，且所选日期的净值不是精确命中
+  /// （今天还没公布 → 查到的多半是上一交易日的）。
+  ///
+  /// 买入等的是**份额**、卖出等的是**金额**（场外赎回按份额下单，成交金额同样是按
+  /// 当日净值确认的 —— 用户 2026-09-28 追问「场外基金当天卖出没有净值不也得待确认」）。
   bool get _canPending =>
-      _type == TxnType.buy &&
       !_kind.isExchange &&
+      (_type == TxnType.buy || _type == TxnType.sell) &&
       (_pending || _navFill == null || !_navFill!.exact);
 
   /// 日期下面那行净值提示：查到了显示净值所属日期，没查到就让用户手填；
@@ -855,7 +858,10 @@ class _TxnEditPageState extends State<TxnEditPage> {
     final failed = hasCode && queried && !_navBusy && _navFill == null;
     final color = failed ? const Color(0xFFD93A3A) : Theme.of(context).hintColor;
     final hint = _pending
-        ? '待确认：先只记金额，等净值公布后自动补份额'
+        // 买入等份额、卖出等金额（赎回金额按当日净值确认）
+        ? (_type == TxnType.sell
+            ? '待确认：份额已记，赎回金额与到账等净值公布后自动补'
+            : '待确认：先只记金额，等净值公布后自动补份额')
         : navFillHint(
             day: _date,
             fill: _navFill,
@@ -902,9 +908,14 @@ class _TxnEditPageState extends State<TxnEditPage> {
             onPressed: () => setState(() {
               _pending = !_pending;
               if (_pending) {
-                // 净值/份额留空 = 待确认；金额与手续费照常记
+                // 净值留空 = 待确认；已确定的那一半保留：
+                // 买入留金额（份额待补）、卖出留份额（金额待补）
                 _price.clear();
-                _shares.clear();
+                if (_type == TxnType.sell) {
+                  _amount.clear();
+                } else {
+                  _shares.clear();
+                }
               } else {
                 // 切回「用查到的净值」：重新按日期查一次
                 _syncNav();
@@ -970,8 +981,9 @@ class _TxnEditPageState extends State<TxnEditPage> {
       decoration: InputDecoration(labelText: label, helperText: helper),
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       validator: (v) {
-        // 待确认：份额留空是有意的（等净值公布后自动补），不拦
-        if (_pending) return null;
+        // 待确认：**买入**时份额留空是有意的（等公布后自动补），不拦；
+        // 卖出时份额是那一半已知的数，仍必须填
+        if (_pending && _type == TxnType.buy) return null;
         final d = double.tryParse(v ?? '');
         if (d == null || d <= 0) return '请输入$unit';
         // 可卖份额（T+1：当日买的那部分当天不能卖）；0 也要拦，别让"可卖 0"被跳过
@@ -1003,6 +1015,9 @@ class _TxnEditPageState extends State<TxnEditPage> {
       ),
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       validator: (v) {
+        // 待确认：**卖出**时金额留空是有意的（赎回金额按当日净值确认，等公布后自动补），
+        // 不拦；买入时金额是那一半已知的数，仍必须填
+        if (_pending && _type == TxnType.sell) return null;
         final d = double.tryParse(v ?? '');
         if (d == null || d <= 0) return '请输入金额';
         return null;
@@ -1379,18 +1394,24 @@ class _TxnEditPageState extends State<TxnEditPage> {
     );
 
     // 买入/卖出/分红自动记入现金账户（联动常开，无需勾选）；
-    // 手续费一律并进现金流（分红那格手续费也会扣，与写库口径一致）
-    final cashNote = switch (_type) {
-      TxnType.buy => '买入扣款 ${fmtMoney(txn.amount + txn.fee)}',
-      TxnType.sell => '卖出入账 ${fmtMoney(txn.amount - txn.fee)}',
-      TxnType.dividend => '分红入账 ${fmtMoney(txn.amount - txn.fee)}',
-    };
+    // 手续费一律并进现金流（分红那格手续费也会扣，与写库口径一致）。
+    // **待确认的卖出**：金额还不知道、赎回款也还没到账 → 当时不写现金流水，
+    // 等净值公布后由 `fillPendingTxns()` 补上入账。
+    final cashNote = _pending
+        ? (_type == TxnType.sell
+            ? '待确认：赎回金额与到账等净值公布后自动补'
+            : '待确认：份额等净值公布后自动补')
+        : switch (_type) {
+            TxnType.buy => '买入扣款 ${fmtMoney(txn.amount + txn.fee)}',
+            TxnType.sell => '卖出入账 ${fmtMoney(txn.amount - txn.fee)}',
+            TxnType.dividend => '分红入账 ${fmtMoney(txn.amount - txn.fee)}',
+          };
     await st.saveTxnWithCash(txn, asset);
     if (!mounted) return;
     Navigator.of(context).pop();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('已保存 · $cashNote 已记入现金'),
+        content: Text(_pending ? '已保存 · $cashNote' : '已保存 · $cashNote 已记入现金'),
         duration: const Duration(seconds: 2),
       ),
     );

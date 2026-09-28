@@ -76,76 +76,116 @@ void main() {
   });
 
   // 用户 2026-09-28 选的做法：「待确认」模式 —— 场外基金当天净值没公布时
-  // 先只记金额，等净值公布后由 `AppState.fillPendingTxns()` 按这里定的价补份额。
-  group('pendingFill：待确认那笔事后补份额用哪天的价', () {
+  // 先只记一半（买入记金额 / 卖出记份额），等净值公布后由
+  // `AppState.fillPendingTxns()` 按这里定的价与口径补上另一半。
+  // 卖出那条是用户追问：「场外基金当天卖出没有净值不也得待确认」
+  group('pendingFill：待确认那笔事后补全用哪天的价', () {
     final today = DateTime(2026, 9, 28);
+    final due = DateTime(2026, 9, 25);
 
-    test('所选日当天就有净值 → 用当天，份额 = 金额 ÷ 净值（基金 2 位小数）', () {
+    test('买入：所选日当天就有净值 → 用当天，份额 = 金额 ÷ 净值（基金 2 位小数）', () {
       final f = pendingFill(
-        date: DateTime(2026, 9, 25),
+        type: TxnType.buy,
+        date: due,
         today: today,
         priceByDay: {'2026-09-25': 1.7548},
         amount: 10000,
+        shares: 0,
         traits: fund,
       )!;
       expect(f.price, closeTo(1.7548, 1e-9));
+      expect(f.amount, 10000, reason: '买入的金额是下单时就确定的');
       expect(f.shares, 5698.65);
     });
 
-    test('当天还没公布 → 顺延到之后第一个有值日（周末/节假日同理）', () {
+    test('卖出：份额已定 → 金额 = 份额 × 净值（2 位小数）', () {
       final f = pendingFill(
-        date: DateTime(2026, 9, 25),
+        type: TxnType.sell,
+        date: due,
         today: today,
-        priceByDay: {'2026-09-28': 1.8074},
-        amount: 10000,
+        priceByDay: {'2026-09-25': 1.7548},
+        amount: 0,
+        shares: 5000,
         traits: fund,
       )!;
-      expect(f.price, closeTo(1.8074, 1e-9));
+      expect(f.price, closeTo(1.7548, 1e-9));
+      expect(f.shares, 5000, reason: '卖出的份额是下单时就确定的');
+      expect(f.amount, closeTo(8774.00, 1e-9)); // 5000 × 1.7548
     });
 
-    test('**绝不用所选日之前的价**（那等于拿买之前的价格成交）', () {
-      expect(
-        pendingFill(
-          date: DateTime(2026, 9, 25),
+    test('当天还没公布 → 顺延到之后第一个有值日（周末/节假日同理）', () {
+      for (final t in [TxnType.buy, TxnType.sell]) {
+        final f = pendingFill(
+          type: t,
+          date: due,
           today: today,
-          priceByDay: {'2026-09-24': 1.8074},
+          priceByDay: {'2026-09-28': 1.8074},
           amount: 10000,
+          shares: 5000,
           traits: fund,
-        ),
-        isNull,
-      );
+        )!;
+        expect(f.price, closeTo(1.8074, 1e-9));
+      }
+    });
+
+    test('**绝不用所选日之前的价**（那等于拿交易之前的净值成交）', () {
+      for (final t in [TxnType.buy, TxnType.sell]) {
+        expect(
+          pendingFill(
+            type: t,
+            date: due,
+            today: today,
+            priceByDay: {'2026-09-24': 1.8074},
+            amount: 10000,
+            shares: 5000,
+            traits: fund,
+          ),
+          isNull,
+        );
+      }
     });
 
     test('顺延日越过今天也拿不到价 → null（继续留着，下次再试）', () {
       expect(
         pendingFill(
+          type: TxnType.buy,
           date: DateTime(2026, 9, 28),
           today: today,
           priceByDay: {'2026-09-28': 0},
           amount: 10000,
+          shares: 0,
           traits: fund,
         ),
         isNull,
       );
     });
 
-    test('金额算不出份额（太小 / 非法）→ null', () {
+    test('买入金额算不出份额（太小 / 非法）→ null', () {
+      for (final amt in [0.0, 0.001]) {
+        expect(
+          pendingFill(
+            type: TxnType.buy,
+            date: due,
+            today: today,
+            priceByDay: {'2026-09-25': 1.7548},
+            amount: amt,
+            shares: 0,
+            traits: fund,
+          ),
+          isNull,
+        );
+      }
+    });
+
+    test('卖出份额非法 → null', () {
       expect(
         pendingFill(
-          date: DateTime(2026, 9, 25),
+          type: TxnType.sell,
+          date: due,
           today: today,
           priceByDay: {'2026-09-25': 1.7548},
           amount: 0,
-          traits: fund,
-        ),
-        isNull,
-      );
-      expect(
-        pendingFill(
-          date: DateTime(2026, 9, 25),
-          today: today,
-          priceByDay: {'2026-09-25': 1.7548},
-          amount: 0.001,
+          shares: 0,
           traits: fund,
         ),
         isNull,

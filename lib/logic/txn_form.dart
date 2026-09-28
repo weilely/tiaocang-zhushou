@@ -73,24 +73,39 @@ double? fundTradeFee({required double? ratePct, required double amount}) {
   return double.parse((amount * ratePct / 100).toStringAsFixed(2));
 }
 
-/// 「**待确认**」那笔记账事后补份额时该用哪天的价：
-/// **所选日当天有值就用当天，否则顺延到之后第一个有值日**（不越过今天），
-/// 与定投补记同一口径（`resolveDcaPrice`）——
-/// **绝不用所选日之前的价**，那样等于拿买之前的价格成交。
+/// 「**待确认**」那笔记账事后补全时该用哪天的价、补出哪些数
+/// （买入与卖出都走这里 —— 用户 2026-09-28 追问「场外基金当天卖出没有净值不也得待确认」）：
 ///
-/// 找不到价 / 份额算不出来 → null（继续等着，下次再来）。
-({double price, double shares})? pendingFill({
+/// 取价口径：**所选日当天有值就用当天，否则顺延到之后第一个有值日**（不越过今天），
+/// 与定投补记同一口径（`resolveDcaPrice`）——**绝不用所选日之前的价**。
+///
+/// - **买入**：金额是已知的（下单时填的）→ 补出份额 `金额 ÷ 净值`
+/// - **卖出**：份额是已知的（赎回按份额下单）→ 补出金额 `份额 × 净值`（场外赎回金额
+///   也是按当日净值确认的，所以卖出的"金额"同样要等净值公布）
+///
+/// 找不到价 / 该方向的关键数字不合法 → null（继续等着，下次再来）。
+({double price, double amount, double shares})? pendingFill({
+  required TxnType type,
   required DateTime date,
   required DateTime today,
   required Map<String, double> priceByDay,
   required double amount,
+  required double shares,
   required AssetTraits traits,
 }) {
   final ref = resolveDcaPrice(due: date, today: today, priceByDay: priceByDay);
-  if (ref == null) return null;
-  final shares = derivedShares(amount: amount, price: ref.price, traits: traits);
-  if (shares == null || shares <= 0) return null;
-  return (price: ref.price, shares: shares);
+  if (ref == null || ref.price <= 0) return null;
+
+  if (type == TxnType.sell) {
+    if (shares <= 0 || shares.isNaN || shares.isInfinite) return null;
+    final amt = double.parse((shares * ref.price).toStringAsFixed(2));
+    if (amt <= 0) return null;
+    return (price: ref.price, amount: amt, shares: shares);
+  }
+
+  final s = derivedShares(amount: amount, price: ref.price, traits: traits);
+  if (s == null || s <= 0) return null;
+  return (price: ref.price, amount: amount, shares: s);
 }
 
 /// **场内税费**（用户 2026-09-28：「场内交易费用卖出时考虑卖出股票印花税和过手费没有」）
