@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -59,6 +61,27 @@ class MacroDetailView extends StatefulWidget {
 class _MacroDetailViewState extends State<MacroDetailView> {
   bool _busy = false;
 
+  /// 曲线窗口（缩放按钮与曲线共用；手机双指不好按，所以按钮是主要入口）
+  final ErpChartController _chart = ErpChartController();
+
+  @override
+  void dispose() {
+    _chart.dispose();
+    super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // 沪深300 的日线在库里（`nav_history` 的 `sh000300`）—— 没载过就载一次，
+    // 载不到就如实说（不硬画一条假的）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final st = context.read<AppState>();
+      if (st.benchmarkNavs.isEmpty) unawaited(st.loadIndexNavs());
+    });
+  }
+
   Future<void> _refresh() async {
     final st = context.read<AppState>();
     setState(() => _busy = true);
@@ -74,6 +97,8 @@ class _MacroDetailViewState extends State<MacroDetailView> {
     final st = context.watch<AppState>();
     final theme = Theme.of(context);
     final latest = st.macroLatest;
+    // 叠加的指数日线（默认基准就是沪深300；他换成别的指数就跟着换，标签一起变）
+    final indexSeries = st.benchmarkNavs;
     if (latest == null) {
       return ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
@@ -182,9 +207,78 @@ class _MacroDetailViewState extends State<MacroDetailView> {
         const SizedBox(height: 12),
         SectionCard(
           title: '历史曲线',
-          trailing: Text('利差（%）',
-              style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
-          child: SizedBox(height: 180, child: ErpChart(rows: st.macroHistory)),
+          // 缩放按钮放卡头：手机上双指不好按，按钮才是主要入口（手势同样支持）
+          trailing: ListenableBuilder(
+            listenable: _chart,
+            builder: (ctx, _) => Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _zoomBtn(Icons.remove, '缩小', _chart.canZoomIn,
+                    _chart.zoomOut),
+                _zoomBtn(Icons.add, '放大', _chart.canZoomIn, _chart.zoomIn),
+                IconButton(
+                  tooltip: '复位',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 32, minHeight: 32),
+                  icon: const Icon(Icons.restart_alt, size: 18),
+                  onPressed: _chart.isFull ? null : _chart.reset,
+                ),
+              ],
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 图例：两条线各是哪一支、看哪个轴
+              Wrap(
+                spacing: 12,
+                runSpacing: 4,
+                children: [
+                  _legend(context, theme.colorScheme.primary, '股债利差（左轴 %）'),
+                  if (indexSeries.isNotEmpty)
+                    _legend(context, kErpIndexLine,
+                        '${st.benchmark.indexName} 区间收益（右轴 %）'),
+                ],
+              ),
+              const SizedBox(height: 6),
+              SizedBox(
+                height: 200,
+                child: ErpChart(
+                  rows: st.macroHistory,
+                  indexSeries: indexSeries,
+                  interactive: true,
+                  controller: _chart,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                indexSeries.isEmpty
+                    ? '${st.benchmark.indexName}的历史还没入库 —— 去「资产收益 → 趋势图」'
+                        '把基准选成它就会抓一次，之后这里能叠上它的收益曲线。'
+                    : '${st.benchmark.indexName} 这条线从 ${indexSeries.first.date} 起'
+                        '（利差从 ${st.macroHistory.isEmpty ? '—' : st.macroHistory.first.date} 起）；'
+                        '它的区间收益以当前可见窗口的第一天为基准。'
+                        '点卡头 − / + 缩放、复位回全览，也可以双指缩放、单指拖动、双击复位。',
+                style: TextStyle(fontSize: 10.5, color: theme.hintColor),
+              ),
+              // 利差的口径是**固定**用沪深300 的盈利收益率算的；叠加线跟着「基准」设置走。
+              // 两者不是同一个指数时（有人把基准换成上证指数），必须把这件事写在脸上，
+              // 否则两张图摆一起会得出错结论。
+              if (indexSeries.isNotEmpty &&
+                  st.benchmark.indexCode != 'sh000300')
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '注意：股债利差本身固定按沪深300 的盈利收益率算；'
+                    '上面这条叠加线是你选的基准（${st.benchmark.indexName}），两者口径不同。',
+                    style: TextStyle(
+                        fontSize: 10.5, color: theme.colorScheme.error),
+                  ),
+                ),
+            ],
+          ),
         ),
         const SizedBox(height: 12),
         SectionCard(
@@ -205,6 +299,30 @@ class _MacroDetailViewState extends State<MacroDetailView> {
       ],
     );
   }
+
+  /// 卡头的小按钮（缩放/复位）
+  Widget _zoomBtn(
+          IconData icon, String tip, bool enabled, VoidCallback onTap) =>
+      IconButton(
+        tooltip: tip,
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+        icon: Icon(icon, size: 18),
+        onPressed: enabled ? onTap : null,
+      );
+
+  /// 图例：一小段线 + 说明（两条线颜色不同，别让人猜）
+  Widget _legend(BuildContext context, Color color, String text) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 14, height: 2.4, color: color),
+          const SizedBox(width: 4),
+          Text(text,
+              style: TextStyle(
+                  fontSize: 10.5, color: Theme.of(context).hintColor)),
+        ],
+      );
 
   Widget _kv(BuildContext context, String label, String value) => Padding(
         padding: const EdgeInsets.only(bottom: 6),
