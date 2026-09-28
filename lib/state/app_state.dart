@@ -3693,6 +3693,18 @@ class AppState extends ChangeNotifier {
             report.skippedNoPrice++;
             continue;
           }
+          // 这一期当天已经有定投记录了（手动记的那笔也算）→ 不再补一遍。
+          // 但断点照推：否则这期会每次都被重新捡起来、永远挂在"待补"上。
+          if (dcaRecordedOn(
+            txns: txns,
+            accountId: plan.accountId,
+            assetId: plan.assetId,
+            days: [d, ref.date],
+          )) {
+            report.skippedRecorded++;
+            advancedTo = ref.date;
+            continue;
+          }
           final shares = roundDcaShares(plan.amount / ref.price, asset.kind);
           if (shares <= 0) {
             report.skippedNoPrice++;

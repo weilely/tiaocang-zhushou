@@ -1,4 +1,5 @@
 import '../data/dca_models.dart';
+import '../data/models.dart';
 
 /// `yyyy-MM-dd`，用作「日期 → 价格」表的键
 String dayKey(DateTime d) =>
@@ -134,4 +135,26 @@ DateTime? nextDcaDate(DcaPlan plan, DateTime today) {
   );
   if (future.isEmpty) return null;
   return future.first;
+}
+
+/// 该「账户 + 标的」在 [days] 里是否**已经有一笔定投记录** —— 补记时用来跳过。
+///
+/// 用户 2026-09-25 的口径：「**补记功能要检查补记当天是否有定投记录，有的话就应该不补**」。
+/// 判定用备注里的「定投」：这是全 App 统一的定投标记（交易类型标签、现金流水的高亮、
+/// 定投管理里的「已补记 N 笔」都认它），所以**你手动记的那笔定投也算数**。
+/// [days] 传「应投日」与「实际成交日」两天，任一天命中就算记过 ——
+/// 净值顺延时（比如应投日是周六、成交在周一）两者不是同一天。
+bool dcaRecordedOn({
+  required Iterable<Txn> txns,
+  required int accountId,
+  required int assetId,
+  required Iterable<DateTime> days,
+}) {
+  final keys = {for (final d in days) dayKey(d)};
+  for (final t in txns) {
+    if (t.accountId != accountId || t.assetId != assetId) continue;
+    if (!t.note.contains('定投')) continue;
+    if (keys.contains(dayKey(t.date))) return true;
+  }
+  return false;
 }

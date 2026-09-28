@@ -129,6 +129,154 @@ void main() {
     });
   });
 
+  // ---------------- 补记前先看「当天是否已经记过定投」 ----------------
+  //
+  // 用户 2026-09-25：「补记功能要检查补记当天是否有定投记录，有的话就应该不补」
+
+  group('当天已记过定投就不再补', () {
+    Txn t({
+      int accountId = 1,
+      int assetId = 2,
+      String note = '定投',
+      DateTime? date,
+      TxnType type = TxnType.buy,
+    }) =>
+        Txn(
+          accountId: accountId,
+          assetId: assetId,
+          type: type,
+          date: date ?? DateTime(2026, 9, 14),
+          amount: 500,
+          shares: 100,
+          price: 5,
+          note: note,
+        );
+
+    test('同一天有「定投」备注的买入 → 记过了', () {
+      expect(
+        dcaRecordedOn(
+          txns: [t()],
+          accountId: 1,
+          assetId: 2,
+          days: [DateTime(2026, 9, 14)],
+        ),
+        isTrue,
+      );
+    });
+
+    test('手动记的定投（备注「定投 · 9月」）也算', () {
+      expect(
+        dcaRecordedOn(
+          txns: [t(note: '定投 · 9月')],
+          accountId: 1,
+          assetId: 2,
+          days: [DateTime(2026, 9, 14)],
+        ),
+        isTrue,
+      );
+    });
+
+    test('普通买入（备注里没有「定投」）不算 → 该补还是要补', () {
+      expect(
+        dcaRecordedOn(
+          txns: [t(note: '补仓')],
+          accountId: 1,
+          assetId: 2,
+          days: [DateTime(2026, 9, 14)],
+        ),
+        isFalse,
+      );
+    });
+
+    test('别的账户 / 别的标的的定投不算', () {
+      expect(
+        dcaRecordedOn(
+          txns: [t(accountId: 9)],
+          accountId: 1,
+          assetId: 2,
+          days: [DateTime(2026, 9, 14)],
+        ),
+        isFalse,
+      );
+      expect(
+        dcaRecordedOn(
+          txns: [t(assetId: 99)],
+          accountId: 1,
+          assetId: 2,
+          days: [DateTime(2026, 9, 14)],
+        ),
+        isFalse,
+      );
+    });
+
+    test('日期不匹配 → 不算（同一个月里的另一天也不行）', () {
+      expect(
+        dcaRecordedOn(
+          txns: [t(date: DateTime(2026, 9, 13))],
+          accountId: 1,
+          assetId: 2,
+          days: [DateTime(2026, 9, 14)],
+        ),
+        isFalse,
+      );
+    });
+
+    test('应投日与顺延后的成交日，命中任一天都算', () {
+      // 应投日周六（9/12）、实际成交在周一（9/14）
+      final due = DateTime(2026, 9, 12);
+      final dealt = DateTime(2026, 9, 14);
+      expect(
+        dcaRecordedOn(
+          txns: [t(date: dealt)],
+          accountId: 1,
+          assetId: 2,
+          days: [due, dealt],
+        ),
+        isTrue,
+        reason: '顺延时两天都要查，否则会重复补一笔',
+      );
+      expect(
+        dcaRecordedOn(
+          txns: [t(date: due)],
+          accountId: 1,
+          assetId: 2,
+          days: [due, dealt],
+        ),
+        isTrue,
+      );
+    });
+
+    test('时间带时分秒也能对上（只比到天）', () {
+      expect(
+        dcaRecordedOn(
+          txns: [t(date: DateTime(2026, 9, 14, 15, 30))],
+          accountId: 1,
+          assetId: 2,
+          days: [DateTime(2026, 9, 14)],
+        ),
+        isTrue,
+      );
+    });
+
+    test('没有流水 → 没记过', () {
+      expect(
+        dcaRecordedOn(
+          txns: const [],
+          accountId: 1,
+          assetId: 2,
+          days: [DateTime(2026, 9, 14)],
+        ),
+        isFalse,
+      );
+    });
+
+    test('报告文案里有「当天已记过定投」这一项', () {
+      final r = DcaRunReport()..skippedRecorded = 2;
+      expect(r.hasAnything, isTrue);
+      expect(r.summary, contains('2 期当天已记过定投'));
+    });
+  });
+
   group('取价与份额取整', () {
     final prices = {
       '2026-09-11': 4.579, // 周五

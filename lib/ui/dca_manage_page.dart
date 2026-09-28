@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../core/format.dart';
 import '../data/dca_models.dart';
+import '../data/models.dart';
 import '../logic/dca.dart';
 import '../state/app_state.dart';
 import 'asset_detail_page.dart';
@@ -22,6 +23,11 @@ class DcaManagePage extends StatelessWidget {
       appBar: AppBar(
         title: const Text('定投管理'),
         actions: [
+          IconButton(
+            tooltip: '新增定投计划',
+            onPressed: () => _addPlan(context, state),
+            icon: const Icon(Icons.add),
+          ),
           IconButton(
             tooltip: '立即补记全部计划',
             onPressed: state.dcaRunning ? null : () => _runAll(context, state),
@@ -57,11 +63,16 @@ class DcaManagePage extends StatelessWidget {
             ),
           ),
           if (plans.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 40),
+            Padding(
+              padding: const EdgeInsets.only(top: 40),
               child: EmptyHint(
                 icon: Icons.event_repeat_outlined,
-                text: '还没有定投计划\n在持仓详情页点「定投」即可创建',
+                text: '还没有定投计划\n点右上角「+」新建，也可以在持仓详情页点「定投」',
+                action: FilledButton.icon(
+                  onPressed: () => _addPlan(context, state),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('新增定投计划'),
+                ),
               ),
             )
           else
@@ -163,6 +174,120 @@ class DcaManagePage extends StatelessWidget {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(report.summary), duration: const Duration(seconds: 4)),
+    );
+  }
+
+  /// 新增定投计划：先选「账户 + 标的」，再打开计划弹层
+  ///
+  /// 只列该账户**当前持有**的标的 —— 没有持仓的标的建出来会被补记流程立刻自动停用
+  /// （`runDueDca` 里「标的已清仓的计划自动停用」）。该标的已有计划就进编辑，
+  /// 免得同一「账户 + 标的」攒出两条重复计划。
+  Future<void> _addPlan(BuildContext context, AppState state) async {
+    if (state.accounts.isEmpty) return;
+    final picked = await showModalBottomSheet<({int accountId, int assetId})>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _PlanTargetPicker(
+        initialAccountId: state.accountFilter ?? state.accounts.first.id!,
+      ),
+    );
+    if (picked == null || !context.mounted) return;
+    final existing = state.dcaPlansFor(picked.accountId, picked.assetId);
+    await showDcaPlanSheet(
+      context,
+      accountId: picked.accountId,
+      assetId: picked.assetId,
+      existing: existing.isEmpty ? null : existing.first,
+    );
+  }
+}
+
+/// 「新增定投」的选标的弹层（账户 + 该账户当前持有的标的）
+class _PlanTargetPicker extends StatefulWidget {
+  const _PlanTargetPicker({required this.initialAccountId});
+
+  final int initialAccountId;
+
+  @override
+  State<_PlanTargetPicker> createState() => _PlanTargetPickerState();
+}
+
+class _PlanTargetPickerState extends State<_PlanTargetPicker> {
+  late int _picked = widget.initialAccountId;
+
+  @override
+  Widget build(BuildContext context) {
+    final st = context.watch<AppState>();
+    final accounts = st.accounts;
+    if (accounts.isEmpty) return const SizedBox.shrink();
+    // 选中的账户可能已经不在了（切换/删除过）→ 退回第一个，别拿空列表渲染
+    final accountId =
+        accounts.any((a) => a.id == _picked) ? _picked : accounts.first.id!;
+    final held = [
+      for (final p in st.positionsOf(accountId))
+        if (!p.isEmpty) p.asset,
+    ]..sort((a, b) => a.code.compareTo(b.code));
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('新增定投计划',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(
+              '选一个该账户当前持有的标的（没有持仓的标的建了会被自动暂停）。'
+              '该标的已经有计划，就直接进编辑。',
+              style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor, height: 1.5),
+            ),
+            const SizedBox(height: 14),
+            if (accounts.length > 1)
+              DropdownButtonFormField<int>(
+                initialValue: accountId,
+                decoration: const InputDecoration(labelText: '账户'),
+                items: [
+                  for (final a in accounts)
+                    DropdownMenuItem(value: a.id!, child: Text(a.name)),
+                ],
+                onChanged: (v) => setState(() => _picked = v ?? accountId),
+              )
+            else
+              Text('账户：${accounts.first.name}',
+                  style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 10),
+            if (held.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 24),
+                child: Text('该账户当前没有持仓，先去持仓页把标的加进来',
+                    style:
+                        TextStyle(fontSize: 13, color: Theme.of(context).hintColor)),
+              )
+            else
+              for (final a in held)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(a.name.isEmpty ? a.code : a.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14)),
+                  subtitle: Text('${a.code} · ${a.kind.label}',
+                      style: TextStyle(
+                          fontSize: 11, color: Theme.of(context).hintColor)),
+                  trailing: st.dcaPlansFor(accountId, a.id!).isEmpty
+                      ? const Icon(Icons.chevron_right, size: 20)
+                      : Text('已有计划',
+                          style: TextStyle(
+                              fontSize: 11, color: Theme.of(context).hintColor)),
+                  onTap: () => Navigator.of(context)
+                      .pop((accountId: accountId, assetId: a.id!)),
+                ),
+          ],
+        ),
+      ),
     );
   }
 }

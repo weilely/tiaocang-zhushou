@@ -133,17 +133,29 @@ class DcaRunReport {
   /// 因为取不到历史价格而跳过的期数
   int skippedNoPrice = 0;
 
+  /// 因为**当天已经有定投记录**而跳过的期数
+  ///
+  /// 用户 2026-09-25：「补记功能要检查补记当天是否有定投记录，有的话就应该不补」。
+  /// 手动记的那笔也算，所以这不是错，要如实报出来（免得他以为补记没生效）。
+  int skippedRecorded = 0;
+
   /// 因为标的已清仓而停用的计划数
   int disabledPlans = 0;
 
   final List<String> messages = [];
 
   bool get hasAnything =>
-      created > 0 || skippedNoPrice > 0 || disabledPlans > 0;
+      created > 0 ||
+      skippedNoPrice > 0 ||
+      skippedRecorded > 0 ||
+      disabledPlans > 0;
 
   String get summary {
     final parts = <String>[];
     if (created > 0) parts.add('已按定投计划补记 $created 笔');
+    if (skippedRecorded > 0) {
+      parts.add('$skippedRecorded 期当天已记过定投，未重复补');
+    }
     if (skippedNoPrice > 0) parts.add('$skippedNoPrice 期因取不到历史价格未补记');
     if (disabledPlans > 0) parts.add('$disabledPlans 个计划因标的已清仓而暂停');
     return parts.isEmpty ? '没有需要补记的定投' : parts.join('；');
