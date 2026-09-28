@@ -158,7 +158,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
     _shares.addListener(_onSharesChanged);
     _price.addListener(_onPriceChanged);
     _amount.addListener(_onAmountChanged);
-    _feeRateCtrl.text = _wanText(st.feeRateOf(_accountId));
+    // 费率框按当前「标的类型 + 交易类型」载入：场内→账户佣金率，场外→该基金的申购/赎回费率
+    _reloadFeeRate();
     // 「实际」手续费默认为 0（用户要求）；编辑既有流水则沿用记录里的值
     if (widget.existing == null) _fee.text = '0';
 
@@ -268,31 +269,82 @@ class _TxnEditPageState extends State<TxnEditPage> {
   }
 
   void _onFeeRateChanged(String v) {
-    // **即时生效**（不做防抖）：setFeeRate 会先把值写进内存再落库，
-    // 所以紧接着的预测值立刻就能按新费率算出来
-    final acc = _accountId;
-    if (acc != null) {
-      unawaited(context.read<AppState>().setFeeRate(acc, double.tryParse(v.trim())));
+    // **即时生效**（不做防抖）：setFeeRate/setSubFeeRate 会先把值写进内存再落库，
+    // 所以紧接着的预测值立刻就能按新费率算出来。
+    // 场内（ETF/股票）→ 按**账户**存佣金率（万分之几）；
+    // 场外（基金）→ 按**基金代码**存申购/赎回费率（%）。
+    final st = context.read<AppState>();
+    final pct = double.tryParse(v.trim());
+    if (_feeByFund) {
+      final code = _code.text.trim();
+      if (code.isEmpty) return;
+      unawaited(_type == TxnType.sell
+          ? st.setRedeemFeeRate(code, pct)
+          : st.setSubFeeRate(code, pct));
+    } else if (_accountId != null) {
+      unawaited(st.setFeeRate(_accountId!, pct));
     }
     setState(() {});
   }
 
-  /// **预测**手续费（只读）：按「成交金额 × 费率」算；
+  /// 这一格的费率是**按基金**（场外）还是**按账户**（场内）
+  bool get _feeByFund => !_kind.isExchange;
+
+  /// 按当前「标的类型 + 交易类型 + 标的/账户」把费率框里的值重新载入
+  void _reloadFeeRate() {
+    final st = context.read<AppState>();
+    if (_feeByFund) {
+      final pct = _type == TxnType.sell
+          ? st.redeemFeeRateOf(_code.text.trim())
+          : st.subFeeRateOf(_code.text.trim());
+      _feeRateCtrl.text = _pctText(pct);
+    } else {
+      _feeRateCtrl.text = _wanText(st.feeRateOf(_accountId));
+    }
+  }
+
+  static String _pctText(double? pct) {
+    if (pct == null || pct <= 0) return '';
+    var s = pct.toStringAsFixed(4);
+    if (s.contains('.')) {
+      s = s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+    }
+    return s;
+  }
+
+  /// **预测**手续费（只读）：场内按佣金率、场外按申购/赎回费率；
   /// 没设费率 / 金额为空 → null（**不猜**，那一栏显示 `--`）
   double? _predictedFee() {
     if (_type == TxnType.dividend) return null;
     final st = context.read<AppState>();
-    return st.feeForAmount(
+    return st.feeForTxn(
       accountId: _accountId,
+      code: _code.text.trim(),
       kind: _kind,
+      type: _type,
       amount: double.tryParse(_amount.text) ?? 0,
     );
   }
 
-  /// 佣金费率框 —— **免五圆点开关就嵌在这个框里**（用户要求：圆点样式、省地方）
+  /// 费率框 —— 场内是「佣金费率（万分之几）」（免五圆点嵌在框里）；
+  /// 场外是「申购费率（%）」/「赎回费率（%）」，**没有免五**（最低 5 元是券商佣金概念）。
   ///
-  /// 圆点：空心 = 不免五（不足 5 元按 5 元）、实心 = 免五。
+  /// 用户 2026-09-28：「区分一下场内和场外的费率设置，申购，赎回，提示在框线上显示，风格统一」
+  /// —— 三种情况都用同一套 InputDecoration（label 在框线上、提示在 helper 行），只是文字不同。
   Widget _feeRateField(AppState st) {
+    if (_feeByFund) {
+      final isSell = _type == TxnType.sell;
+      return TextFormField(
+        controller: _feeRateCtrl,
+        decoration: InputDecoration(
+          labelText: isSell ? '赎回费率（%）' : '申购费率（%）',
+          helperText: '填 0.1 = ${isSell ? '赎回费' : '申购费'} 0.1%；留空 = 不计',
+          isDense: true,
+        ),
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        onChanged: _onFeeRateChanged,
+      );
+    }
     final on = st.feeWaiveMinOf(_accountId);
     final accent = Theme.of(context).colorScheme.primary;
     final idle = Theme.of(context).hintColor;
@@ -353,15 +405,30 @@ class _TxnEditPageState extends State<TxnEditPage> {
 
   /// 「手续费（预测）」那一格：样式跟别的输入框一致，但**不可改**
   Widget _predictedFeeBox(BuildContext context, AppState st) {
-    final wan = st.feeRateOf(_accountId);
     final fee = _predictedFee();
-    final min = _kind.isExchange && !st.feeWaiveMinOf(_accountId)
-        ? '，不足 5 元按 5 元'
-        : '';
+    final byFund = _feeByFund;
+    final rate = byFund
+        ? (_type == TxnType.sell
+            ? st.redeemFeeRateOf(_code.text.trim())
+            : st.subFeeRateOf(_code.text.trim()))
+        : st.feeRateOf(_accountId);
+    final String helper;
+    if (rate == null) {
+      helper = byFund
+          ? '填了${_type == TxnType.sell ? '赎回' : '申购'}费率才有预测'
+          : '填了佣金费率才有预测';
+    } else if (byFund) {
+      helper = '按${_type == TxnType.sell ? '赎回' : '申购'}费 ${_pctText(rate)}%';
+    } else {
+      final min = _kind.isExchange && !st.feeWaiveMinOf(_accountId)
+          ? '，不足 5 元按 5 元'
+          : '';
+      helper = '按万${_wanText(rate)}$min';
+    }
     return InputDecorator(
       decoration: InputDecoration(
         labelText: '手续费（预测）',
-        helperText: wan == null ? '填了佣金费率才有预测' : '按万${_wanText(wan)}$min',
+        helperText: helper,
         enabled: false, // 灰掉，表明这一格不可改
       ),
       child: Text(
@@ -513,6 +580,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 _type = s.first;
                 _resetDerivedFlag();
                 if (_type == TxnType.dividend) _navGen++; // 作废在途查询
+                // 买入用申购费率、卖出用赎回费率 → 换类型要把费率框跟着换
+                _reloadFeeRate();
                 _syncDerived();
               }),
             ),
@@ -532,9 +601,9 @@ class _TxnEditPageState extends State<TxnEditPage> {
                     onChanged: (v) {
                       setState(() {
                         _accountId = v;
-                        // 费率是**券商（账户）属性**：换账户要把输入框换成那家的
-                        _feeRateCtrl.text =
-                            _wanText(context.read<AppState>().feeRateOf(v));
+                        // 场内费率是**券商（账户）属性**：换账户要把输入框换成那家的；
+                        // 场外是按基金代码存的，换账户不影响（_reloadFeeRate 自己分流）
+                        _reloadFeeRate();
                       });
                     },
                     validator: (v) => v == null ? '请选择账户' : null,
@@ -563,6 +632,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 // 换类型会换主字段（场外基金买入填金额、场内买入填股数），
                 // 先重置"谁是派生字段"再联动一次
                 _resetDerivedFlag();
+                // 场内↔场外 换的是一整套费率口径（佣金万几+免五 ↔ 申购/赎回%）
+                _reloadFeeRate();
                 _syncDerived();
                 if (_code.text.trim().isNotEmpty) _syncNav();
               },
@@ -1029,6 +1100,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
       _results = const [];
       _clsFilter = null;
       _subFilter = null;
+      // 场外费率是**按基金代码**存的：选了新标的要把那一只的费率载进来
+      _reloadFeeRate();
     });
     // 代码定了，净值就能按当前日期查出来了
     _syncNav();
@@ -1235,11 +1308,12 @@ class _TxnEditPageState extends State<TxnEditPage> {
       note: _note.text.trim(),
     );
 
-    // 买入/卖出/分红自动记入现金账户（联动常开，无需勾选）
+    // 买入/卖出/分红自动记入现金账户（联动常开，无需勾选）；
+    // 手续费一律并进现金流（分红那格手续费也会扣，与写库口径一致）
     final cashNote = switch (_type) {
       TxnType.buy => '买入扣款 ${fmtMoney(txn.amount + txn.fee)}',
       TxnType.sell => '卖出入账 ${fmtMoney(txn.amount - txn.fee)}',
-      TxnType.dividend => '分红入账 ${fmtMoney(txn.amount)}',
+      TxnType.dividend => '分红入账 ${fmtMoney(txn.amount - txn.fee)}',
     };
     await st.saveTxnWithCash(txn, asset);
     if (!mounted) return;

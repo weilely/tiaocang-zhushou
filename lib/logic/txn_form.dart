@@ -54,3 +54,20 @@ double? derivedAmount({required double shares, required double price}) {
   }
   return shares * price;
 }
+
+/// **场外基金**的预测手续费（元）＝ 成交金额 × 费率（%），钱落到分。
+///
+/// 用户 2026-09-28 要求「区分一下场内和场外的费率设置，申购，赎回」：
+/// - 场内（ETF/股票）是**券商佣金**（万分之几 + 免五）→ 走 `AppState.feeForAmount`
+/// - 场外（基金）是**申购费 / 赎回费**（按基金的费率 %）→ 走这里
+///
+/// [ratePct] 为 null / <= 0（没设费率）→ 返回 null：界面显示 `--`，**不猜**
+/// （免得把券商佣金那套硬套到场外基金上）。
+double? fundTradeFee({required double? ratePct, required double amount}) {
+  if (ratePct == null || ratePct <= 0) return null;
+  if (amount <= 0) return null;
+  if (amount.isNaN || amount.isInfinite || ratePct.isNaN || ratePct.isInfinite) {
+    return null;
+  }
+  return double.parse((amount * ratePct / 100).toStringAsFixed(2));
+}

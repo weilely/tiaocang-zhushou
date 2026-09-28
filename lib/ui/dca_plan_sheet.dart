@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../core/format.dart';
 import '../data/dca_models.dart';
+import '../data/models.dart';
 import '../logic/dca.dart';
 import '../state/app_state.dart';
 import 'widgets/cn_date_picker.dart';
@@ -56,10 +57,12 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
   @override
   void initState() {
     super.initState();
-    final e = widget.existing;
-    final now = DateTime.now();
-    _start = DateTime(now.year, now.month, now.day);
-    if (e != null) {
+    _start = DateTime.now();
+    _start = DateTime(_start.year, _start.month, _start.day);
+    final st = context.read<AppState>();
+    final asset = st.assetsById[widget.assetId];
+    if (widget.existing != null) {
+      final e = widget.existing!;
       _amount.text = e.amount.toStringAsFixed(e.amount == e.amount.roundToDouble() ? 0 : 2);
       _freq = e.frequency;
       _day = e.dayOfPeriod;
@@ -67,6 +70,10 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
       _note.text = e.note;
       // 0 不预填成 "0"，留空更好填
       _feeRate.text = e.feeRate > 0 ? _trimNum(e.feeRate) : '';
+    } else if (asset != null && !asset.kind.isExchange) {
+      // 新建场外计划：用**该基金在「记一笔」里设过的申购费率**预填（一处设定、两处用）
+      final pct = st.subFeeRateOf(asset.code);
+      _feeRate.text = pct == null ? '' : _trimNum(pct);
     }
   }
 

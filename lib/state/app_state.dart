@@ -44,6 +44,7 @@ import '../logic/refresh_throttle.dart';
 import '../logic/nav_freshness.dart';
 import '../logic/rebalance_plan.dart';
 import '../logic/returns_calendar.dart';
+import '../logic/txn_form.dart';
 
 /// 收益统计卡片的三个页签
 enum StatsView { calendar, trend, flow }
@@ -152,6 +153,12 @@ class AppState extends ChangeNotifier {
   ///
   /// 费率是**券商属性**，所以按账户存（他两个账户就是两家券商）。
   Map<int, double> feeRates = {};
+
+  /// 场外申购费率（%）：基金代码 → 费率（用户 2026-09-28 起的「场外那一套」）
+  final Map<String, double> subFeeRates = {};
+
+  /// 场外赎回费率（%）：基金代码 → 费率
+  final Map<String, double> redeemFeeRates = {};
 
   /// 哪些账户**免五**（券商豁免"最低 5 元佣金"）
   final Set<int> feeWaiveMin = {};
@@ -674,6 +681,14 @@ class AppState extends ChangeNotifier {
   static const String _kFeeRate = 'feeRate:';
   static const String _kFeeWaive = 'feeWaiveMin:';
 
+  // ---- 场外基金的申购/赎回费率（%）----
+  //
+  // 用户 2026-09-28：「区分一下场内和场外的费率设置，申购，赎回」——
+  // 场内是券商佣金（按**账户**存，万分之几 + 免五），
+  // 场外是申购费 / 赎回费（按**基金代码**存，%；同一定投计划的费率也是这个粒度）。
+  static const String _kSubFeeRate = 'subFeeRate:';
+  static const String _kRedeemFeeRate = 'redeemFeeRate:';
+
   // ---- 应用内更新（后台检查的节流与「上次看到的最新版本」）----
 
   /// 上次检查更新的时刻（毫秒）—— 节流用
@@ -698,6 +713,78 @@ class AppState extends ChangeNotifier {
           if (e.key.startsWith(_kFeeWaive) && e.value == '1')
             int.tryParse(e.key.substring(_kFeeWaive.length)) ?? -1,
       ]..removeWhere((i) => i < 0);
+
+  /// 解析「按代码存、单位是 %」的费率（场外申购费 / 赎回费）
+  static Map<String, double> _parseCodeRates(
+      Map<String, String> s, String prefix) {
+    final out = <String, double>{};
+    for (final e in s.entries) {
+      if (!e.key.startsWith(prefix)) continue;
+      final code = e.key.substring(prefix.length);
+      final v = double.tryParse(e.value);
+      if (code.isNotEmpty && v != null && v > 0) out[code] = v;
+    }
+    return out;
+  }
+
+  /// 场外申购费率（%），按**基金代码**存；没设过返回 null
+  double? subFeeRateOf(String? code) {
+    final c = code?.trim() ?? '';
+    return c.isEmpty ? null : subFeeRates[c];
+  }
+
+  /// 场外赎回费率（%），按**基金代码**存；没设过返回 null
+  double? redeemFeeRateOf(String? code) {
+    final c = code?.trim() ?? '';
+    return c.isEmpty ? null : redeemFeeRates[c];
+  }
+
+  Future<void> setSubFeeRate(String code, double? pct) async {
+    final c = code.trim();
+    if (c.isEmpty) return;
+    if (pct == null || pct <= 0) {
+      subFeeRates.remove(c);
+      await db.setSetting('$_kSubFeeRate$c', '');
+    } else {
+      subFeeRates[c] = pct;
+      await db.setSetting('$_kSubFeeRate$c', pct.toString());
+    }
+    notifyListeners();
+  }
+
+  Future<void> setRedeemFeeRate(String code, double? pct) async {
+    final c = code.trim();
+    if (c.isEmpty) return;
+    if (pct == null || pct <= 0) {
+      redeemFeeRates.remove(c);
+      await db.setSetting('$_kRedeemFeeRate$c', '');
+    } else {
+      redeemFeeRates[c] = pct;
+      await db.setSetting('$_kRedeemFeeRate$c', pct.toString());
+    }
+    notifyListeners();
+  }
+
+  /// 「记一笔」那一格**预测手续费**的统一入口（场内/场外各用各的费率）
+  ///
+  /// - 场内（ETF/股票）：账户佣金率（万分之几）+ 免五，不足 5 元按 5 元
+  /// - 场外（基金）：该基金的**申购费**（买入）或**赎回费**（卖出）%，没有最低 5 元
+  ///
+  /// 没设费率 / 金额非法 → null（**不猜**，预测那一格显示 `--`）
+  double? feeForTxn({
+    required int? accountId,
+    required String code,
+    required AssetKind kind,
+    required TxnType type,
+    required double amount,
+  }) {
+    if (!kind.isExchange) {
+      final pct =
+          type == TxnType.sell ? redeemFeeRateOf(code) : subFeeRateOf(code);
+      return fundTradeFee(ratePct: pct, amount: amount);
+    }
+    return feeForAmount(accountId: accountId, kind: kind, amount: amount);
+  }
 
   /// 某账户的佣金费率（**万分之几**）；没设过返回 null（记一笔就不自动算手续费）
   double? feeRateOf(int? accountId) =>
@@ -2818,6 +2905,12 @@ class AppState extends ChangeNotifier {
       ..clear()
       ..addAll(_parseEquityBondAccounts(settings));
     feeRates = _parseFeeRates(settings);
+    subFeeRates
+      ..clear()
+      ..addAll(_parseCodeRates(settings, _kSubFeeRate));
+    redeemFeeRates
+      ..clear()
+      ..addAll(_parseCodeRates(settings, _kRedeemFeeRate));
     feeWaiveMin
       ..clear()
       ..addAll(_parseFeeWaive(settings));
