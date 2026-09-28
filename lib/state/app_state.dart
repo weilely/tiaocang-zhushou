@@ -10,6 +10,7 @@ import '../core/app_info.dart';
 import '../data/apk_updater.dart';
 import '../data/asset_traits.dart';
 import '../data/backup_store.dart';
+import '../data/csi_perf.dart';
 import '../data/db.dart';
 import '../data/dca_models.dart';
 import '../data/dca_repo.dart';
@@ -325,6 +326,23 @@ class AppState extends ChangeNotifier {
     );
     if (v != null) _rememberIndexValuation(v);
     return v;
+  }
+
+  /// 中证官网 `index-perf`：**PE（`peg`）/点位/成分数**，目录里的指数基本都有
+  /// （蛋卷只覆盖一小部分，所以对比表的 PE 一列走这里）
+  final CsiPerfSource csiPerf = CsiPerfSource();
+
+  /// 代码 → 最近一个交易日的 PE（查过就留着，同一天不必重拉）
+  final Map<String, CsiPerfPoint> _csiPe = {};
+
+  CsiPerfPoint? csiPeOf(String code) => _csiPe[code];
+
+  Future<CsiPerfPoint?> loadCsiPe(String code) async {
+    final cached = _csiPe[code];
+    if (cached != null) return cached;
+    final p = await csiPerf.latest(code);
+    if (p != null) _csiPe[code] = p;
+    return p;
   }
 
   /// code → 表格算区间收益用的净值样本（最早一条 + 近 5 年）

@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/format.dart';
+import '../data/csi_perf.dart';
 import '../data/index_catalog.dart';
 import '../data/index_eva.dart';
 import '../state/app_state.dart';
+import 'index_compare_page.dart';
 import 'widgets/common.dart';
 
 /// 列表一次显示多少条（滚到底/点「显示更多」再加一页）
@@ -41,6 +43,9 @@ class IndexValuationPage extends StatefulWidget {
   /// 按**目录代码**取估值（默认 `AppState.loadIndexByCode`）
   final Future<IndexValuation?> Function(String code, String? name)? codeLoader;
 
+  /// 取中证 PE（对比表用；默认 `AppState.loadCsiPe`）
+  final Future<CsiPerfPoint?> Function(String code)? peLoader;
+
   const IndexValuationPage({
     super.key,
     this.searchLoader,
@@ -48,6 +53,7 @@ class IndexValuationPage extends StatefulWidget {
     this.candidateLoader,
     this.catalogLoader,
     this.codeLoader,
+    this.peLoader,
   });
 
   @override
@@ -89,6 +95,9 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
 
   /// 蛋卷返回的名字与目录不一致时留一份对照（两个都显示）
   String _askedName = '';
+
+  /// 勾选要对比的指数（代码）
+  final Set<String> _selected = {};
 
   @override
   void initState() {
@@ -294,6 +303,25 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
     _finishLoad(v, netFail: netFail, label: label);
   }
 
+  /// 勾选过的指数 → 打开对比表
+  void _openCompare() {
+    final all = _catalog?.items ?? const <IndexCatalogItem>[];
+    final items = [
+      for (final it in all)
+        if (_selected.contains(it.code)) it
+    ];
+    if (items.length < 2) return;
+    final st = _injected ? null : context.read<AppState>();
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => IndexComparePage(
+        items: items,
+        valuationLoader: widget.codeLoader ??
+            (code, name) => st!.loadIndexByCode(code, name: name),
+        peLoader: widget.peLoader ?? (code) => st!.loadCsiPe(code),
+      ),
+    ));
+  }
+
   /// 只读 Provider（没注入 loader 时才是真实数据源；测试里全注入）
   bool get _injected =>
       widget.catalogLoader != null &&
@@ -324,6 +352,7 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
           ),
         ],
       ),
+      bottomNavigationBar: _selected.isEmpty ? null : _compareBar(context),
       body: ListView(
         controller: _scroll,
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
@@ -643,6 +672,35 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
     );
   }
 
+  /// 底部条：勾选 ≥2 个才能对比（对比表逐个数去取估值，别让人空等）
+  Widget _compareBar(BuildContext context) {
+    final n = _selected.length;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text('已选 $n 个指数',
+                  style: const TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w600)),
+            ),
+            TextButton(
+              onPressed: () => setState(_selected.clear),
+              child: const Text('清空', style: TextStyle(fontSize: 12.5)),
+            ),
+            const SizedBox(width: 4),
+            FilledButton(
+              onPressed: n < 2 ? null : _openCompare,
+              child: Text(n < 2 ? '再选一个' : '开始对比',
+                  style: const TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _row(BuildContext context, IndexCatalogItem it) {
     final theme = Theme.of(context);
     final mr = it.monthlyReturn;
@@ -658,8 +716,23 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 7),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            // 勾选框给足点击区（默认 48dp）——手机上 compact+shrinkWrap 会点不中，
+            // 实测点了一次落到行上、把估值卡叫出来了
+            SizedBox(
+              width: 44,
+              child: Checkbox(
+                value: _selected.contains(it.code),
+                onChanged: (v) => setState(() {
+                  if (v == true) {
+                    _selected.add(it.code);
+                  } else {
+                    _selected.remove(it.code);
+                  }
+                }),
+              ),
+            ),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

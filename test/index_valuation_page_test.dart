@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:invest_tracker/data/csi_perf.dart';
 import 'package:invest_tracker/data/index_catalog.dart';
 import 'package:invest_tracker/data/index_eva.dart';
 import 'package:invest_tracker/ui/index_valuation_page.dart';
@@ -8,6 +9,19 @@ import 'package:invest_tracker/ui/index_valuation_page.dart';
 ///
 /// 五个 loader 全部注入（widget 测试里没有 Provider、没有网络）。
 void main() {
+  // 视口按**真机**来：400dp × 880dp（默认的 800×600 太矮，靠下的卡片会被切一半，
+  // 点中心会落空 —— 这是本文件踩过的坑）
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    binding.platformDispatcher.implicitView!.physicalSize =
+        const Size(1200, 2640);
+    binding.platformDispatcher.implicitView!.devicePixelRatio = 3.0;
+  });
+  tearDown(() {
+    binding.platformDispatcher.implicitView!.resetPhysicalSize();
+    binding.platformDispatcher.implicitView!.resetDevicePixelRatio();
+  });
+
   IndexCatalogItem item(String code, String name,
           {String series = '中证系列指数',
           String classify = '策略',
@@ -68,6 +82,7 @@ void main() {
     Future<List<IndexCandidate>> Function(String)? search,
     Future<IndexValuation?> Function(IndexCandidate)? candidate,
     Future<IndexValuation?> Function(String)? symbol,
+    Future<CsiPerfPoint?> Function(String)? pe,
     bool networkFail = false,
   }) =>
       IndexValuationPage(
@@ -80,6 +95,9 @@ void main() {
         searchLoader: search ?? (_) async => const [],
         candidateLoader: candidate ?? (c) async => null,
         symbolLoader: symbol ?? (s) async => s == 'SH000922' ? zzh() : null,
+        peLoader: pe ??
+            (c) async => CsiPerfPoint(
+                date: '20260928', pe: c == '000300' ? 13.1 : 8.6),
       );
 
   Future<void> tapAt(WidgetTester tester, Finder f) async {
@@ -298,6 +316,35 @@ void main() {
     await tapAt(tester, rowText('中证红利').first);
     expect(find.text('4.26%'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('勾选两个 → 底部出现「开始对比」→ 进对比表', (tester) async {
+    await tester.pumpWidget(host(page()));
+    await tester.pumpAndSettle();
+
+    // 勾第一个：只选一个时按钮不可用（对比至少要两个）
+    await tapAt(tester, find.byType(Checkbox).first);
+    expect(find.text('已选 1 个指数'), findsOneWidget);
+    expect(find.text('再选一个'), findsOneWidget);
+
+    await tapAt(tester, find.byType(Checkbox).at(1));
+    expect(find.text('已选 2 个指数'), findsOneWidget);
+
+    await tapAt(tester, find.text('开始对比'));
+    expect(find.text('指数对比'), findsOneWidget);
+    expect(find.text('对比 2 个指数'), findsOneWidget);
+    expect(find.textContaining('取到估值的：'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('勾错了能清空：底部「清空」把选择去掉', (tester) async {
+    await tester.pumpWidget(host(page()));
+    await tester.pumpAndSettle();
+
+    await tapAt(tester, find.byType(Checkbox).first);
+    expect(find.text('已选 1 个指数'), findsOneWidget);
+    await tapAt(tester, find.text('清空'));
+    expect(find.textContaining('已选'), findsNothing);
   });
 
   testWidgets('列表超一页：先给一页，点「显示更多」再加一页', (tester) async {
