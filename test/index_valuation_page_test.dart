@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:invest_tracker/data/csi_indicator.dart';
 import 'package:invest_tracker/data/csi_perf.dart';
 import 'package:invest_tracker/data/index_catalog.dart';
 import 'package:invest_tracker/data/index_eva.dart';
@@ -83,6 +84,7 @@ void main() {
     Future<IndexValuation?> Function(IndexCandidate)? candidate,
     Future<IndexValuation?> Function(String)? symbol,
     Future<CsiPerfPoint?> Function(String)? pe,
+    Future<CsiIndicator?> Function(String)? indicator,
     bool networkFail = false,
   }) =>
       IndexValuationPage(
@@ -98,6 +100,8 @@ void main() {
         peLoader: pe ??
             (c) async => CsiPerfPoint(
                 date: '20260928', pe: c == '000300' ? 13.1 : 8.6),
+        // 默认：中证官网也没有（除非某条用例自己注入）
+        indicatorLoader: indicator ?? (c) async => null,
       );
 
   Future<void> tapAt(WidgetTester tester, Finder f) async {
@@ -243,6 +247,45 @@ void main() {
     expect(find.text('联想结果'), findsNothing);
   });
 
+  testWidgets('蛋卷没收录但中证官网有 → 出「中证官网」口径的卡（标清来源）', (tester) async {
+    await tester.pumpWidget(host(page(
+      indicator: (c) async => c == '000300'
+          ? const CsiIndicator(
+              date: '20260928',
+              code: '000300',
+              name: '沪深300',
+              pe1: 13.42,
+              pe2: 13.42,
+              dp1: 2.72,
+              dp2: 2.74,
+            )
+          : null,
+    )));
+    await tester.pumpAndSettle();
+
+    await tapAt(tester, rowText('沪深300').first); // 蛋卷那条 loader 只认 000922
+
+    expect(find.textContaining('中证官网 · 20260928'), findsOneWidget);
+    expect(find.text('2.74%'), findsOneWidget); // 股息率（计算用股本）
+    expect(find.text('13.42'), findsWidgets); // 市盈率
+    expect(find.textContaining('2.72%'), findsOneWidget); // 股息率（总股本）
+    expect(find.textContaining('中证指数官网的官方指标'), findsOneWidget);
+    // 不该再显示"查不到"
+    expect(find.text('这个指数暂时查不到'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('两个源都没有 → 才说"没有数据源"（并说明国证/恒生本就没有）', (tester) async {
+    await tester.pumpWidget(host(page()));
+    await tester.pumpAndSettle();
+
+    await tapAt(tester, rowText('300红利LV').first);
+
+    expect(find.text('这个指数暂时查不到'), findsOneWidget);
+    expect(find.textContaining('国证系'), findsOneWidget);
+    expect(find.textContaining('不是"这个指数没有股息"'), findsOneWidget);
+  });
+
   testWidgets('蛋卷没收录 → 如实说"暂时查不到"，并强调不是"没有股息"', (tester) async {
     await tester.pumpWidget(host(page()));
     await tester.pumpAndSettle();
@@ -333,7 +376,7 @@ void main() {
     await tapAt(tester, find.text('开始对比'));
     expect(find.text('指数对比'), findsOneWidget);
     expect(find.text('对比 2 个指数'), findsOneWidget);
-    expect(find.textContaining('取到估值的：'), findsOneWidget);
+    expect(find.textContaining('有数的：'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

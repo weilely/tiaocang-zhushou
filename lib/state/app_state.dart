@@ -10,6 +10,7 @@ import '../core/app_info.dart';
 import '../data/apk_updater.dart';
 import '../data/asset_traits.dart';
 import '../data/backup_store.dart';
+import '../data/csi_indicator.dart';
 import '../data/csi_perf.dart';
 import '../data/db.dart';
 import '../data/dca_models.dart';
@@ -331,6 +332,25 @@ class AppState extends ChangeNotifier {
   /// 中证官网 `index-perf`：**PE（`peg`）/点位/成分数**，目录里的指数基本都有
   /// （蛋卷只覆盖一小部分，所以对比表的 PE 一列走这里）
   final CsiPerfSource csiPerf = CsiPerfSource();
+
+  /// 中证官网 `indicator.xls`：**指数股息率 + PE**（覆盖全部中证指数）
+  ///
+  /// 蛋卷收录范围小，查不到就退到这条 —— **界面必须注明"中证官网口径"**，
+  /// 因为两边算出来的股息率不是同一个数（实测 000922：蛋卷 4.26 vs 中证 4.27）。
+  final CsiIndicatorSource csiIndicator = CsiIndicatorSource();
+
+  /// 代码 → 中证官网指标（查过就留着）
+  final Map<String, CsiIndicator> _csiIndicators = {};
+
+  CsiIndicator? csiIndicatorOf(String code) => _csiIndicators[code];
+
+  Future<CsiIndicator?> loadCsiIndicator(String code) async {
+    final cached = _csiIndicators[code];
+    if (cached != null) return cached;
+    final it = await csiIndicator.latest(code);
+    if (it != null) _csiIndicators[code] = it;
+    return it;
+  }
 
   /// 代码 → 最近一个交易日的 PE（查过就留着，同一天不必重拉）
   final Map<String, CsiPerfPoint> _csiPe = {};

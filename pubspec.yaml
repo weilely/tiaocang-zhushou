@@ -43,6 +43,7 @@ dependencies:
   pinyin: ^3.3.0
   google_mlkit_text_recognition: ^0.17.1
   image_picker: ^1.2.3
+  excel_plus: ^2.23.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

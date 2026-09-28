@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:invest_tracker/data/csi_indicator.dart';
 import 'package:invest_tracker/data/csi_perf.dart';
 import 'package:invest_tracker/data/index_catalog.dart';
 import 'package:invest_tracker/data/index_eva.dart';
@@ -66,13 +67,16 @@ void main() {
   Widget page({
     Future<IndexValuation?> Function(String, String?)? valuation,
     Future<CsiPerfPoint?> Function(String)? pe,
+    Future<CsiIndicator?> Function(String)? indicator,
+    List<IndexCatalogItem>? items,
   }) =>
       IndexComparePage(
-        items: [
-          item('000922', '中证红利', mr: -1.20, cons: 100),
-          item('980081', '国证价值100', mr: 3.40),
-          item('H30269', '红利低波', mr: 0.80, cons: 50),
-        ],
+        items: items ??
+            [
+              item('000922', '中证红利', mr: -1.20, cons: 100),
+              item('980081', '国证价值100', mr: 3.40),
+              item('H30269', '红利低波', mr: 0.80, cons: 50),
+            ],
         valuationLoader: valuation ??
             (c, n) async => switch (c) {
                   '000922' => v(
@@ -91,6 +95,8 @@ void main() {
                       pePct: 0.5032),
                   _ => null, // 蛋卷没收录
                 },
+        // 默认：中证官网这份也没有（要验退路的那条用例自己注入）
+        indicatorLoader: indicator ?? (c) async => null,
         peLoader: pe ??
             (c) async => CsiPerfPoint(
                 date: '20260928',
@@ -105,8 +111,9 @@ void main() {
 
     expect(find.text('指数对比'), findsOneWidget);
     expect(find.text('对比 3 个指数'), findsOneWidget);
-    expect(find.textContaining('取到估值的：2 / 3'), findsOneWidget);
-    expect(find.textContaining('PE 走中证官网'), findsOneWidget);
+    // 3 个都有数（980081 靠中证 PE 也算），但只有 2 个的股息率来自蛋卷
+    expect(find.textContaining('有数的：3 / 3'), findsOneWidget);
+    expect(find.textContaining('股息率来自蛋卷的有 2 个'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -171,9 +178,38 @@ void main() {
     )));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('取到估值的：0 / 3'), findsOneWidget);
+    expect(find.textContaining('有数的：0 / 3'), findsOneWidget);
     expect(find.text('暂无'), findsWidgets);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('蛋卷没有就用中证的股息率/PE，并在行内标出「股息率·中证」', (tester) async {
+    await tester.pumpWidget(host(page(
+      indicator: (c) async => c == '980081'
+          ? const CsiIndicator(
+              date: '20260928',
+              code: '980081',
+              name: '国证价值100',
+              pe1: 12.34,
+              dp1: 3.21,
+              dp2: 3.33,
+            )
+          : null,
+      // 中证这份文件就能给 PE，所以 index-perf 不该被叫到
+      pe: (c) async {
+        fail('有 indicator 时不该再问 index-perf');
+      },
+    )));
+    await tester.pumpAndSettle();
+
+    // 蛋卷两条 + 中证补的一条 = 3 个都有数；但只有 2 个的股息率来自蛋卷
+    expect(find.textContaining('有数的：3 / 3'), findsOneWidget);
+    expect(find.textContaining('股息率来自蛋卷的有 2 个'), findsOneWidget);
+    expect(find.text('3.33%'), findsOneWidget); // 中证的股息率（计算用股本）
+    expect(find.text('12.34'), findsOneWidget); // 中证的 PE
+    expect(find.textContaining('股息率·中证'), findsOneWidget); // 行内标了来源
+    expect(find.textContaining('蛋卷与中证官网算出来的股息率口径不同'),
+        findsOneWidget);
   });
 
   testWidgets('窄屏 320dp + 字体 1.3：表格不溢出', (tester) async {

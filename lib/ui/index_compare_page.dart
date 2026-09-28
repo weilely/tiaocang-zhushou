@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/format.dart';
+import '../data/csi_indicator.dart';
 import '../data/csi_perf.dart';
 import '../data/index_catalog.dart';
 import '../data/index_eva.dart';
@@ -27,8 +28,11 @@ enum CompareSort {
 ///
 /// ⚠️ **诚实上限（页面上要写清，别让人以为"全都有"）**：
 /// - **PE** 走中证官网 `index-perf`（`peg`）→ **中证目录里的指数基本都有**；
-/// - **股息率 / PB / ROE / PE 分位** 只有**蛋卷**收录的指数才有 → 没有的显示
-///   「暂无」，**不是**"这个指数股息为 0"；
+/// - **股息率** 优先**蛋卷**（它同时给 PB/ROE/分位），蛋卷没收录就退到
+///   **中证官网 `indicator.xls`**（覆盖全部中证指数）—— 两边口径不是同一个数，
+///   所以**每一行都标出股息率是谁给的**；
+/// - **PB / ROE / PE 分位** 只有蛋卷收录的指数才有 → 没有的显示「暂无」，
+///   **不是**"这个指数股息为 0"；
 /// - **成分数 / 月度收益** 是目录自带的（中证官网）。
 class IndexComparePage extends StatefulWidget {
   /// 要比的指数（来自目录勾选）
@@ -38,13 +42,18 @@ class IndexComparePage extends StatefulWidget {
   final Future<IndexValuation?> Function(String code, String? name)?
       valuationLoader;
 
-  /// 取中证 PE/点位；默认走 `AppState.loadCsiPe`
+  /// 取中证的股息率/PE（`indicator.xls`）；默认走 `AppState.loadCsiIndicator`
+  final Future<CsiIndicator?> Function(String code)? indicatorLoader;
+
+  /// 取中证 PE/点位（`index-perf`，`indicator.xls` 失败时的兜底）；
+  /// 默认走 `AppState.loadCsiPe`
   final Future<CsiPerfPoint?> Function(String code)? peLoader;
 
   const IndexComparePage({
     super.key,
     required this.items,
     this.valuationLoader,
+    this.indicatorLoader,
     this.peLoader,
   });
 
@@ -55,19 +64,31 @@ class IndexComparePage extends StatefulWidget {
 class _CompareRow {
   final IndexCatalogItem item;
   IndexValuation? v;
+  CsiIndicator? ind;
   CsiPerfPoint? perf;
 
   _CompareRow(this.item);
 
-  double? get dividend => v?.yeild;
-  double? get pe => v?.pe ?? perf?.pe;
+  /// 股息率（小数）：优先蛋卷，其次中证官网 `indicator.xls`
+  double? get dividend {
+    final fromDanjuan = v?.yeild;
+    if (fromDanjuan != null) return fromDanjuan;
+    final csi = ind?.dividendYield;
+    return csi == null ? null : csi / 100; // 中证给的是百分数
+  }
+
+  /// 股息率是谁给的（两边口径不同，行内要标出来）
+  String get dividendSource {
+    if (v?.yeild != null) return '蛋卷';
+    if (ind?.dividendYield != null) return '中证';
+    return '';
+  }
+
+  double? get pe => v?.pe ?? ind?.pe ?? perf?.pe;
   double? get pb => v?.pb;
   double? get roe => v?.roe;
   double? get pePercentile => v?.pePercentile;
   int? get consNumber => item.consNumber ?? perf?.consNumber;
-
-  /// 估值源没收录（连蛋卷都没查到）
-  bool get noValuation => v == null;
 }
 
 class _IndexComparePageState extends State<IndexComparePage> {
@@ -96,12 +117,25 @@ class _IndexComparePageState extends State<IndexComparePage> {
       } catch (_) {
         r.v = null;
       }
-      try {
-        r.perf = await (widget.peLoader != null
-            ? widget.peLoader!(r.item.code)
-            : Future<CsiPerfPoint?>.value(null));
-      } catch (_) {
-        r.perf = null;
+      // 蛋卷没收录才去中证要股息率/PE（`indicator.xls`，覆盖全部中证指数）
+      if (r.v == null) {
+        try {
+          r.ind = await (widget.indicatorLoader != null
+              ? widget.indicatorLoader!(r.item.code)
+              : Future<CsiIndicator?>.value(null));
+        } catch (_) {
+          r.ind = null;
+        }
+      }
+      // 到这一步还没 PE 的，才去问 `index-perf`（多一次请求，能省则省）
+      if (r.pe == null) {
+        try {
+          r.perf = await (widget.peLoader != null
+              ? widget.peLoader!(r.item.code)
+              : Future<CsiPerfPoint?>.value(null));
+        } catch (_) {
+          r.perf = null;
+        }
       }
       if (!mounted) return;
       setState(() => _done++);
@@ -144,7 +178,8 @@ class _IndexComparePageState extends State<IndexComparePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final got = _rows.where((r) => !r.noValuation).length;
+    final got = _rows.where((r) => r.dividend != null || r.pe != null).length;
+    final danjuan = _rows.where((r) => r.dividendSource == '蛋卷').length;
     final sorted = _sorted;
     return Scaffold(
       appBar: AppBar(titleSpacing: 16, title: const Text('指数对比')),
@@ -166,8 +201,10 @@ class _IndexComparePageState extends State<IndexComparePage> {
                   const SizedBox(height: 8),
                 ],
                 Text(
-                  '取到估值的：$got / ${_rows.length}（股息率、PB、ROE、PE 分位'
-                  '只有蛋卷收录的指数才有）；PE 走中证官网，目录里的指数基本都有。',
+                  '有数的：$got / ${_rows.length} 个指数（其中股息率来自蛋卷的有 '
+                  '$danjuan 个）。\n'
+                  '股息率优先蛋卷，蛋卷没收录就用中证官网（两边口径略有差别，'
+                  '行内标了来源）；PB、ROE、PE 分位只有蛋卷有；PE 中证官网基本都有。',
                   style: TextStyle(fontSize: 11.5, color: theme.hintColor),
                 ),
                 const SizedBox(height: 8),
@@ -190,7 +227,9 @@ class _IndexComparePageState extends State<IndexComparePage> {
           const SizedBox(height: 12),
           Text(
             '「暂无」= 我们的公开源里没有这个指数的这项数据（不是 0）。'
-            '股息率是指数的成分股分红口径，不是某只基金分红给你的比例。',
+            '股息率是指数的成分股分红口径，不是某只基金分红给你的比例。\n'
+            '蛋卷与中证官网算出来的股息率口径不同，可能差零点几个百分点 —— '
+            '行内标了是谁给的。',
             style: TextStyle(fontSize: 10.5, color: theme.hintColor),
           ),
         ],
@@ -278,6 +317,7 @@ class _IndexComparePageState extends State<IndexComparePage> {
     final div = r.dividend;
     final sub = [
       r.item.code,
+      if (r.dividendSource == '中证') '股息率·中证',
       if (r.pePercentile != null)
         'PE分位 ${fmtRatioPct(r.pePercentile!, digits: 0)}',
       if (r.consNumber != null) '${r.consNumber}只',

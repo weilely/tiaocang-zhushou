@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/format.dart';
+import '../data/csi_indicator.dart';
 import '../data/csi_perf.dart';
 import '../data/index_catalog.dart';
 import '../data/index_eva.dart';
@@ -46,6 +47,10 @@ class IndexValuationPage extends StatefulWidget {
   /// 取中证 PE（对比表用；默认 `AppState.loadCsiPe`）
   final Future<CsiPerfPoint?> Function(String code)? peLoader;
 
+  /// 取中证官网的股息率/PE（`indicator.xls`；默认 `AppState.loadCsiIndicator`）
+  /// —— 蛋卷没收录的指数靠它，才能做到"想查哪个都能查到"
+  final Future<CsiIndicator?> Function(String code)? indicatorLoader;
+
   const IndexValuationPage({
     super.key,
     this.searchLoader,
@@ -54,6 +59,7 @@ class IndexValuationPage extends StatefulWidget {
     this.catalogLoader,
     this.codeLoader,
     this.peLoader,
+    this.indicatorLoader,
   });
 
   @override
@@ -88,6 +94,9 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
 
   // ── 估值 ────────────────────────────────────────────────────────────────
   IndexValuation? _current;
+
+  /// 蛋卷没收录时退到中证官网 `indicator.xls` 拿到的那份（口径不同，卡片要标）
+  CsiIndicator? _currentInd;
   bool _loadingValue = false;
   String _pendingName = '';
   String? _missName;
@@ -223,19 +232,27 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
   void _beginLoad(String label) => setState(() {
         _loadingValue = true;
         _current = null;
+        _currentInd = null;
         _missName = null;
         _missIsNetwork = false;
         _pendingName = label;
         _askedName = label;
       });
 
-  void _finishLoad(IndexValuation? v, {required bool netFail, required String label}) {
+  void _finishLoad(
+    IndexValuation? v, {
+    required bool netFail,
+    required String label,
+    CsiIndicator? ind,
+  }) {
     if (!mounted) return;
     setState(() {
       _current = v;
+      _currentInd = v == null ? ind : null;
       _loadingValue = false;
       _pendingName = '';
-      if (v == null) {
+      // 两个源都没给东西，才说"查不到"
+      if (v == null && ind == null) {
         _missName = label;
         _missIsNetwork = netFail;
       }
@@ -243,6 +260,18 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
     if (_scroll.hasClients) {
       _scroll.animateTo(0,
           duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+    }
+  }
+
+  /// 蛋卷查不到时的退路：中证官网 `indicator.xls`（股息率 + PE，覆盖全部中证指数）
+  Future<CsiIndicator?> _csiFallback(String code) async {
+    try {
+      final loader = widget.indicatorLoader;
+      if (loader != null) return await loader(code);
+      final st = context.read<AppState>();
+      return await st.loadCsiIndicator(code);
+    } catch (_) {
+      return null;
     }
   }
 
@@ -262,7 +291,8 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
     } catch (_) {
       netFail = true;
     }
-    _finishLoad(v, netFail: netFail, label: it.name);
+    final ind = v == null ? await _csiFallback(it.code) : null;
+    _finishLoad(v, netFail: netFail, label: it.name, ind: ind);
   }
 
   /// 点东财联想的候选 → 取估值
@@ -281,7 +311,8 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
     } catch (_) {
       netFail = true;
     }
-    _finishLoad(v, netFail: netFail, label: c.name);
+    final ind = v == null ? await _csiFallback(c.code) : null;
+    _finishLoad(v, netFail: netFail, label: c.name, ind: ind);
   }
 
   /// 点「最近查过」→ 按蛋卷符号直接取（已经知道符号了）
@@ -317,6 +348,8 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
         items: items,
         valuationLoader: widget.codeLoader ??
             (code, name) => st!.loadIndexByCode(code, name: name),
+        indicatorLoader:
+            widget.indicatorLoader ?? (code) => st!.loadCsiIndicator(code),
         peLoader: widget.peLoader ?? (code) => st!.loadCsiPe(code),
       ),
     ));
@@ -328,7 +361,8 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
       widget.searchLoader != null &&
       widget.symbolLoader != null &&
       widget.candidateLoader != null &&
-      widget.codeLoader != null;
+      widget.codeLoader != null &&
+      widget.indicatorLoader != null;
 
   // ── 界面 ────────────────────────────────────────────────────────────────
 
@@ -379,6 +413,8 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
             )
           else if (_current != null)
             _valuationCard(context, _current!)
+          else if (_currentInd != null)
+            _csiCard(context, _currentInd!)
           else if (_missName != null)
             _missCard(context),
           if (hits.isNotEmpty || _remote.isNotEmpty || _remoteSearching) ...[
@@ -823,8 +859,10 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
   Widget _footer(BuildContext context) => Text(
         '目录：中证指数官网的官方全量指数表（约 3000 条，本地缓存 7 天）—— '
         '搜索、分类、排序都在本地做，离线也能用。\n'
-        '估值与股息率：蛋卷指数估值公开接口（收录范围有限）。'
-        '查不到会如实说"暂无数据源"，不是"这个指数没有股息"。',
+        '股息率与 PE：优先蛋卷指数估值（它还给 PB / ROE / 历史分位）；'
+        '蛋卷没收录的，退到中证指数官网的官方指标文件（覆盖全部中证指数），'
+        '卡片上会标明是哪一边给的。'
+        '两个源都没有时会如实说"没有数据源"，不是"这个指数没有股息"。',
         style: TextStyle(fontSize: 10.5, color: Theme.of(context).hintColor),
       );
 
@@ -840,8 +878,9 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
             Text(
               _missIsNetwork
                   ? '取数时网络出错了，过会儿再试。'
-                  : '蛋卷没有收录这个指数的估值（已接入的公开源里只有它有股息率）——'
-                      '不是"这个指数没有股息"，是我们暂时没有数据源。',
+                  : '蛋卷和中证指数官网都没给这个指数的数据 —— 国证系（980xxx）、'
+                      '恒生系不在中证官方目录里，本来就没有公开源。'
+                      '不是"这个指数没有股息"，是我们没有数据源。',
               style: const TextStyle(fontSize: 12.5),
             ),
           ],
@@ -915,6 +954,58 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
             Text('分位窗口：${fmtDate(v.windowStart!)} 起',
                 style: TextStyle(fontSize: 11, color: theme.hintColor)),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// 蛋卷没收录 → 用**中证指数官网**的官方指标（`indicator.xls`）。
+  ///
+  /// 两边口径不同（实测 000922：蛋卷 4.26% vs 中证 4.27%），所以这张卡**通篇标明
+  /// 来源**，并且不显示 PB/ROE/分位（那几项中证这份文件里没有）。
+  Widget _csiCard(BuildContext context, CsiIndicator ind) {
+    final theme = Theme.of(context);
+    final y = ind.dividendYield;
+    return SectionCard(
+      title: ind.name.isEmpty ? _askedName : ind.name,
+      trailing: Text(
+        '中证官网 · ${ind.date}',
+        style: TextStyle(fontSize: 11, color: theme.hintColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text('股息率',
+                  style: TextStyle(fontSize: 13, color: theme.hintColor)),
+              const SizedBox(width: 8),
+              Text(y == null ? '--' : '${y.toStringAsFixed(2)}%',
+                  style: const TextStyle(
+                      fontSize: 26, fontWeight: FontWeight.w700)),
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 5),
+                child: Text('计算用股本',
+                    style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
+              ),
+            ],
+          ),
+          const Divider(height: 18),
+          _kv(context, '市盈率（总股本）',
+              ind.pe1 == null ? '--' : ind.pe1!.toStringAsFixed(2)),
+          _kv(context, '市盈率（计算用股本）',
+              ind.pe2 == null ? '--' : ind.pe2!.toStringAsFixed(2)),
+          _kv(context, '股息率（总股本）',
+              ind.dp1 == null ? '--' : '${ind.dp1!.toStringAsFixed(2)}%'),
+          const SizedBox(height: 6),
+          Text(
+            '蛋卷没收录这个指数，所以这份是中证指数官网的官方指标'
+            '（股息率按计算用股本口径，与蛋卷的口径可能差零点几个百分点）；'
+            '中证这份文件里没有 PB / ROE / 历史分位。',
+            style: TextStyle(fontSize: 11, color: theme.hintColor),
+          ),
         ],
       ),
     );
