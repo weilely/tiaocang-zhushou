@@ -11,6 +11,7 @@ import '../data/apk_updater.dart';
 import '../data/asset_traits.dart';
 import '../data/backup_store.dart';
 import '../data/csi_indicator.dart';
+import '../data/csi_pe_hist.dart';
 import '../data/csi_perf.dart';
 import '../data/db.dart';
 import '../data/dca_models.dart';
@@ -355,10 +356,27 @@ class AppState extends ChangeNotifier {
 
   bool get indexBoardReady => indexBoard.isNotEmpty;
 
-  /// 榜单多久算新鲜（半天；打开页面不总是重拉）
+  /// 蛋卷那批多久算新鲜（半天；打开页面不总是重拉）
   static const Duration kIndexBoardTtl = Duration(hours: 12);
 
-  /// 加载低估榜：先给本地缓存（离线秒开），过期才并发刷新
+  /// 中证自算那批的重算周期（**贵**：一只 3~14 秒、几十~几百 KB，所以一个月）
+  static const Duration kIndexBoardComputeTtl = Duration(days: 30);
+
+  /// 中证 PE 历史（自算分位用）
+  final CsiPeHistSource csiPeHist = CsiPeHistSource();
+  final Map<String, CsiPeStat> _csiPeStats = {};
+
+  /// 自算那批的上次算完时间
+  DateTime? indexBoardComputedAt;
+
+  bool _olderThan(DateTime? at, Duration ttl) =>
+      at == null || DateTime.now().difference(at) > ttl;
+
+  /// 加载低估榜：先给本地缓存（离线秒开），过期才刷。
+  ///
+  /// 分两批：①**蛋卷那批**便宜（35 只并发 4，十几秒）→ 先出榜；
+  /// ②**中证自算那批**贵（9 只逐个拉 PE 历史算分位）→ 30 天才重算，
+  /// 平时直接用上次的值（自算那批先沿用旧值，刷新时再替换）。
   Future<List<IndexBoardEntry>> loadIndexBoard({bool force = false}) async {
     if (indexBoard.isNotEmpty && !force) return indexBoard;
     if (indexBoard.isEmpty) {
@@ -366,8 +384,11 @@ class AppState extends ChangeNotifier {
       if (cached != null) {
         indexBoard = cached.$1;
         indexBoardAt = cached.$2;
+        indexBoardComputedAt = cached.$3;
         notifyListeners();
-        if (!force && DateTime.now().difference(cached.$2) < kIndexBoardTtl) {
+        if (!force &&
+            !_olderThan(indexBoardAt, kIndexBoardTtl) &&
+            !_olderThan(indexBoardComputedAt, kIndexBoardComputeTtl)) {
           return indexBoard;
         }
       }
@@ -377,17 +398,62 @@ class AppState extends ChangeNotifier {
     indexBoardError = null;
     notifyListeners();
     try {
-      final rows = <IndexBoardEntry>[];
-      const batch = 4; // 并发 4：35 只十几秒，别把蛋卷问急
-      for (var i = 0; i < kIndexBoardSeeds.length; i += batch) {
-        final slice = kIndexBoardSeeds.skip(i).take(batch).toList();
-        rows.addAll(await Future.wait([for (final s in slice) _boardRow(s)]));
-        indexBoardProgress = '${rows.length}/${kIndexBoardSeeds.length}';
-        notifyListeners();
+      final danjuan =
+          kIndexBoardSeeds.where((e) => e.symbol.isNotEmpty).toList();
+      final computed = kIndexBoardSeeds.where((e) => e.symbol.isEmpty).toList();
+      // 自算那批先沿用旧值（没有就留空行，界面如实说"没取到"）
+      final oldComputed = {
+        for (final r in indexBoard)
+          if (r.symbol.isEmpty) r.code: r
+      };
+      var computedRows = [
+        for (final s in computed) oldComputed[s.code] ?? entryFromPeStat(s, null),
+      ];
+
+      // ① 蛋卷那批
+      if (force || _olderThan(indexBoardAt, kIndexBoardTtl)) {
+        final fresh = <IndexBoardEntry>[];
+        const batch = 4; // 并发 4：别把蛋卷问急
+        for (var i = 0; i < danjuan.length; i += batch) {
+          final slice = danjuan.skip(i).take(batch).toList();
+          fresh.addAll(
+              await Future.wait([for (final s in slice) _boardRowDanjuan(s)]));
+          indexBoardProgress = '蛋卷 ${fresh.length}/${danjuan.length}';
+          notifyListeners();
+        }
+        indexBoard = [...fresh, ...computedRows];
+        indexBoardAt = DateTime.now();
+      } else {
+        indexBoard = [
+          ...indexBoard.where((r) => r.symbol.isNotEmpty),
+          ...computedRows,
+        ];
       }
-      indexBoard = rows;
-      indexBoardAt = DateTime.now();
-      await indexBoardStore.save(rows, indexBoardAt!);
+      notifyListeners();
+
+      // ② 中证自算那批（贵，30 天才重算）
+      if (force || _olderThan(indexBoardComputedAt, kIndexBoardComputeTtl)) {
+        final done = <IndexBoardEntry>[];
+        for (var i = 0; i < computed.length; i++) {
+          final s = computed[i];
+          final stat = await _csiPeStatOf(s.code);
+          done.add(entryFromPeStat(s, stat));
+          indexBoardProgress = '自算 ${i + 1}/${computed.length}';
+          notifyListeners();
+        }
+        computedRows = done;
+        indexBoard = [
+          ...indexBoard.where((r) => r.symbol.isNotEmpty),
+          ...computedRows,
+        ];
+        indexBoardComputedAt = DateTime.now();
+      }
+
+      await indexBoardStore.save(
+        indexBoard,
+        danjuanAt: indexBoardAt ?? DateTime.now(),
+        computedAt: indexBoardComputedAt ?? DateTime.now(),
+      );
       return indexBoard;
     } catch (e) {
       indexBoardError = '低估榜刷新失败（$e）';
@@ -399,20 +465,45 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// 取榜单里的一行：**填进估值缓存但不进"最近查过"**（否则 35 只把那里刷屏）
-  Future<IndexBoardEntry> _boardRow(
-      ({String symbol, String code, String name}) s) async {
+  /// 蛋卷那一批取一行：**填进估值缓存但不进"最近查过"**（否则几十只把那里刷屏）
+  Future<IndexBoardEntry> _boardRowDanjuan(
+      ({String symbol, String code, String name, String kind}) s) async {
     var v = _indexValuations[s.symbol];
     if (v == null) {
       v = await indexEva.fetch(s.symbol);
       if (v != null) _indexValuations[s.symbol] = v;
     }
+    if (v == null) {
+      return IndexBoardEntry(code: s.code, name: s.name, kind: s.kind, symbol: s.symbol);
+    }
     return IndexBoardEntry(
-      symbol: s.symbol,
       code: s.code,
       name: s.name,
-      v: v,
+      kind: s.kind,
+      symbol: s.symbol,
+      ok: true,
+      pe: v.pe,
+      pb: v.pb,
+      roe: v.roe,
+      dividend: v.yeild,
+      pePct: v.pePercentile,
+      pbPct: v.pbPercentile,
+      date: v.date,
+      windowStart: v.windowStart == null
+          ? ''
+          : '${v.windowStart!.year}'
+              '${v.windowStart!.month.toString().padLeft(2, '0')}'
+              '${v.windowStart!.day.toString().padLeft(2, '0')}',
     );
+  }
+
+  /// 中证自算那一批：PE 历史 → 分位（按代码缓存）
+  Future<CsiPeStat?> _csiPeStatOf(String code) async {
+    final cached = _csiPeStats[code];
+    if (cached != null) return cached;
+    final s = await csiPeHist.latest(code);
+    if (s != null) _csiPeStats[code] = s;
+    return s;
   }
 
   /// 代码 → 中证官网指标（查过就留着）

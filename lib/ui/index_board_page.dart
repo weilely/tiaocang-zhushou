@@ -8,10 +8,11 @@ import 'widgets/common.dart';
 
 /// **低估榜**：一眼看出哪些指数低估（2026-09-29 用户口径）。
 ///
-/// 用户原话：「**我就想看哪些指数低估**」+「**按 PE 分位升序、低估在前，列里带上股息率**」。
+/// 用户原话：「**我就想看哪些指数低估**」+「**按 PE 分位升序、低估在前，列里带上股息率**」，
+/// 之后又补两点：**扩大成员**（补了 9 只中证自算的）与**只看红利 / 宽基的筛选**。
 ///
-/// 与「查指数」页的分工：这里**不看单个指数，只看排名**（结论式）；
-/// 想查某个具体指数（搜索/分类/对比）走入口里的「查指数」那一页。
+/// 与「查指数」页的分工：这里**只看排名**（结论式）；想查某个具体指数（搜索/分类/对比）
+/// 走入口里的「查指数」那一页。
 class IndexBoardPage extends StatefulWidget {
   /// 取榜单（默认 `AppState.loadIndexBoard`；测试注入）
   final Future<List<IndexBoardEntry>> Function({bool force})? boardLoader;
@@ -32,6 +33,7 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
   DateTime? _at;
   BoardSort _sort = BoardSort.pePercentile;
   bool? _desc; // null = 用该字段默认方向（分位/PE 从小到大，股息率从大到小）
+  String _kind = ''; // '' = 全部
 
   bool get _injected => widget.boardLoader != null;
 
@@ -63,7 +65,7 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
     }
   }
 
-  /// 刷新（带进度）：真实源走 AppState
+  /// 刷新（真实源走 AppState，进度靠它的 notify + watch）
   Future<void> _refresh() async {
     if (_injected) return _load(force: true);
     final st = context.read<AppState>();
@@ -71,7 +73,6 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
       _loading = true;
       _error = null;
     });
-    // 进度靠 AppState 的 notifyListeners + watch 拿，这里只等结果
     final rows = await st.loadIndexBoard(force: true);
     if (!mounted) return;
     setState(() {
@@ -84,12 +85,12 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    // 进度只有真实源有（AppState 每拉一批就 notify），测试注入时给空
     final progress =
         _injected ? '' : context.watch<AppState>().indexBoardProgress;
-    final rows = sortBoard(_rows, _sort, desc: _desc);
-    final undervalued = rows.where((r) => r.zone == '低估').length;
+    final filtered = _kind.isEmpty
+        ? _rows
+        : [for (final r in _rows) if (r.kind == _kind) r];
+    final rows = sortBoard(filtered, _sort, desc: _desc);
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 16,
@@ -105,7 +106,7 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
         children: [
-          _headCard(context, rows.length, undervalued, progress),
+          _headCard(context, rows, progress),
           if (_error != null) ...[
             const SizedBox(height: 12),
             SectionCard(
@@ -121,17 +122,20 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
             SectionCard(
               title: '还没拿到数据',
               child: Text(
-                '低估榜的成员是蛋卷收录的 ${kIndexBoardSeeds.length} 个指数；'
+                '低估榜的成员是蛋卷收录的 $kBoardDanjuanCount 个指数 + '
+                '中证官网自算分位的 $kBoardComputedCount 个指数；'
                 '一个都没取到时这里会是空的 —— 点右上角刷新试试。',
-                style: TextStyle(fontSize: 12.5, color: theme.hintColor),
+                style: TextStyle(
+                    fontSize: 12.5, color: Theme.of(context).hintColor),
               ),
             )
           else
             SectionCard(
-              title: '指数估值排名',
+              title: _kind.isEmpty ? '指数估值排名' : '$_kind（估值排名）',
               trailing: Text(
                 _at == null ? '' : '数据 ${fmtDate(_at!)}',
-                style: TextStyle(fontSize: 10.5, color: theme.hintColor),
+                style: TextStyle(
+                    fontSize: 10.5, color: Theme.of(context).hintColor),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -149,10 +153,23 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
     );
   }
 
-  Widget _headCard(BuildContext context, int n, int low, String progress) {
+  /// `'蛋卷 12/35'` / `'自算 3/9'` → 进度值（解析不了就转圈）
+  double? _progressValue(String progress) {
+    final parts = progress.split('/');
+    if (parts.length != 2) return null;
+    final done = int.tryParse(parts.first.split(' ').last);
+    final total = int.tryParse(parts.last);
+    if (done == null || total == null || total <= 0) return null;
+    return (done / total).clamp(0.0, 1.0);
+  }
+
+  Widget _headCard(BuildContext context, List<IndexBoardEntry> rows,
+      String progress) {
     final theme = Theme.of(context);
     final total = kIndexBoardSeeds.length;
-    final missing = _rows.where((r) => r.missing).length;
+    final low = rows.where((r) => r.zone == '低估').length;
+    final missing = rows.where((r) => r.missing).length;
+    final withData = rows.length - missing; // "有数据"要扣掉这次没取到的
     return SectionCard(
       title: '哪些指数低估',
       trailing: _loading
@@ -162,19 +179,17 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (_loading) ...[
-            LinearProgressIndicator(
-              value: progress.isEmpty
-                  ? null
-                  : (double.tryParse(progress.split('/').first) ?? 0) / total,
+          if (_loading)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: LinearProgressIndicator(value: _progressValue(progress)),
             ),
-            const SizedBox(height: 8),
-          ],
           // 首次加载时**别显示"0 个低估"**（那时一条都还没取回来，会让人以为真没有）
           if (_loading && _rows.isEmpty)
             Text(
-              '正在取 ${kIndexBoardSeeds.length} 个指数的估值'
-              '${progress.isEmpty ? '' : '（$progress）'}…',
+              '正在取 $total 个指数的估值'
+              '（先蛋卷 $kBoardDanjuanCount 个，再中证自算 $kBoardComputedCount 个）'
+              '${progress.isEmpty ? '' : '：$progress'}…',
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
             )
           else
@@ -185,10 +200,11 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
                       fontSize: 20,
                       fontWeight: FontWeight.w700,
                       color: theme.colorScheme.primary)),
-              const TextSpan(
-                  text: ' 个指数处在低估区（共 ', style: TextStyle(fontSize: 12.5)),
-              TextSpan(text: '$n', style: const TextStyle(fontSize: 12.5)),
-              const TextSpan(text: ' 个有数据', style: TextStyle(fontSize: 12.5)),
+              TextSpan(
+                  text: _kind.isEmpty
+                      ? ' 个指数处在低估区（共 $withData 个有数据'
+                      : ' 个$_kind指数处在低估区（本类 $withData 个有数据',
+                  style: const TextStyle(fontSize: 12.5)),
               if (missing > 0)
                 TextSpan(
                     text: '，另有 $missing 个这次没取到',
@@ -200,6 +216,22 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
             '低估 / 高估按 PE 历史分位划：低于 30% 算低估、高于 70% 算高估。'
             '排名默认按 PE 分位从低到高 —— 低估在前。',
             style: TextStyle(fontSize: 11, color: theme.hintColor),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final k in ['', ...kBoardKinds])
+                ChoiceChip(
+                  label: Text(k.isEmpty ? '全部' : k,
+                      style: const TextStyle(fontSize: 11.5)),
+                  selected: _kind == k,
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  onSelected: (_) => setState(() => _kind = k),
+                ),
+            ],
           ),
         ],
       ),
@@ -333,6 +365,8 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
                 '股息率 ${r.dividend == null ? '--' : fmtRatioPct(r.dividend!, digits: 2)}',
                 'PE ${r.pe == null ? '--' : r.pe!.toStringAsFixed(2)}',
                 'PB ${r.pb == null ? '--' : r.pb!.toStringAsFixed(2)}',
+                // 自算那批只有 PE/分位，标清来源，别让人以为是同一个口径
+                if (r.symbol.isEmpty) '分位·中证自算',
               ].join(' · '),
               style: TextStyle(fontSize: 10.5, color: theme.hintColor),
               maxLines: 1,
@@ -345,7 +379,7 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
   }
 
   void _detail(BuildContext context, IndexBoardEntry r) {
-    final v = r.v;
+    final theme = Theme.of(context);
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -371,26 +405,32 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
               ],
             ),
             Text(
-              '${r.code} · ${v?.symbol ?? r.symbol}'
-              '${r.date.isEmpty ? '' : ' · ${v!.date}'}',
-              style: TextStyle(
-                  fontSize: 11, color: Theme.of(ctx).hintColor),
+              '${r.code}${r.kind.isEmpty ? '' : ' · ${r.kind}'}'
+              '${r.date.isEmpty ? '' : ' · ${r.date}'}',
+              style: TextStyle(fontSize: 11, color: theme.hintColor),
             ),
             const Divider(height: 18),
             _kv(ctx, '股息率（指数成分股口径）',
                 r.dividend == null ? '--' : fmtRatioPct(r.dividend!, digits: 2)),
-            _kv(ctx, 'PE 历史分位', r.pePct == null ? '--' : fmtRatioPct(r.pePct!, digits: 2)),
-            _kv(ctx, 'PB 历史分位', r.pbPct == null ? '--' : fmtRatioPct(r.pbPct!, digits: 2)),
-            _kv(ctx, '市盈率 PE', r.pe == null ? '--' : r.pe!.toStringAsFixed(2)),
-            _kv(ctx, '市净率 PB', r.pb == null ? '--' : r.pb!.toStringAsFixed(2)),
+            _kv(ctx, 'PE 历史分位',
+                r.pePct == null ? '--' : fmtRatioPct(r.pePct!, digits: 2)),
+            _kv(ctx, 'PB 历史分位',
+                r.pbPct == null ? '--' : fmtRatioPct(r.pbPct!, digits: 2)),
+            _kv(ctx, '市盈率 PE',
+                r.pe == null ? '--' : r.pe!.toStringAsFixed(2)),
+            _kv(ctx, '市净率 PB',
+                r.pb == null ? '--' : r.pb!.toStringAsFixed(2)),
             _kv(ctx, '净资产收益率 ROE',
                 r.roe == null ? '--' : fmtRatioPct(r.roe!, digits: 2)),
             const SizedBox(height: 8),
             Text(
-              '数据源：蛋卷指数估值（公开接口）；分位窗口起点 '
-              '${v?.windowStart == null ? '未给出' : fmtDate(v!.windowStart!)}。',
-              style: TextStyle(
-                  fontSize: 11, color: Theme.of(ctx).hintColor),
+              r.symbol.isEmpty
+                  ? '数据源：中证指数官网 PE 历史，分位是自己算的'
+                      '（最新 PE 在 ${r.windowStart.isEmpty ? '这段历史' : '$r.windowStart 起'}'
+                      ' $r.samples 个交易日里的位置）；这一路没有股息率/PB/ROE。'
+                  : '数据源：蛋卷指数估值（公开接口）；'
+                      '分位窗口起点 ${r.windowStart.isEmpty ? '未给出' : r.windowStart}。',
+              style: TextStyle(fontSize: 11, color: theme.hintColor),
             ),
           ],
         ),
@@ -415,9 +455,13 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
       );
 
   Widget _footer(BuildContext context) => Text(
-        '成员：蛋卷收录的 ${kIndexBoardSeeds.length} 个指数（宽基 / 红利 / 行业主题都有）。\n'
-        '「低估 / 适中 / 高估」按 PE 历史分位划（<30% / 30%~70% / >70%），'
-        '分位窗口由数据源给出（约 10 年）。\n'
+        '成员 ${kIndexBoardSeeds.length} 个：蛋卷收录的 $kBoardDanjuanCount 个'
+        '（宽基 / 红利 / 行业主题都有）+ 中证官网自算分位的 $kBoardComputedCount 个'
+        '（上证指数、中证A500、科创100、北证50、中证全指、中证A50、红利质量、'
+        '全指红利质量、红利价值）。\n'
+        '「低估 / 适中 / 高估」按 PE 历史分位划（<30% / 30%~70% / >70%）。'
+        '两个源的分位窗口不同（蛋卷约 10 年、中证自算是它给的全段历史），'
+        '方向一致但数值会有差，行内标了是谁给的。\n'
         '股息率是指数成分股的分红口径，不是某只基金分红给你的比例；'
         '股息率高不等于低估（实测中证红利股息率 4.26% 但 PE 分位 79%），'
         '所以这里按分位排名、股息率只作参考。',
