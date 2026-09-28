@@ -8,6 +8,7 @@ import 'package:local_auth_android/local_auth_android.dart';
 
 import '../core/app_info.dart';
 import '../data/apk_updater.dart';
+import '../data/asset_traits.dart';
 import '../data/backup_store.dart';
 import '../data/db.dart';
 import '../data/dca_models.dart';
@@ -767,10 +768,12 @@ class AppState extends ChangeNotifier {
 
   /// 「记一笔」那一格**预测手续费**的统一入口（场内/场外各用各的费率）
   ///
-  /// - 场内（ETF/股票）：账户佣金率（万分之几）+ 免五，不足 5 元按 5 元
   /// - 场外（基金）：该基金的**申购费**（买入）或**赎回费**（卖出）%，没有最低 5 元
+  /// - 场内（ETF/股票）：**佣金**（账户费率，不足 5 元按 5 元、免五按实际）
+  ///   **＋ 税费**（用户 2026-09-28）：股票的过户费（双向，万0.1）、
+  ///   卖出股票的印花税（万5）；ETF/LOF 两样都不收
   ///
-  /// 没设费率 / 金额非法 → null（**不猜**，预测那一格显示 `--`）
+  /// 没设费率且没有税费 / 金额非法 → null（**不猜**，预测那一格显示 `--`）
   double? feeForTxn({
     required int? accountId,
     required String code,
@@ -783,7 +786,11 @@ class AppState extends ChangeNotifier {
           type == TxnType.sell ? redeemFeeRateOf(code) : subFeeRateOf(code);
       return fundTradeFee(ratePct: pct, amount: amount);
     }
-    return feeForAmount(accountId: accountId, kind: kind, amount: amount);
+    final commission =
+        feeForAmount(accountId: accountId, kind: kind, amount: amount);
+    final taxes = exchangeTaxes(kind: kind, type: type, amount: amount);
+    if (commission == null && taxes <= 0) return null;
+    return double.parse(((commission ?? 0) + taxes).toStringAsFixed(2));
   }
 
   /// 某账户的佣金费率（**万分之几**）；没设过返回 null（记一笔就不自动算手续费）
@@ -1236,6 +1243,8 @@ class AppState extends ChangeNotifier {
     unawaited(loadMarketIndices().then((_) => refreshIndexQuotes()));
     unawaited(refreshQuotes(silent: true));
     unawaited(runDueDca());
+    // 「待确认」记账（场外基金当天净值未公布时先记金额）：净值一旦公布就补上份额
+    unawaited(fillPendingTxns());
     // 先读简称，再读现金；若一条现金都没有而交易不少，说明是老数据，按交易补一次联动。
     // 简称**必须**排在重建之前：rebuildCashFromTxns 用 displayShortOf 写备注，
     // 简称没加载完就会退回标的全名（实测出现「易方达国证价值100ETF联接A · 定投」）。
@@ -3851,6 +3860,56 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ---------------- 「待确认」记账的自动补全 ----------------
+
+  /// 场外基金当天净值没公布时，先只记金额（`Txn.pending = true`）；
+  /// 净值公布后由这里把份额与净值补上，并解除待确认。
+  ///
+  /// 取价口径与定投补记一致（`pendingFill` → `resolveDcaPrice`）：
+  /// 所选日当天有值用当天，否则顺延到之后第一个有值日，**绝不用所选日之前的价**。
+  /// 取不到就**原样留着**，下次启动 / 下次更新净值再试。
+  Future<int> fillPendingTxns() async {
+    final pending = [for (final t in txns) if (t.pending) t];
+    if (pending.isEmpty) return 0;
+    final today = DateTime.now();
+    var n = 0;
+    for (final t in pending) {
+      final asset = assetsById[t.assetId];
+      if (asset == null || t.id == null) continue;
+      Map<String, double> prices;
+      try {
+        prices = await db.navPricesBetween(
+          asset.code,
+          dayKey(t.date),
+          dayKey(today),
+        );
+      } catch (_) {
+        continue;
+      }
+      final fill = pendingFill(
+        date: t.date,
+        today: today,
+        priceByDay: prices,
+        amount: t.amount,
+        traits: AssetTraits.of(asset.kind),
+      );
+      if (fill == null) continue;
+      await db.saveTxn(t.copyWith(
+        price: fill.price,
+        shares: fill.shares,
+        pending: false,
+      ));
+      n++;
+    }
+    if (n > 0) {
+      txns = await db.txns();
+      _recompute();
+      lastMessage = '已按公布净值补上 $n 笔待确认记账';
+      notifyListeners();
+    }
+    return n;
+  }
+
   // ---------------- 备份与恢复 ----------------
 
   /// 构造全局备份的 JSON 文本
@@ -3875,8 +3934,10 @@ class AppState extends ChangeNotifier {
       // **密钥不进备份**：同花顺 API Key 存在 settings 表里，而备份会把整张表
       // 带走 —— 那样 Key 就会跟着备份文件到处跑（还会被对账脚本明文打印）。
       // 恢复时由 BackupStore 把本机原有的 Key 再放回去，所以不会丢。
-      settings: (await db.allSettings())
-        ..removeWhere((k, v) => kSecretSettingKeys.contains(k)),
+      // **密钥也一起进备份**（用户 2026-09-28：「同花顺的 key … 一同备份」）——
+      // 备份文件里会有明文 Key，他自己收好；恢复老备份时本机 Key 不会被抹掉
+      // （见 logic/backup.dart 的 secretsToKeep）
+      settings: settingsForBackup(await db.allSettings()),
       // v4 起：金融基础数据 + 历史净值（原样的表行，恢复时直接入表）
       securities: await db.allSecuritiesRows(),
       navHistory: await db.allNavRows(),

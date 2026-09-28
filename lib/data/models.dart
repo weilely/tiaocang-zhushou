@@ -140,6 +140,14 @@ class Txn {
   double fee;
   String note;
 
+  /// **待确认**：场外基金当天净值还没公布时，先只记金额（份额/净值留空），
+  /// 等净值公布后由 `AppState.fillPendingTxns()` 自动补上份额与净值再置回 false。
+  ///
+  /// 用户 2026-09-28 定的做法（当时给的三选一他选了「待确认」模式）。
+  /// 待确认期间这笔钱**已经进了现金账本**（买入当天就扣款），只是持仓份额还没确认
+  /// —— 所以持仓里看不到它（份额为 0 视为空仓），补上后自然出现。
+  bool pending;
+
   Txn({
     this.id,
     required this.accountId,
@@ -151,6 +159,7 @@ class Txn {
     this.price = 0,
     this.fee = 0,
     this.note = '',
+    this.pending = false,
   });
 
   /// 现金净流（负=投入资金，正=收回资金）
@@ -190,6 +199,7 @@ class Txn {
         'price': price,
         'fee': fee,
         'note': note,
+        'pending': pending ? 1 : 0,
       };
 
   factory Txn.fromMap(Map<String, Object?> m) => Txn(
@@ -203,6 +213,8 @@ class Txn {
         price: (m['price'] as num?)?.toDouble() ?? 0,
         fee: (m['fee'] as num?)?.toDouble() ?? 0,
         note: (m['note'] as String?) ?? '',
+        // 老库/老备份没有这一列 → false（已确认）
+        pending: ((m['pending'] as num?)?.toInt() ?? 0) == 1,
       );
 
   Txn copyWith({
@@ -216,6 +228,7 @@ class Txn {
     double? price,
     double? fee,
     String? note,
+    bool? pending,
   }) =>
       Txn(
         id: id ?? this.id,
@@ -228,6 +241,7 @@ class Txn {
         price: price ?? this.price,
         fee: fee ?? this.fee,
         note: note ?? this.note,
+        pending: pending ?? this.pending,
       );
 }
 

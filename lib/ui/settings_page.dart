@@ -111,9 +111,6 @@ class _SettingsPageState extends State<SettingsPage> {
     return s;
   }
 
-  /// 「同花顺数据源」API Key 输入框（值由 AppState 持久化，这里只做展示）
-  final _hithinkKeyCtrl = TextEditingController();
-
   @override
   Widget build(BuildContext context) {
     final st = context.watch<AppState>();
@@ -779,14 +776,13 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   /// 「同花顺数据源」：行情第三路备用源，需填 API Key 才启用；不填不影响东财/新浪。
+  ///
+  /// 用户 2026-09-28：「同花顺的 key 用**弹框**输入并保持，**不要直接显示**，容易误填，
+  /// **一同备份**」——所以卡片里只显示「已设置 / 未设置」，改 Key 走弹框（打码输入）。
   Widget _hithinkSection(BuildContext context, AppState st) {
     final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
-    // 首次构建把库里存的 Key 回填进输入框（obscure，不明文回显）。
-    // 只在**输入框为空**时回填：否则边打字边回填会把光标顶回开头。
-    final currentKey = st.hithinkApiKey ?? '';
-    if (_hithinkKeyCtrl.text.isEmpty && currentKey.isNotEmpty) {
-      _hithinkKeyCtrl.text = currentKey;
-    }
+    final key = st.hithinkApiKey ?? '';
+    final has = key.isNotEmpty;
     return CollapsibleSectionCard(
       title: '同花顺数据源（备用）',
       initiallyExpanded: false,
@@ -796,32 +792,97 @@ class _SettingsPageState extends State<SettingsPage> {
           Text('行情兜底第三路：东财、新浪都取不到时用它补。需填入 API Key（fuyao.aicubes.cn/admin 申请）；留空则不启用，行情照旧走东财/新浪。',
               style: hint),
           const SizedBox(height: 8),
-          TextField(
-            controller: _hithinkKeyCtrl,
-            obscureText: true,
-            textInputAction: TextInputAction.done,
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: '留空 = 不启用同花顺',
-              hintStyle: TextStyle(
-                  fontSize: 13,
-                  color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.6)),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(kBoxRadius),
-                borderSide: BorderSide(color: boxBorderColor(context)),
+          Row(
+            children: [
+              Icon(
+                has ? Icons.check_circle_outline : Icons.key_off_outlined,
+                size: 16,
+                color: has
+                    ? const Color(0xFF1A9C5B)
+                    : Theme.of(context).hintColor,
               ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(kBoxRadius),
-                borderSide: BorderSide(color: boxBorderColor(context)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  has ? '已设置（共 ${key.length} 位，不显示内容）' : '未设置',
+                  style: const TextStyle(fontSize: 13),
+                ),
               ),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            ),
-            onChanged: (v) => st.setHithinkApiKey(v),
+              TextButton.icon(
+                onPressed: () => _editHithinkKey(st),
+                icon: Icon(has ? Icons.edit_outlined : Icons.add, size: 18),
+                label: Text(has ? '修改' : '设置'),
+              ),
+              if (has)
+                IconButton(
+                  tooltip: '清除 Key',
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  onPressed: () => _clearHithinkKey(st),
+                ),
+            ],
           ),
+          Text('Key 会**一起进备份**（备份文件里有明文，别外传）。', style: hint),
         ],
       ),
     );
+  }
+
+  /// 用**弹框**改 Key：不常驻在页面上（免得误填/误改）；保存即持久化
+  Future<void> _editHithinkKey(AppState st) async {
+    final ctrl = TextEditingController(text: st.hithinkApiKey ?? '');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('同花顺 API Key'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          obscureText: true, // 不明文回显
+          decoration: const InputDecoration(
+            labelText: 'API Key',
+            hintText: '粘贴 fuyao.aicubes.cn 申请的 Key',
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('保存')),
+        ],
+      ),
+    );
+    final text = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok != true) return;
+    await st.setHithinkApiKey(text);
+    if (!mounted) return;
+    _snack(text.isEmpty ? '已清除同花顺 Key' : '已保存同花顺 Key');
+  }
+
+  Future<void> _clearHithinkKey(AppState st) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('清除同花顺 Key？'),
+        content: const Text('清除后行情走东财 / 新浪，功能不受影响。',
+            style: TextStyle(fontSize: 13)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD93A3A)),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('清除')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await st.setHithinkApiKey('');
+    if (!mounted) return;
+    _snack('已清除同花顺 Key');
   }
 
   /// 「安全设置」：生物识别解锁（可折叠，折叠状态会记住）
@@ -1371,7 +1432,7 @@ class _SettingsPageState extends State<SettingsPage> {
               '文件路径：\n$path\n\n'
               '包含：账户、标的与分类、全部交易流水、现金流水、再平衡目标、\n'
               '关注列表、定投计划、设置，以及金融基础数据、历史净值与股债利差历史。\n'
-              '（不含行情缓存与同花顺密钥，恢复后行情会自动重新抓取）\n\n'
+              '（含同花顺 Key，备份文件请自己收好；不含行情缓存，恢复后行情会自动重新抓取）\n\n'
               '取回电脑：\nadb pull "$path" .',
               style: const TextStyle(fontSize: 12),
             ),

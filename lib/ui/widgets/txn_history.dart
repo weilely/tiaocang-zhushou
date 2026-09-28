@@ -216,6 +216,18 @@ Widget txnTile(
             child: const Text('定投',
                 style: TextStyle(fontSize: 10, color: Color(0xFF1F6FEB))),
           ),
+        // 「待确认」：场外基金当天净值没公布时先记的金额，份额等公布后自动补
+        if (t.pending)
+          Container(
+            margin: const EdgeInsets.only(left: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: const Color(0xFFB4770A).withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Text('待确认',
+                style: TextStyle(fontSize: 10, color: Color(0xFFB4770A))),
+          ),
       ],
     ),
     subtitle: Padding(

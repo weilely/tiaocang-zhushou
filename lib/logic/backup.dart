@@ -30,10 +30,29 @@ class BackupException implements Exception {
 /// 它同样是「本地一天一点攒出来的历史」，丢了要等下次联网回填 10 年。
 /// 老版本读到会忽略这个字段，新版本读到老 v4 备份时它为空（恢复时不动本表），
 /// 所以**不抬备份版本号**（与 targets 的 `account_id` 同一个先例）。
-/// **不进备份的密钥类设置**（备份文件会被人拷来拷去、也可能被工具打印出来）
+/// 密钥类设置（目前只有同花顺的 API Key）
 ///
-/// 目前只有同花顺的 API Key。恢复时本机原有的值会被保留（见 BackupStore）。
+/// **2026-09-28 起语义变了**：用户要求「同花顺的 key … **一同备份**」，
+/// 所以导出时**不再剔除**它（备份文件里会有明文 Key，自己留着别外传）；
+/// 这个清单现在只剩一个用途 —— **恢复时兜底**：
+/// 老备份（在 Key 进备份之前导出的）里没有这把 Key，
+/// 那就**保留本机原有的**，别把用户刚填好的 Key 抹掉（见 [secretsToKeep]）。
 const List<String> kSecretSettingKeys = ['hithinkApiKey'];
+
+/// 导出时写进备份的设置项：**整张表都写**（含密钥类）
+Map<String, String> settingsForBackup(Map<String, String> all) => Map.of(all);
+
+/// 恢复时要从**本机**保留（而不是被备份覆盖/清空）的密钥类设置：
+/// 只保留「备份里压根没有这把 Key」的那些（老备份兼容）
+Map<String, String> secretsToKeep({
+  required Map<String, String> local,
+  required Map<String, String> fromBackup,
+}) =>
+    {
+      for (final k in kSecretSettingKeys)
+        if (!fromBackup.containsKey(k) && (local[k] ?? '').isNotEmpty)
+          k: local[k]!,
+    };
 
 class AppBackup {
   static const String appTag = 'invest_tracker';

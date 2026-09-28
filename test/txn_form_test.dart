@@ -74,4 +74,100 @@ void main() {
       expect(derivedAmount(shares: 100, price: 0), isNull);
     });
   });
+
+  // 用户 2026-09-28 选的做法：「待确认」模式 —— 场外基金当天净值没公布时
+  // 先只记金额，等净值公布后由 `AppState.fillPendingTxns()` 按这里定的价补份额。
+  group('pendingFill：待确认那笔事后补份额用哪天的价', () {
+    final today = DateTime(2026, 9, 28);
+
+    test('所选日当天就有净值 → 用当天，份额 = 金额 ÷ 净值（基金 2 位小数）', () {
+      final f = pendingFill(
+        date: DateTime(2026, 9, 25),
+        today: today,
+        priceByDay: {'2026-09-25': 1.7548},
+        amount: 10000,
+        traits: fund,
+      )!;
+      expect(f.price, closeTo(1.7548, 1e-9));
+      expect(f.shares, 5698.65);
+    });
+
+    test('当天还没公布 → 顺延到之后第一个有值日（周末/节假日同理）', () {
+      final f = pendingFill(
+        date: DateTime(2026, 9, 25),
+        today: today,
+        priceByDay: {'2026-09-28': 1.8074},
+        amount: 10000,
+        traits: fund,
+      )!;
+      expect(f.price, closeTo(1.8074, 1e-9));
+    });
+
+    test('**绝不用所选日之前的价**（那等于拿买之前的价格成交）', () {
+      expect(
+        pendingFill(
+          date: DateTime(2026, 9, 25),
+          today: today,
+          priceByDay: {'2026-09-24': 1.8074},
+          amount: 10000,
+          traits: fund,
+        ),
+        isNull,
+      );
+    });
+
+    test('顺延日越过今天也拿不到价 → null（继续留着，下次再试）', () {
+      expect(
+        pendingFill(
+          date: DateTime(2026, 9, 28),
+          today: today,
+          priceByDay: {'2026-09-28': 0},
+          amount: 10000,
+          traits: fund,
+        ),
+        isNull,
+      );
+    });
+
+    test('金额算不出份额（太小 / 非法）→ null', () {
+      expect(
+        pendingFill(
+          date: DateTime(2026, 9, 25),
+          today: today,
+          priceByDay: {'2026-09-25': 1.7548},
+          amount: 0,
+          traits: fund,
+        ),
+        isNull,
+      );
+      expect(
+        pendingFill(
+          date: DateTime(2026, 9, 25),
+          today: today,
+          priceByDay: {'2026-09-25': 1.7548},
+          amount: 0.001,
+          traits: fund,
+        ),
+        isNull,
+      );
+    });
+  });
+
+  group('待确认标记（DB v10 新列 pending）', () {
+    test('能原样存读；老数据没有这一列 → false', () {
+      final t = Txn(
+        accountId: 1,
+        assetId: 2,
+        type: TxnType.buy,
+        date: DateTime(2026, 9, 28),
+        amount: 3000,
+        pending: true,
+      );
+      expect(t.toMap()['pending'], 1);
+      expect(Txn.fromMap(t.toMap()).pending, isTrue);
+      final legacy = t.toMap()..remove('pending');
+      expect(Txn.fromMap(legacy).pending, isFalse);
+      expect(t.copyWith(pending: false).pending, isFalse);
+    });
+  });
 }

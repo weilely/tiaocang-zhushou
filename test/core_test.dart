@@ -731,6 +731,34 @@ void main() {
       expect(back.dcaPlans, isEmpty);
       expect(back.macroRows, isEmpty);
     });
+
+    // 用户 2026-09-28：「同花顺的 key … 一同备份」——导出的设置整张表都带，
+    // 密钥不再被剔除；`kSecretSettingKeys` 只用来在**老备份没带 Key** 时保留本机的。
+    test('密钥一同进备份；老备份没带 Key 时保留本机那把', () {
+      const key = 'sk-fuyao-abc';
+      final all = {'hithinkApiKey': key, 'threshold': '0.05'};
+      final exported = settingsForBackup(all);
+      expect(exported['hithinkApiKey'], key, reason: 'Key 要一起进备份');
+
+      // 新备份带着 Key → 不用保留本机的（听备份的）
+      expect(
+        secretsToKeep(local: {'hithinkApiKey': key}, fromBackup: exported),
+        isEmpty,
+      );
+      // 老备份没这段 → 本机那把要留着（否则恢复一次 Key 就没了）
+      expect(
+        secretsToKeep(
+          local: {'hithinkApiKey': key},
+          fromBackup: {'threshold': '0.05'},
+        ),
+        {'hithinkApiKey': key},
+      );
+      // 本机也没有 → 什么都不用留，也别凭空造一个空值
+      expect(
+        secretsToKeep(local: const {}, fromBackup: const {}),
+        isEmpty,
+      );
+    });
   });
 
   // ---------------- 收益口径 ----------------

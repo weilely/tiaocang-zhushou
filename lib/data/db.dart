@@ -14,8 +14,9 @@ class AppDatabase {
   /// v5 给 cash_txns 加 src_txn_id（交易联动的现金流水），
   /// v6 给 assets 加 link_code，v7 macro_history（股债利差每日累积），
   /// v8 调仓目标按账户分开（targets 加 account_id，唯一键改成 账户+标的），
-  /// v9 给 dca_plans 加 fee_rate（每期申购费率 %，定投也要算手续费）
-  static const int _dbVersion = 9;
+  /// v9 给 dca_plans 加 fee_rate（每期申购费率 %，定投也要算手续费），
+  /// v10 给 txns 加 pending（场外基金当天净值没公布时先记金额、份额待确认）
+  static const int _dbVersion = 10;
 
   Database? _db;
 
@@ -68,7 +69,8 @@ class AppDatabase {
         shares REAL NOT NULL DEFAULT 0,
         price REAL NOT NULL DEFAULT 0,
         fee REAL NOT NULL DEFAULT 0,
-        note TEXT NOT NULL DEFAULT ''
+        note TEXT NOT NULL DEFAULT '',
+        pending INTEGER NOT NULL DEFAULT 0
       )
     ''');
     await d.execute('CREATE INDEX idx_txns_account ON txns (account_id)');
@@ -158,6 +160,11 @@ class AppDatabase {
     if (oldVersion < 9) {
       // 定投也要算手续费（用户 2026-09-25）：每期申购费率（%），老计划默认 0 = 不计
       await _addColumnIfMissing(d, 'dca_plans', 'fee_rate', 'REAL NOT NULL DEFAULT 0');
+    }
+    if (oldVersion < 10) {
+      // 「待确认」记账（用户 2026-09-28）：场外基金当天净值没公布时先只记金额，
+      // 份额等净值公布后自动补；老流水默认 0 = 已确认
+      await _addColumnIfMissing(d, 'txns', 'pending', 'INTEGER NOT NULL DEFAULT 0');
     }
   }
 

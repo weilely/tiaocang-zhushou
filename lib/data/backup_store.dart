@@ -46,16 +46,21 @@ extension BackupStore on AppDatabase {
       await txn.delete('targets');
       await txn.delete('assets');
       await txn.delete('accounts');
-      // 备份里**不含密钥类设置**（见 kSecretSettingKeys），所以先把本机的值
-      // 记下来，清表之后再放回去 —— 否则恢复一次 Key 就没了。
-      final keepSecrets = <String, String>{};
+      // 密钥类设置：**新备份里带着它**（用户 2026-09-28 要求一同备份），
+      // 但老备份（那之前导出的）没有这一段 —— 那种情况下保留本机原有的值，
+      // 否则恢复一次就把用户刚填好的同花顺 Key 抹掉了。
+      final localSettings = <String, String>{};
       for (final k in kSecretSettingKeys) {
         final rows = await txn.query('settings',
             where: 'key = ?', whereArgs: [k], limit: 1);
         if (rows.isNotEmpty) {
-          keepSecrets[k] = (rows.first['value'] as String?) ?? '';
+          localSettings[k] = (rows.first['value'] as String?) ?? '';
         }
       }
+      final keepSecrets = secretsToKeep(
+        local: localSettings,
+        fromBackup: b.settings,
+      );
       await txn.delete('settings');
       // v4：金融基础数据与历史净值**只在备份里确实带了才覆盖** ——
       // 老备份（v1~v3）这两段是空的，若照清不误会把本地数据白白清掉
@@ -111,7 +116,7 @@ extension BackupStore on AppDatabase {
         await txn.insert('settings', {'key': e.key, 'value': e.value},
             conflictAlgorithm: ConflictAlgorithm.replace);
       }
-      // 把本机的密钥类设置放回去（备份里刻意没有它们）
+      // 把「老备份里没带」的密钥类设置放回去（新备份带着它，这里就是空操作）
       for (final e in keepSecrets.entries) {
         if (e.value.isEmpty) continue;
         await txn.insert('settings', {'key': e.key, 'value': e.value},

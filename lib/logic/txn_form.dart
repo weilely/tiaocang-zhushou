@@ -10,6 +10,7 @@ library;
 
 import '../data/asset_traits.dart';
 import '../data/models.dart';
+import 'dca.dart';
 
 /// 表单里排在前面的主输入字段
 enum PrimaryField { amount, shares, none }
@@ -70,4 +71,46 @@ double? fundTradeFee({required double? ratePct, required double amount}) {
     return null;
   }
   return double.parse((amount * ratePct / 100).toStringAsFixed(2));
+}
+
+/// 「**待确认**」那笔记账事后补份额时该用哪天的价：
+/// **所选日当天有值就用当天，否则顺延到之后第一个有值日**（不越过今天），
+/// 与定投补记同一口径（`resolveDcaPrice`）——
+/// **绝不用所选日之前的价**，那样等于拿买之前的价格成交。
+///
+/// 找不到价 / 份额算不出来 → null（继续等着，下次再来）。
+({double price, double shares})? pendingFill({
+  required DateTime date,
+  required DateTime today,
+  required Map<String, double> priceByDay,
+  required double amount,
+  required AssetTraits traits,
+}) {
+  final ref = resolveDcaPrice(due: date, today: today, priceByDay: priceByDay);
+  if (ref == null) return null;
+  final shares = derivedShares(amount: amount, price: ref.price, traits: traits);
+  if (shares == null || shares <= 0) return null;
+  return (price: ref.price, shares: shares);
+}
+
+/// **场内税费**（用户 2026-09-28：「场内交易费用卖出时考虑卖出股票印花税和过手费没有」）
+///
+/// - **印花税** `0.05%`（万5）：**只有股票、只有卖出**才收；ETF / LOF 不收
+/// - **过户费** `0.001%`（万0.1）：只有股票，买入与卖出**双向**都收
+///
+/// 这两样是**法定费用**，跟券商佣金率无关（免五只影响佣金那 5 元门槛，不影响它们），
+/// 所以即使没设佣金率也得算。钱落到分。
+const double kStampTaxRate = 0.0005;
+const double kTransferFeeRate = 0.00001;
+
+double exchangeTaxes({
+  required AssetKind kind,
+  required TxnType type,
+  required double amount,
+}) {
+  if (kind != AssetKind.stock) return 0; // ETF/LOF：印花税与过户费都不收
+  if (amount <= 0 || amount.isNaN || amount.isInfinite) return 0;
+  final transfer = amount * kTransferFeeRate;
+  final stamp = type == TxnType.sell ? amount * kStampTaxRate : 0.0;
+  return double.parse((transfer + stamp).toStringAsFixed(2));
 }

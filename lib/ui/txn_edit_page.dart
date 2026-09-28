@@ -64,6 +64,10 @@ class _TxnEditPageState extends State<TxnEditPage> {
   /// 佣金费率输入框（万分之几，按账户存）
   final _feeRateCtrl = TextEditingController();
 
+  /// 「待确认」：场外基金当天净值还没公布时，先只记金额、份额留空，
+  /// 等净值公布后由 `AppState.fillPendingTxns()` 自动补（用户 2026-09-28 选的做法）
+  bool _pending = false;
+
   bool _autoAmount = false;
   bool _autoShares = true;
 
@@ -440,6 +444,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
 
   void _onSharesChanged() {
     if (_writing) return;
+    // 用户手填了份额 → 这笔不再是「待确认」
+    if (_pending && _shares.text.trim().isNotEmpty) _pending = false;
     if (_type == TxnType.buy) {
       if (_primary == PrimaryField.shares) {
         _autoAmount = true; // 场内买入：股数是主字段，金额跟着算
@@ -469,6 +475,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
 
   void _onPriceChanged() {
     if (_writing) return;
+    // 用户手填了净值 → 这笔不再是「待确认」
+    if (_pending && _price.text.trim().isNotEmpty) _pending = false;
     _syncDerived();
     setState(() {});
   }
@@ -547,8 +555,19 @@ class _TxnEditPageState extends State<TxnEditPage> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final isDividend = _type == TxnType.dividend;
+    // 本页所有输入框统一：标题**常驻在框线左上角的开口里**
+    // —— 用户 2026-09-28：「线框左上角开口，申购费率（%）」。
+    // Material 默认在框为空时会把标题掉进框内（就是被否掉的那种），
+    // `FloatingLabelBehavior.always` 正好是"开口里常驻"这个行为。
+    final theme = Theme.of(context);
 
-    return Scaffold(
+    return Theme(
+      data: theme.copyWith(
+        inputDecorationTheme: theme.inputDecorationTheme.copyWith(
+          floatingLabelBehavior: FloatingLabelBehavior.always,
+        ),
+      ),
+      child: Scaffold(
       appBar: AppBar(
         title: Text(widget.existing == null ? '记一笔' : '编辑记录'),
         actions: [
@@ -782,6 +801,18 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 ],
               ),
             ],
+            // 股票的**法定税费**（用户 2026-09-28：卖出要考虑印花税与过户费）：
+            // 过户费双向、印花税只有卖出；ETF/LOF 两样都不收
+            if (!isDividend && _kind == AssetKind.stock) ...[
+              const SizedBox(height: 6),
+              Text(
+                _type == TxnType.sell
+                    ? '卖股票＝佣金＋过户费万0.1＋印花税万5（法定费用，与佣金率无关）'
+                    : '买股票＝佣金＋过户费万0.1（卖出时还要交印花税万5）',
+                style:
+                    TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+              ),
+            ],
             const SizedBox(height: 16),
 
             TextFormField(
@@ -801,18 +832,40 @@ class _TxnEditPageState extends State<TxnEditPage> {
           ],
         ),
       ),
+      ),
     );
   }
 
   // ---------------- 表单字段 ----------------
 
-  /// 日期下面那行净值提示：查到了显示净值所属日期，没查到就让用户手填
+  /// 这一笔能不能按「待确认」记：**场外基金买入**，且所选日期的净值不是精确命中
+  /// （今天还没公布 → 查到的多半是上一交易日的）
+  bool get _canPending =>
+      _type == TxnType.buy &&
+      !_kind.isExchange &&
+      (_pending || _navFill == null || !_navFill!.exact);
+
+  /// 日期下面那行净值提示：查到了显示净值所属日期，没查到就让用户手填；
+  /// 场外基金当天净值没公布时，右侧还给一个「改为待确认」的开关
+  /// （用户 2026-09-28 选的做法：先只记金额，份额等净值公布后自动补）。
   Widget _navHintRow() {
     // 还没填代码 / 还没为当前输入查过时是中性的「待查询」，不能显示成错误
     final hasCode = _navHasTarget;
     final queried = _navQueried;
     final failed = hasCode && queried && !_navBusy && _navFill == null;
     final color = failed ? const Color(0xFFD93A3A) : Theme.of(context).hintColor;
+    final hint = _pending
+        ? '待确认：先只记金额，等净值公布后自动补份额'
+        : navFillHint(
+            day: _date,
+            fill: _navFill,
+            busy: _navBusy,
+            error: _navError,
+            hasCode: hasCode,
+            queried: queried,
+            // 场外是「净值」、场内是「价格」
+            noun: _traits.priceIsLive ? '价格' : '净值',
+          );
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -825,30 +878,41 @@ class _TxnEditPageState extends State<TxnEditPage> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : Icon(
-                  failed
-                      ? Icons.error_outline
-                      : (hasCode && queried)
-                          ? Icons.check_circle_outline
-                          : Icons.info_outline,
+                  _pending
+                      ? Icons.schedule_outlined
+                      : failed
+                          ? Icons.error_outline
+                          : (hasCode && queried)
+                              ? Icons.check_circle_outline
+                              : Icons.info_outline,
                   size: 14,
                   color: color,
                 ),
         ),
         Expanded(
-          child: Text(
-            navFillHint(
-              day: _date,
-              fill: _navFill,
-              busy: _navBusy,
-              error: _navError,
-              hasCode: hasCode,
-              queried: queried,
-              // 场外是「净值」、场内是「价格」
-              noun: _traits.priceIsLive ? '价格' : '净值',
-            ),
-            style: TextStyle(fontSize: 11, color: color),
-          ),
+          child: Text(hint, style: TextStyle(fontSize: 11, color: color)),
         ),
+        if (_canPending)
+          TextButton(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              minimumSize: const Size(0, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: () => setState(() {
+              _pending = !_pending;
+              if (_pending) {
+                // 净值/份额留空 = 待确认；金额与手续费照常记
+                _price.clear();
+                _shares.clear();
+              } else {
+                // 切回「用查到的净值」：重新按日期查一次
+                _syncNav();
+              }
+            }),
+            child: Text(_pending ? '用查到的净值' : '改为待确认',
+                style: const TextStyle(fontSize: 11)),
+          ),
       ],
     );
   }
@@ -877,6 +941,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
       ),
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       validator: (v) {
+        // 待确认：净值留空是有意的（等公布后自动补），不拦
+        if (_pending) return null;
         final d = double.tryParse(v ?? '');
         if (d == null || d <= 0) return '请输入价格';
         return null;
@@ -904,6 +970,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
       decoration: InputDecoration(labelText: label, helperText: helper),
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       validator: (v) {
+        // 待确认：份额留空是有意的（等净值公布后自动补），不拦
+        if (_pending) return null;
         final d = double.tryParse(v ?? '');
         if (d == null || d <= 0) return '请输入$unit';
         // 可卖份额（T+1：当日买的那部分当天不能卖）；0 也要拦，别让"可卖 0"被跳过
@@ -1306,6 +1374,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
       price: _type == TxnType.dividend ? 0 : (double.tryParse(_price.text) ?? 0),
       fee: double.tryParse(_fee.text) ?? 0,
       note: _note.text.trim(),
+      // 待确认：份额/净值留空，等净值公布后由 fillPendingTxns 自动补
+      pending: _pending,
     );
 
     // 买入/卖出/分红自动记入现金账户（联动常开，无需勾选）；

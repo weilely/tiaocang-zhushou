@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/data/models.dart';
+import 'package:invest_tracker/logic/txn_form.dart';
 import 'package:invest_tracker/state/app_state.dart';
 import 'package:invest_tracker/ui/txn_edit_page.dart';
 import 'package:provider/provider.dart';
@@ -160,7 +161,7 @@ void main() {
         closeTo(5, 1e-9),
         reason: '场外的申购费率不该影响场内',
       );
-      // 场内没设佣金率 → 不拿场外的费率顶
+      // 场内没设佣金率 → 不拿场外的费率顶（ETF 也没有税费）
       final st2 = fund(sub: 0.1);
       expect(
         st2.feeForTxn(
@@ -170,6 +171,79 @@ void main() {
             type: TxnType.buy,
             amount: 10000),
         isNull,
+      );
+    });
+  });
+
+  // 用户 2026-09-28：「场内交易费用卖出时考虑卖出股票印花税和过手费没有」
+  group('场内税费：股票印花税 + 过户费', () {
+    test('印花税 0.05% 只有**卖出股票**才收（10 万元 → 50 元）', () {
+      expect(
+        exchangeTaxes(
+            kind: AssetKind.stock, type: TxnType.sell, amount: 100000),
+        closeTo(50 + 1, 1e-9), // 印花税 50 ＋ 过户费 1
+      );
+      expect(
+        exchangeTaxes(kind: AssetKind.stock, type: TxnType.buy, amount: 100000),
+        closeTo(1, 1e-9), // 买入只有过户费
+      );
+    });
+
+    test('过户费 0.001% 双向都收', () {
+      expect(
+        exchangeTaxes(kind: AssetKind.stock, type: TxnType.buy, amount: 50000),
+        closeTo(0.5, 1e-9),
+      );
+      expect(
+        exchangeTaxes(kind: AssetKind.stock, type: TxnType.sell, amount: 50000),
+        closeTo(0.5 + 25, 1e-9),
+      );
+    });
+
+    test('ETF / LOF / 场外基金：印花税与过户费都不收', () {
+      for (final k in [AssetKind.etf, AssetKind.fund, AssetKind.other]) {
+        expect(exchangeTaxes(kind: k, type: TxnType.sell, amount: 100000), 0,
+            reason: '${k.name} 不该收税费');
+      }
+    });
+
+    test('金额非法 → 0', () {
+      expect(exchangeTaxes(kind: AssetKind.stock, type: TxnType.sell, amount: 0), 0);
+      expect(exchangeTaxes(kind: AssetKind.stock, type: TxnType.buy, amount: -1), 0);
+    });
+
+    test('预测手续费 = 佣金 + 税费（股票卖出 10 万、万2.5 佣金）', () {
+      final st = AppState()..loading = false;
+      st.feeRates[1] = 2.5;
+      expect(
+        st.feeForTxn(
+            accountId: 1,
+            code: '000001',
+            kind: AssetKind.stock,
+            type: TxnType.sell,
+            amount: 100000),
+        closeTo(25 + 51, 1e-9),
+      );
+      // 没设佣金率也要收税费（法定费用，与佣金率无关）
+      final st2 = AppState()..loading = false;
+      expect(
+        st2.feeForTxn(
+            accountId: 1,
+            code: '000001',
+            kind: AssetKind.stock,
+            type: TxnType.sell,
+            amount: 100000),
+        closeTo(51, 1e-9),
+      );
+      // 买入同一只股票：只有佣金 + 过户费
+      expect(
+        st2.feeForTxn(
+            accountId: 1,
+            code: '000001',
+            kind: AssetKind.stock,
+            type: TxnType.buy,
+            amount: 100000),
+        closeTo(1, 1e-9),
       );
     });
   });
