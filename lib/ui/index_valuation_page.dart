@@ -941,7 +941,7 @@ class _IndexValuationViewState extends State<IndexValuationView> {
     return SectionCard(
       title: v.name,
       trailing: Text(
-        v.date.isEmpty ? v.symbol : '${v.symbol} · ${v.date}',
+        v.date.isEmpty ? v.symbol : '${v.symbol} · ${fmtIndexDate(v.date)}',
         style: TextStyle(fontSize: 11, color: theme.hintColor),
       ),
       child: Column(
@@ -1013,7 +1013,7 @@ class _IndexValuationViewState extends State<IndexValuationView> {
     return SectionCard(
       title: ind.name.isEmpty ? _askedName : ind.name,
       trailing: Text(
-        '中证官网 · ${ind.date}',
+        '中证官网 · ${fmtIndexDate(ind.date)}',
         style: TextStyle(fontSize: 11, color: theme.hintColor),
       ),
       child: Column(

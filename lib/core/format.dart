@@ -80,6 +80,35 @@ String fmtDateCn(DateTime d) =>
 
 String fmtDateTime(DateTime d) => _dateTime.format(d);
 
+/// 指数数据日期统一成带年份的 `yyyy-MM-dd`（2026-09-29 用户要求「日期能把年份显示出来」）
+///
+/// 各数据源给的形状不一样，**只做补全、不做猜测**：
+/// - 蛋卷给 `MM-DD`（`09-28`）→ 补年份，取"**不晚于今天**"的那一年（年初看到 `12-31`
+///   会正确地补成去年）
+/// - 中证给 `yyyyMMdd`（`20260928`）→ 拆成带横杠
+/// - 已经是 `yyyy-MM-dd` 的原样返回；其余（空串、怪字符串）原样返回
+String fmtIndexDate(String raw, {DateTime? now}) {
+  final s = raw.trim();
+  if (s.isEmpty) return s;
+  // 20260928
+  if (RegExp(r'^\d{8}$').hasMatch(s)) {
+    return '${s.substring(0, 4)}-${s.substring(4, 6)}-${s.substring(6, 8)}';
+  }
+  // 09-28 → 补年份
+  final m = RegExp(r'^(\d{1,2})-(\d{1,2})$').firstMatch(s);
+  if (m != null) {
+    final mo = int.parse(m.group(1)!);
+    final d = int.parse(m.group(2)!);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return s;
+    final t = now ?? DateTime.now();
+    var y = t.year;
+    // 取"不晚于今天"的那一年：1 月初看到 12-31 → 去年
+    if (DateTime(y, mo, d).isAfter(DateTime(t.year, t.month, t.day))) y -= 1;
+    return '$y-${m.group(1)!.padLeft(2, '0')}-${m.group(2)!.padLeft(2, '0')}';
+  }
+  return s;
+}
+
 /// 金额紧凑显示（用于图表标签，如 1.2万 / 3.4亿）
 String fmtCompact(double v) {
   final a = v.abs();

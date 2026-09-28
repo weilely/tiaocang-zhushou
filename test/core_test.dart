@@ -1120,4 +1120,28 @@ void main() {
       expect(p.shares, greaterThanOrEqualTo(0));
     });
   });
+
+  group('fmtIndexDate：指数数据日期统一带年份（用户 2026-09-29 要求）', () {
+    test('蛋卷的 MM-DD 补成 yyyy-MM-dd（取"不晚于今天"的那一年）', () {
+      expect(fmtIndexDate('09-28', now: DateTime(2026, 9, 29)), '2026-09-28');
+      // 月初看到上年的 12-31 → 补去年（别补成未来）
+      expect(fmtIndexDate('12-31', now: DateTime(2026, 1, 3)), '2025-12-31');
+      expect(fmtIndexDate('01-02', now: DateTime(2026, 1, 3)), '2026-01-02');
+      // 个位数月日也补零
+      expect(fmtIndexDate('9-8', now: DateTime(2026, 9, 29)), '2026-09-08');
+    });
+
+    test('中证的 yyyyMMdd 拆成带横杠', () {
+      expect(fmtIndexDate('20260928'), '2026-09-28');
+      expect(fmtIndexDate('20240101'), '2024-01-01');
+    });
+
+    test('已经是 ISO 的原样返回；空串/怪串不编（原样回）', () {
+      expect(fmtIndexDate('2026-09-28'), '2026-09-28');
+      expect(fmtIndexDate(''), '');
+      expect(fmtIndexDate('—'), '—');
+      expect(fmtIndexDate('13-45', now: DateTime(2026, 9, 29)), '13-45'); // 非法月日不动
+      expect(fmtIndexDate('2026/09/28'), '2026/09/28');
+    });
+  });
 }

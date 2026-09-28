@@ -424,7 +424,7 @@ class _IndexBoardViewState extends State<IndexBoardView> {
             ),
             Text(
               '${r.code}${r.kind.isEmpty ? '' : ' · ${r.kind}'}'
-              '${r.date.isEmpty ? '' : ' · ${r.date}'}',
+              '${r.date.isEmpty ? '' : ' · ${fmtIndexDate(r.date)}'}',
               style: TextStyle(fontSize: 11, color: theme.hintColor),
             ),
             const Divider(height: 18),

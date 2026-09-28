@@ -428,8 +428,10 @@ class _ErpChartState extends State<ErpChart> {
           painter: _ErpPainter(
             values: [for (final r in slice) r.erp],
             indexValues: idxSlice,
-            firstLabel: _md(slice.first.date),
-            lastLabel: _md(slice.last.date),
+            // 横轴**带年份**（用户 2026-09-29 要求）：只写 `08-15` 看不出是哪一年，
+            // 十年窗口下那两个标签会被读成"一个多月"
+            firstLabel: slice.first.date,
+            lastLabel: slice.last.date,
             line: theme.colorScheme.primary,
             ref: theme.hintColor.withValues(alpha: 0.5),
             hint: theme.hintColor,
@@ -467,9 +469,6 @@ class _ErpChartState extends State<ErpChart> {
     );
   }
 
-  /// `2026-09-18` → `09-18`（横轴只要月日，省地方）
-  static String _md(String iso) =>
-      iso.length >= 10 ? iso.substring(5, 10) : iso;
 }
 
 class _ErpPainter extends CustomPainter {
@@ -613,11 +612,11 @@ class _ErpPainter extends CustomPainter {
         Offset(xOf(values.length - 1), yOf(values.last)), 2.6,
         Paint()..color = line);
 
-    // 横轴首尾日期（缩放后这俩会跟着窗口变，等于告诉用户"现在在看哪一段"）
+    // 横轴首尾日期（带年份；缩放后这俩跟着窗口变，等于告诉用户"现在在看哪一段"）
     _text(canvas, firstLabel, Offset(kErpPadL, size.height - 11),
         fontSize: 9, color: hint);
-    _text(canvas, lastLabel,
-        Offset(kErpPadL + w - 26, size.height - 11),
+    // 尾标签**右对齐到绘图区右缘**（带年份后有 10 个字符，不能再硬减一个常数）
+    _textRight(canvas, lastLabel, kErpPadL + w, size.height - 11,
         fontSize: 9, color: hint);
   }
 
@@ -629,6 +628,17 @@ class _ErpPainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )..layout();
     tp.paint(canvas, at);
+  }
+
+  /// 右对齐绘制（[right] 是右边缘的 x）
+  void _textRight(Canvas canvas, String s, double right, double y,
+      {required double fontSize, required Color color}) {
+    final tp = TextPainter(
+      text: TextSpan(
+          text: s, style: TextStyle(fontSize: fontSize, color: color)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(right - tp.width, y));
   }
 
   @override

@@ -265,7 +265,7 @@ void main() {
 
     await tapAt(tester, rowText('沪深300').first); // 蛋卷那条 loader 只认 000922
 
-    expect(find.textContaining('中证官网 · 20260928'), findsOneWidget);
+    expect(find.textContaining('中证官网 · 2026-09-28'), findsOneWidget);
     expect(find.text('2.74%'), findsOneWidget); // 股息率（计算用股本）
     expect(find.text('13.42'), findsWidgets); // 市盈率
     expect(find.textContaining('2.72%'), findsOneWidget); // 股息率（总股本）
