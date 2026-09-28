@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../data/db.dart';
 import '../../logic/macro_allocation.dart';
 import '../../state/app_state.dart';
+import '../index_board_page.dart';
 import '../index_valuation_page.dart';
 
 /// 「市场估值」卡片：股债利差 + 沪深300 PE + 10年国债 + 历史分位
@@ -134,9 +135,32 @@ class _MacroCardState extends State<MacroCard> {
                       style: TextStyle(fontSize: 10, color: theme.hintColor),
                     ),
                     const SizedBox(height: 6),
-                    // 通用「指数估值」页入口（用户 2026-09-28）：
-                    // 股息率 / PE / PB / 历史分位。单独占一行 —— 上面那行已经够挤，
-                    // 往里面再塞一颗图标在窄屏 + 大字体下会被挤没（踩过）。
+                    // ①**低估榜**（用户 2026-09-29 口径「我就想看哪些指数低估」）——
+                    //   这是他真正要的主视图：结论式，一眼看完谁便宜。
+                    InkWell(
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => const IndexBoardPage(),
+                      )),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.leaderboard,
+                              size: 14, color: theme.colorScheme.primary),
+                          const SizedBox(width: 4),
+                          Text('低估榜（哪些指数低估）',
+                              style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.colorScheme.primary)),
+                          Icon(Icons.chevron_right,
+                              size: 16, color: theme.colorScheme.primary),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    // ②「查指数」页（用户要求「**保留查询功能**」）：搜索 / 分类 /
+                    //   排序 / 勾选对比 —— 想查某个具体指数时用，跟上面的"看排名"分工。
                     InkWell(
                       onTap: () => Navigator.of(context).push(MaterialPageRoute(
                         builder: (_) => const IndexValuationPage(),
@@ -146,15 +170,15 @@ class _MacroCardState extends State<MacroCard> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(Icons.travel_explore,
-                              size: 14, color: theme.colorScheme.primary),
+                              size: 14, color: theme.hintColor),
                           const SizedBox(width: 4),
-                          Text('指数估值（股息率 / PE / PB）',
+                          Text('查指数（搜索 / 分类 / 对比）',
                               style: TextStyle(
                                   fontSize: 11.5,
                                   fontWeight: FontWeight.w600,
-                                  color: theme.colorScheme.primary)),
+                                  color: theme.hintColor)),
                           Icon(Icons.chevron_right,
-                              size: 16, color: theme.colorScheme.primary),
+                              size: 16, color: theme.hintColor),
                         ],
                       ),
                     ),

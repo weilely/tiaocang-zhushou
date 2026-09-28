@@ -19,6 +19,7 @@ import '../data/dca_source.dart';
 import '../data/file_store.dart';
 import '../data/fund_detail.dart';
 import '../data/hithink_api.dart';
+import '../data/index_board.dart';
 import '../data/index_catalog.dart';
 import '../data/index_eva.dart';
 import '../data/macro_source.dart';
@@ -338,6 +339,81 @@ class AppState extends ChangeNotifier {
   /// 蛋卷收录范围小，查不到就退到这条 —— **界面必须注明"中证官网口径"**，
   /// 因为两边算出来的股息率不是同一个数（实测 000922：蛋卷 4.26 vs 中证 4.27）。
   final CsiIndicatorSource csiIndicator = CsiIndicatorSource();
+
+  // ---- 低估榜（一眼看出哪些指数低估）------------------------------------
+  //
+  // 用户口径：「我就想看哪些指数低估」+「按 PE 分位升序、低估在前，列里带上股息率」。
+  // 成员是内置的 35 只（2026-09-29 全量扫过 357 只候选后蛋卷有数据的那些，
+  // 见 `data/index_board.dart`），进页面只刷数值、未收录的不再重试。
+  final IndexBoardStore indexBoardStore = IndexBoardStore();
+
+  List<IndexBoardEntry> indexBoard = [];
+  bool indexBoardLoading = false;
+  String indexBoardProgress = '';
+  DateTime? indexBoardAt;
+  String? indexBoardError;
+
+  bool get indexBoardReady => indexBoard.isNotEmpty;
+
+  /// 榜单多久算新鲜（半天；打开页面不总是重拉）
+  static const Duration kIndexBoardTtl = Duration(hours: 12);
+
+  /// 加载低估榜：先给本地缓存（离线秒开），过期才并发刷新
+  Future<List<IndexBoardEntry>> loadIndexBoard({bool force = false}) async {
+    if (indexBoard.isNotEmpty && !force) return indexBoard;
+    if (indexBoard.isEmpty) {
+      final cached = await indexBoardStore.load();
+      if (cached != null) {
+        indexBoard = cached.$1;
+        indexBoardAt = cached.$2;
+        notifyListeners();
+        if (!force && DateTime.now().difference(cached.$2) < kIndexBoardTtl) {
+          return indexBoard;
+        }
+      }
+    }
+    indexBoardLoading = true;
+    indexBoardProgress = '';
+    indexBoardError = null;
+    notifyListeners();
+    try {
+      final rows = <IndexBoardEntry>[];
+      const batch = 4; // 并发 4：35 只十几秒，别把蛋卷问急
+      for (var i = 0; i < kIndexBoardSeeds.length; i += batch) {
+        final slice = kIndexBoardSeeds.skip(i).take(batch).toList();
+        rows.addAll(await Future.wait([for (final s in slice) _boardRow(s)]));
+        indexBoardProgress = '${rows.length}/${kIndexBoardSeeds.length}';
+        notifyListeners();
+      }
+      indexBoard = rows;
+      indexBoardAt = DateTime.now();
+      await indexBoardStore.save(rows, indexBoardAt!);
+      return indexBoard;
+    } catch (e) {
+      indexBoardError = '低估榜刷新失败（$e）';
+      return indexBoard; // 有旧的先给旧的
+    } finally {
+      indexBoardLoading = false;
+      indexBoardProgress = '';
+      notifyListeners();
+    }
+  }
+
+  /// 取榜单里的一行：**填进估值缓存但不进"最近查过"**（否则 35 只把那里刷屏）
+  Future<IndexBoardEntry> _boardRow(
+      ({String symbol, String code, String name}) s) async {
+    var v = _indexValuations[s.symbol];
+    if (v == null) {
+      v = await indexEva.fetch(s.symbol);
+      if (v != null) _indexValuations[s.symbol] = v;
+    }
+    return IndexBoardEntry(
+      symbol: s.symbol,
+      code: s.code,
+      name: s.name,
+      v: v,
+    );
+  }
 
   /// 代码 → 中证官网指标（查过就留着）
   final Map<String, CsiIndicator> _csiIndicators = {};

@@ -150,6 +150,20 @@ class IndexValuation {
     this.evaType = '',
   });
 
+  /// 存缓存用（形状与蛋卷 `data` 一致，[fromJson] 能原样读回来）
+  Map<String, Object?> toJson() => {
+        'name': name,
+        'pe': pe,
+        'pb': pb,
+        'yeild': yeild,
+        'roe': roe,
+        'pe_percentile': pePercentile,
+        'pb_percentile': pbPercentile,
+        'begin_at': windowStart?.millisecondsSinceEpoch,
+        'date': date,
+        'eva_type': evaType,
+      };
+
   static IndexValuation? fromJson(String symbol, Object? json) {
     if (json is! Map) return null;
     final d = json['data'];
