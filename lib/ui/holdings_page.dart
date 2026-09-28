@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../core/format.dart';
 import '../data/asset_traits.dart';
+import '../data/models.dart';
 import '../data/nav_models.dart';
 import '../logic/portfolio.dart';
 import '../logic/period_return.dart';
@@ -79,11 +80,15 @@ class HoldingsPage extends StatelessWidget {
                 ),
               ),
               // 「费率」入口（用户 2026-09-28：持仓页要能看卖出费率分布）
-              onRedeemFee: () => showRedeemFeeSheet(
-                context,
-                accountId: p.accountId,
-                assetId: p.asset.id!,
-              ),
+              // **只给场外基金**：场内（ETF/股票）是市价成交，费用是佣金+税费，
+              // 没有「按持有天数的赎回费」这回事。
+              onRedeemFee: p.asset.kind == AssetKind.fund
+                  ? () => showRedeemFeeSheet(
+                        context,
+                        accountId: p.accountId,
+                        assetId: p.asset.id!,
+                      )
+                  : null,
             ),
           if (list.isEmpty)
             Padding(
