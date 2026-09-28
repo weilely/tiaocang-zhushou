@@ -17,6 +17,7 @@ import '../data/dca_source.dart';
 import '../data/file_store.dart';
 import '../data/fund_detail.dart';
 import '../data/hithink_api.dart';
+import '../data/index_eva.dart';
 import '../data/macro_source.dart';
 import '../data/market_api.dart';
 import '../data/models.dart';
@@ -208,6 +209,60 @@ class AppState extends ChangeNotifier {
   /// 关注（自选）与历史净值
   final NavSource navSource = NavSource();
   List<WatchItem> watchlist = [];
+
+  // ---- 指数估值（通用查询页）--------------------------------------------
+  //
+  // 公开源里**只有蛋卷有指数股息率**，按符号查；名字→代码走东财联想。
+  // 见 `data/index_eva.dart`（含覆盖率上限的说明）。
+  final IndexEvaSource indexEva = IndexEvaSource();
+
+  /// 已查到的指数估值（键 = 蛋卷符号）：**查过就留着**（同一天内不必重拉）
+  final Map<String, IndexValuation> _indexValuations = {};
+
+  /// 最近查过的指数（新的在前，最多 [kRecentIndexLimit] 个）
+  final List<IndexValuation> recentIndexValuations = [];
+  static const int kRecentIndexLimit = 8;
+
+  /// 已缓存的指数估值（null = 还没查过）
+  IndexValuation? indexValuationOf(String symbol) => _indexValuations[symbol];
+
+  /// 按名字/代码联想指数（东财，失败返回空表）
+  Future<List<IndexCandidate>> searchIndexes(String query) =>
+      indexEva.search(query);
+
+  /// 查一个蛋卷符号的估值（带内存缓存 + 记入"最近查过"）
+  Future<IndexValuation?> loadIndexValuation(
+    String symbol, {
+    bool force = false,
+  }) async {
+    final cached = _indexValuations[symbol];
+    if (!force && cached != null) return cached;
+    final v = await indexEva.fetch(symbol);
+    if (v != null) _rememberIndexValuation(v);
+    return v;
+  }
+
+  /// 从一个搜索候选里查出估值：**逐个符号猜、用返回的 name 验证**
+  /// （`2.H30269` 这种要猜成 `CSIH30269`）。返回 null = 蛋卷没收录这个指数。
+  Future<IndexValuation?> loadIndexCandidate(IndexCandidate c) async {
+    for (final s in c.symbolGuesses) {
+      final cached = _indexValuations[s];
+      if (cached != null) return cached;
+    }
+    final v = await indexEva.fetchCandidate(c);
+    if (v != null) _rememberIndexValuation(v);
+    return v;
+  }
+
+  void _rememberIndexValuation(IndexValuation v) {
+    _indexValuations[v.symbol] = v;
+    recentIndexValuations.removeWhere((e) => e.symbol == v.symbol);
+    recentIndexValuations.insert(0, v);
+    while (recentIndexValuations.length > kRecentIndexLimit) {
+      recentIndexValuations.removeLast();
+    }
+    notifyListeners();
+  }
 
   /// code → 表格算区间收益用的净值样本（最早一条 + 近 5 年）
   Map<String, List<NavPoint>> navSamples = {};
