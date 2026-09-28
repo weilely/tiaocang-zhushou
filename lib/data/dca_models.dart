@@ -39,6 +39,13 @@ class DcaPlan {
   String note;
   DateTime createdAt;
 
+  /// **每期申购费率（%）** —— 定投也要算手续费（用户 2026-09-25 定的口径）
+  ///
+  /// 为什么不去套「记一笔」里那个账户佣金率：场外申购费（常见 0.1%）和券商佣金
+  /// （他那账户是万0.85）根本不是一回事，量级差十几倍，所以**每个计划单独填**。
+  /// 0 = 不计手续费。计算规则见 [dcaFeeFor]。
+  double feeRate;
+
   DcaPlan({
     this.id,
     required this.accountId,
@@ -50,6 +57,7 @@ class DcaPlan {
     this.lastRunDate,
     this.enabled = true,
     this.note = '',
+    this.feeRate = 0,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
@@ -75,6 +83,7 @@ class DcaPlan {
         'enabled': enabled ? 1 : 0,
         'note': note,
         'created_at': createdAt.millisecondsSinceEpoch,
+        'fee_rate': feeRate,
       };
 
   factory DcaPlan.fromMap(Map<String, Object?> m) {
@@ -92,6 +101,8 @@ class DcaPlan {
           last <= 0 ? null : DateTime.fromMillisecondsSinceEpoch(last),
       enabled: ((m['enabled'] as num?)?.toInt() ?? 1) == 1,
       note: (m['note'] as String?) ?? '',
+      // 老库/老备份没有这一列 → 0（不计手续费），不许报错
+      feeRate: (m['fee_rate'] as num?)?.toDouble() ?? 0,
       createdAt: DateTime.fromMillisecondsSinceEpoch(
           (m['created_at'] as num?)?.toInt() ??
               DateTime.now().millisecondsSinceEpoch),
@@ -109,6 +120,7 @@ class DcaPlan {
     DateTime? lastRunDate,
     bool? enabled,
     String? note,
+    double? feeRate,
   }) =>
       DcaPlan(
         id: id ?? this.id,
@@ -121,6 +133,7 @@ class DcaPlan {
         lastRunDate: lastRunDate ?? this.lastRunDate,
         enabled: enabled ?? this.enabled,
         note: note ?? this.note,
+        feeRate: feeRate ?? this.feeRate,
         createdAt: createdAt,
       );
 }
@@ -142,6 +155,9 @@ class DcaRunReport {
   /// 因为标的已清仓而停用的计划数
   int disabledPlans = 0;
 
+  /// 这些补记期一共算出来的手续费（元）—— 现金支出里已经含它
+  double feeTotal = 0;
+
   final List<String> messages = [];
 
   bool get hasAnything =>
@@ -152,7 +168,10 @@ class DcaRunReport {
 
   String get summary {
     final parts = <String>[];
-    if (created > 0) parts.add('已按定投计划补记 $created 笔');
+    if (created > 0) {
+      final fee = feeTotal > 0 ? '（含手续费 ¥${feeTotal.toStringAsFixed(2)}）' : '';
+      parts.add('已按定投计划补记 $created 笔$fee');
+    }
     if (skippedRecorded > 0) {
       parts.add('$skippedRecorded 期当天已记过定投，未重复补');
     }

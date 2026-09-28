@@ -86,6 +86,7 @@ class DcaManagePage extends StatelessWidget {
     final asset = state.assetsById[p.assetId];
     final account = state.accountsById[p.accountId];
     final next = nextDcaDate(p, DateTime.now());
+    final fee = dcaFeeFor(amount: p.amount, feeRatePct: p.feeRate);
     final generated = state.txns
         .where((t) => t.accountId == p.accountId && t.assetId == p.assetId)
         .where((t) => t.note.startsWith('定投'))
@@ -116,6 +117,7 @@ class DcaManagePage extends StatelessWidget {
             '${asset?.code ?? ''} · ${account?.name ?? ''}\n'
             '下次扣款 ${next == null ? '--' : fmtDate(next)}'
             ' · 已补记 $generated 笔'
+            '${fee > 0 ? ' · 手续费 ¥${fee.toStringAsFixed(2)}/期' : ''}'
             '${p.note.isEmpty ? '' : ' · ${p.note}'}',
             style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
           ),

@@ -3710,6 +3710,10 @@ class AppState extends ChangeNotifier {
             report.skippedNoPrice++;
             continue;
           }
+          // 每期手续费 = 每期金额 × 该计划的申购费率（%）。
+          // 每期金额是**买入金额**，费用另外加 —— 现金支出由 saveTxnAndLinkedCash
+          // 按「金额 + 手续费」写（用户 2026-09-25 定的口径）。
+          final fee = dcaFeeFor(amount: plan.amount, feeRatePct: plan.feeRate);
           // 定投买入同样要扣现金，否则这笔钱只进了持仓、没从余额里出
           await saveTxnAndLinkedCash(Txn(
             accountId: plan.accountId,
@@ -3719,10 +3723,11 @@ class AppState extends ChangeNotifier {
             amount: plan.amount,
             shares: shares,
             price: ref.price,
-            fee: 0,
+            fee: fee,
             note: plan.note.isEmpty ? '定投' : '定投 · ${plan.note}',
           ));
           report.created++;
+          report.feeTotal += fee;
           advancedTo = ref.date;
           touched = true;
         }

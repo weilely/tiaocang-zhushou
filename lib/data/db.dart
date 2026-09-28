@@ -13,8 +13,9 @@ class AppDatabase {
   /// v2 securities，v3 dca_plans，v4 watchlist/nav_history/cash_txns，
   /// v5 给 cash_txns 加 src_txn_id（交易联动的现金流水），
   /// v6 给 assets 加 link_code，v7 macro_history（股债利差每日累积），
-  /// v8 调仓目标按账户分开（targets 加 account_id，唯一键改成 账户+标的）
-  static const int _dbVersion = 8;
+  /// v8 调仓目标按账户分开（targets 加 account_id，唯一键改成 账户+标的），
+  /// v9 给 dca_plans 加 fee_rate（每期申购费率 %，定投也要算手续费）
+  static const int _dbVersion = 9;
 
   Database? _db;
 
@@ -153,6 +154,10 @@ class AppDatabase {
       // 调仓目标改为「按账户」存：老库的 targets 是全局一张表，
       // 唯一键还是 key（同一只标的只能有一条），必须整表重建才能改约束
       await _migrateTargetsToAccounts(d);
+    }
+    if (oldVersion < 9) {
+      // 定投也要算手续费（用户 2026-09-25）：每期申购费率（%），老计划默认 0 = 不计
+      await _addColumnIfMissing(d, 'dca_plans', 'fee_rate', 'REAL NOT NULL DEFAULT 0');
     }
   }
 
@@ -317,7 +322,8 @@ class AppDatabase {
         last_run_date INTEGER NOT NULL DEFAULT 0,
         enabled       INTEGER NOT NULL DEFAULT 1,
         note          TEXT    NOT NULL DEFAULT '',
-        created_at    INTEGER NOT NULL
+        created_at    INTEGER NOT NULL,
+        fee_rate      REAL    NOT NULL DEFAULT 0
       )
     ''');
     await d.execute(

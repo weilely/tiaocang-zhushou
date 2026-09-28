@@ -46,6 +46,7 @@ class _DcaPlanEditor extends StatefulWidget {
 
 class _DcaPlanEditorState extends State<_DcaPlanEditor> {
   final _amount = TextEditingController();
+  final _feeRate = TextEditingController();
   DcaFrequency _freq = DcaFrequency.monthly;
   int _day = 1;
   late DateTime _start;
@@ -64,14 +65,33 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
       _day = e.dayOfPeriod;
       _start = e.startDate;
       _note.text = e.note;
+      // 0 不预填成 "0"，留空更好填
+      _feeRate.text = e.feeRate > 0 ? _trimNum(e.feeRate) : '';
     }
   }
 
   @override
   void dispose() {
     _amount.dispose();
+    _feeRate.dispose();
     _note.dispose();
     super.dispose();
+  }
+
+  static String _trimNum(double v) {
+    var s = v.toStringAsFixed(4);
+    if (s.contains('.')) {
+      s = s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+    }
+    return s;
+  }
+
+  /// 当前输入算出来的「每期手续费 / 每期实际支出」
+  ({double fee, double total}) get _feeNow {
+    final amount = double.tryParse(_amount.text.trim()) ?? 0;
+    final rate = double.tryParse(_feeRate.text.trim()) ?? 0;
+    final fee = dcaFeeFor(amount: amount, feeRatePct: rate);
+    return (fee: fee, total: amount + fee);
   }
 
   @override
@@ -98,9 +118,31 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
             TextField(
               controller: _amount,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(labelText: '每期金额（元）', prefixText: '¥ '),
             ),
             const SizedBox(height: 16),
+
+            // 每期申购费率：场外申购费跟券商佣金不是一回事，所以**按计划单独填**
+            TextField(
+              controller: _feeRate,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                labelText: '每期申购费率（%）',
+                suffixText: '%',
+                helperText: '填 0.1 = 申购费 0.1%；留空或填 0 = 不计手续费',
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '每期手续费 ¥${_feeNow.fee.toStringAsFixed(2)}'
+              ' · 每期实际支出 ¥${_feeNow.total.toStringAsFixed(2)}'
+              '\n（手续费另外加：份额按「每期金额 ÷ 净值」买，现金扣「金额 + 手续费」）',
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
+            ),
+            const SizedBox(height: 14),
 
             Text('频率', style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
             const SizedBox(height: 6),
@@ -262,6 +304,7 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
       dayOfPeriod: _day,
       startDate: _start,
       note: _note.text.trim(),
+      feeRate: (double.tryParse(_feeRate.text.trim()) ?? 0).clamp(0, 100),
     );
     await st.saveDcaPlan(plan);
     final report = await st.runDueDca(manual: true);

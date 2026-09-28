@@ -277,6 +277,74 @@ void main() {
     });
   });
 
+  // ---------------- 定投的手续费 ----------------
+  //
+  // 用户 2026-09-25：「定投计划应该考虑费用问题，还有所有交易产生的费用是合并到现金流里的，
+  // 假如买入3000元，费用2.5元，那么支出就是302.5元」
+
+  group('每期手续费 = 每期金额 × 申购费率%', () {
+    test('他选的费率口径：0.1% 下 300/900/1800 分别是 0.30/0.90/1.80', () {
+      expect(dcaFeeFor(amount: 300, feeRatePct: 0.1), closeTo(0.30, 1e-9));
+      expect(dcaFeeFor(amount: 900, feeRatePct: 0.1), closeTo(0.90, 1e-9));
+      expect(dcaFeeFor(amount: 1800, feeRatePct: 0.1), closeTo(1.80, 1e-9));
+    });
+
+    test('钱落到分（四舍五入）', () {
+      // 1234.56 × 0.1% = 1.23456 → 1.23
+      expect(dcaFeeFor(amount: 1234.56, feeRatePct: 0.1), closeTo(1.23, 1e-9));
+      // 5000 × 0.15% = 7.5
+      expect(dcaFeeFor(amount: 5000, feeRatePct: 0.15), closeTo(7.5, 1e-9));
+    });
+
+    test('费率留空/为 0 → 不计手续费（不是猜一个账户佣金率）', () {
+      expect(dcaFeeFor(amount: 3000, feeRatePct: 0), 0);
+      expect(dcaFeeFor(amount: 3000, feeRatePct: -1), 0);
+    });
+
+    test('金额非法 → 0', () {
+      expect(dcaFeeFor(amount: 0, feeRatePct: 0.1), 0);
+      expect(dcaFeeFor(amount: -100, feeRatePct: 0.1), 0);
+      expect(dcaFeeFor(amount: double.nan, feeRatePct: 0.1), 0);
+      expect(dcaFeeFor(amount: double.infinity, feeRatePct: 0.1), 0);
+      expect(dcaFeeFor(amount: 1000, feeRatePct: double.nan), 0);
+    });
+
+    test('他的例子：买入 3000、费率按 0.0833% → 费约 2.5，支出 3002.50', () {
+      final fee = dcaFeeFor(amount: 3000, feeRatePct: 0.0833);
+      expect(fee, closeTo(2.50, 0.01));
+      expect(3000 + fee, closeTo(3002.50, 0.01));
+    });
+
+    test('计划里的费率能原样存读（DB v9 新列）', () {
+      final p = DcaPlan(
+        accountId: 1,
+        assetId: 2,
+        amount: 1800,
+        frequency: DcaFrequency.weekly,
+        dayOfPeriod: 4,
+        startDate: DateTime(2026, 9, 18),
+        feeRate: 0.1,
+      );
+      final back = DcaPlan.fromMap(p.toMap());
+      expect(back.feeRate, closeTo(0.1, 1e-9));
+      expect(p.toMap()['fee_rate'], closeTo(0.1, 1e-9));
+      // 老库/老备份的行没有这一列 → 0，不许报错
+      final legacy = p.toMap()..remove('fee_rate');
+      expect(DcaPlan.fromMap(legacy).feeRate, 0);
+    });
+
+    test('报告里会报出补记期数的手续费合计', () {
+      final r = DcaRunReport()
+        ..created = 3
+        ..feeTotal = 0.90;
+      expect(r.summary, contains('已按定投计划补记 3 笔'));
+      expect(r.summary, contains('含手续费 ¥0.90'));
+      // 没手续费就别多写一句
+      final r2 = DcaRunReport()..created = 1;
+      expect(r2.summary, '已按定投计划补记 1 笔');
+    });
+  });
+
   group('取价与份额取整', () {
     final prices = {
       '2026-09-11': 4.579, // 周五

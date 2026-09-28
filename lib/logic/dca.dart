@@ -137,6 +137,26 @@ DateTime? nextDcaDate(DcaPlan plan, DateTime today) {
   return future.first;
 }
 
+/// 一期定投的手续费（元）＝ 每期金额 × **每期申购费率（%）**，钱落到分。
+///
+/// 口径（用户 2026-09-25 拍板）：**每期金额是「买入金额」，手续费另外加** ——
+/// 份额照旧按「金额 ÷ 净值」算，现金支出 = `金额 + 手续费`
+/// （他的例子：买入 3000 元、费用 2.5 元 → 现金支出 3002.50 元）。
+///
+/// 费率为 0 或金额非法 → 0（不计手续费）。**刻意不去套账户里那个券商佣金率**：
+/// 场外申购费（常见 0.1%）和券商佣金（他账户是万0.85）差十几倍，所以费率由
+/// 每个计划自己填（见 `DcaPlan.feeRate`）。
+double dcaFeeFor({required double amount, required double feeRatePct}) {
+  if (amount <= 0 || feeRatePct <= 0) return 0;
+  if (amount.isNaN ||
+      amount.isInfinite ||
+      feeRatePct.isNaN ||
+      feeRatePct.isInfinite) {
+    return 0;
+  }
+  return double.parse((amount * feeRatePct / 100).toStringAsFixed(2));
+}
+
 /// 该「账户 + 标的」在 [days] 里是否**已经有一笔定投记录** —— 补记时用来跳过。
 ///
 /// 用户 2026-09-25 的口径：「**补记功能要检查补记当天是否有定投记录，有的话就应该不补**」。
