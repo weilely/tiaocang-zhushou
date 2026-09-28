@@ -111,17 +111,58 @@ void main() {
     });
   });
 
-  group('常用指数清单', () {
+  group('实测收录的种子清单', () {
     test('只放实测收录的（8 个），符号格式与实测一致', () {
-      expect(kCommonIndexSymbols.length, 8);
-      final symbols = kCommonIndexSymbols.map((e) => e.symbol).toSet();
+      expect(kVerifiedIndexSymbols.length, 8);
+      final symbols = kVerifiedIndexSymbols.map((e) => e.symbol).toSet();
       // 这两个是实测逐个验过能出股息率的
       expect(symbols.contains('SH000922'), isTrue); // 中证红利 4.26%
       expect(symbols.contains('CSIH30269'), isTrue); // 红利低波 4.42%
-      for (final e in kCommonIndexSymbols) {
+      for (final e in kVerifiedIndexSymbols) {
         expect(e.name.trim(), isNotEmpty);
         expect(e.symbol, matches(RegExp(r'^(SH|SZ|CSI)')));
       }
+    });
+  });
+
+  group('只有代码时的符号猜测（中证目录里没有东财 QuoteID）', () {
+    test('中证系（H/9 开头）先试 CSI', () {
+      expect(symbolGuessesForCode('H30269').first, 'CSIH30269');
+      expect(symbolGuessesForCode('930740').first, 'CSI930740');
+      expect(symbolGuessesForCode('931238').first, 'CSI931238');
+    });
+
+    test('沪市 000xxx 先试 SH（蛋卷里 000922 = SH000922，实测过）', () {
+      expect(symbolGuessesForCode('000922').first, 'SH000922');
+      expect(symbolGuessesForCode('000300').first, 'SH000300');
+    });
+
+    test('深市/国证（399/98 开头）先试 SZ', () {
+      expect(symbolGuessesForCode('399006').first, 'SZ399006');
+      expect(symbolGuessesForCode('980080').first, 'SZ980080');
+    });
+
+    test('三个候选都会给全（成不成由返回的 name 判），空代码给空表', () {
+      expect(symbolGuessesForCode('000922'),
+          ['SH000922', 'CSI000922', 'SZ000922']);
+      expect(symbolGuessesForCode('  h30269 '),
+          ['CSIH30269', 'SHH30269', 'SZH30269']); // 大小写/空格都容错
+      expect(symbolGuessesForCode(''), isEmpty);
+    });
+  });
+
+  group('两来源的名字比对（只用于挑更可信的猜测）', () {
+    test('相等 / 互相包含 / 噪声差异都算同一个指数', () {
+      expect(indexNameMatches('中证红利', '中证红利指数'), isTrue); // 去「指数」
+      expect(indexNameMatches('中证红利', '中证红利'), isTrue);
+      expect(indexNameMatches('黄金股票', 'SSH黄金股票'), isTrue); // 实测会遇到的
+      expect(indexNameMatches('沪深300', '沪深 300'), isTrue);
+    });
+
+    test('不同指数不算（宁可显示两个名字，也不能张冠李戴）', () {
+      expect(indexNameMatches('中证红利', '沪深300'), isFalse);
+      expect(indexNameMatches('中证红利', ''), isFalse);
+      expect(indexNameMatches('', '中证红利'), isFalse);
     });
   });
 }

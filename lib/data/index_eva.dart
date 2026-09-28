@@ -230,25 +230,84 @@ class IndexEvaSource {
     }
   }
 
-  /// 从一个候选里试出**真正可用**的蛋卷估值：逐个符号猜，用返回的 `name` 验证。
+  /// 从一个候选里试出**真正可用**的蛋卷估值：逐个符号猜。
+  ///
+  /// 给了 [expectName] 时**优先要名字对得上的那个**（中证目录里的官方名 vs 蛋卷
+  /// 返回的名）：全都不对但又确实取到了，就把它当兜底返回 —— **由界面把两个名字
+  /// 都显示出来**，而不是悄悄拿别的指数的估值冒充（规矩：拿不准就别编）。
   ///
   /// 返回 null = 这个指数蛋卷没收录（或网络失败）——**界面必须如实说**。
   Future<IndexValuation?> fetchCandidate(
     IndexCandidate c, {
+    String? expectName,
     Duration timeout = const Duration(seconds: 12),
   }) async {
+    IndexValuation? fallback;
     for (final s in c.symbolGuesses) {
       final v = await fetch(s, timeout: timeout);
-      if (v != null) return v;
+      if (v == null) continue;
+      if (expectName == null || indexNameMatches(v.name, expectName)) return v;
+      fallback ??= v;
     }
-    return null;
+    return fallback;
   }
 }
 
-/// 首页/快捷入口里给的**常用指数**（都是 2026-09-28 实测蛋卷收录的）
+/// 只有代码（例如来自中证官方目录、没有东财 `QuoteID`）时的蛋卷符号猜测。
 ///
-/// 放实测过的，不放"应该存在"的 —— 免得用户点进去看到一片"未收录"。
-const List<({String symbol, String name})> kCommonIndexSymbols = [
+/// 与 [IndexCandidate.symbolGuesses] 的差别：没有市场号可参考，只能按**代码形状**
+/// 排先后（都是实测过的规律）：中证系（`H`/`9` 开头）先试 `CSI`；沪市 `000xxx`
+/// 先试 `SH`；深市/国证（`399`/`98` 开头）先试 `SZ`。**成不成由蛋卷返回的 name 判**。
+List<String> symbolGuessesForCode(String rawCode) {
+  final code = rawCode.trim().toUpperCase();
+  final out = <String>[];
+  void add(String s) {
+    if (!out.contains(s)) out.add(s);
+  }
+
+  if (code.isEmpty) return out;
+  // `98`/`399` 开头是深市、国证（980xxx 也是 9 开头，所以要先判它）；
+  // 其余 9 开头（93xxxx）与 H 开头是中证系。
+  final sz = code.startsWith('399') || code.startsWith('98');
+  final csi = !sz && (code.startsWith('H') || code.startsWith('9'));
+  if (csi) {
+    add('CSI$code');
+    add('SH$code');
+    add('SZ$code');
+  } else if (sz) {
+    add('SZ$code');
+    add('CSI$code');
+    add('SH$code');
+  } else {
+    add('SH$code');
+    add('CSI$code');
+    add('SZ$code');
+  }
+  return out;
+}
+
+/// 两个来源给的指数名是不是同一个指数（宽松比对，只用于**挑更可信的那个猜测**）
+///
+/// 去掉空格/括号/「指数」等噪声后，相等或互相包含就算对得上 —— 实测会遇到的差异：
+/// 东财叫「SSH黄金股票」、中证目录叫「中证沪深港黄金产业股票」、蛋卷可能叫
+/// 「黄金股票」，**所以不能做严格相等**。
+bool indexNameMatches(String a, String b) {
+  String norm(String s) => s
+      .replaceAll(RegExp(r'[\s（）()\[\]·、,，.\-_/]'), '')
+      .replaceAll('指数', '')
+      .replaceAll('全收益', '')
+      .toLowerCase();
+  final x = norm(a), y = norm(b);
+  if (x.isEmpty || y.isEmpty) return false;
+  return x == y || x.contains(y) || y.contains(x);
+}
+
+/// **实测蛋卷收录**的指数种子（2026-09-28 逐个验过能出股息率）。
+///
+/// ⚠️ 2026-09-29 起**页面不再拿它当入口**（用户口径：「想要的是通用模版，
+/// 不针对个人偏好」→ 入口改成中证官方全量目录 3001 条，见 `index_catalog.dart`）。
+/// 留着只作两用：①覆盖率测试的样本；②排"我猜的符号"对不对。
+const List<({String symbol, String name})> kVerifiedIndexSymbols = [
   (symbol: 'SH000922', name: '中证红利'),
   (symbol: 'CSIH30269', name: '红利低波'),
   (symbol: 'SH000015', name: '上证红利'),

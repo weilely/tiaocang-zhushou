@@ -17,6 +17,7 @@ import '../data/dca_source.dart';
 import '../data/file_store.dart';
 import '../data/fund_detail.dart';
 import '../data/hithink_api.dart';
+import '../data/index_catalog.dart';
 import '../data/index_eva.dart';
 import '../data/macro_source.dart';
 import '../data/market_api.dart';
@@ -262,6 +263,68 @@ class AppState extends ChangeNotifier {
       recentIndexValuations.removeLast();
     }
     notifyListeners();
+  }
+
+  // ---- 指数目录（通用查询页的分类 / 搜索 / 排序底座）----------------------
+  //
+  // 中证指数官网的**官方全量指数表**（3001 条，带系列/资产类别/分类/地区/币种/
+  // 成分数/点位/月度收益），一次拉全、落盘缓存 7 天 → 之后离线也能搜能排。
+  // 它**不含估值**：页面上"股息率 / PE / PB"仍要按指数逐个去取（见 index_eva）。
+  final IndexCatalogSource indexCatalogSource = IndexCatalogSource();
+
+  IndexCatalog? indexCatalog;
+
+  /// 正在拉目录（首次约 10 秒：4 页并发）
+  bool indexCatalogLoading = false;
+
+  /// 拉取进度 `已完成/总页数`
+  String indexCatalogProgress = '';
+
+  /// 拉取失败且有旧缓存时**不用它当"没有数据"** —— 由界面说明"这份是旧的"
+  String? indexCatalogError;
+
+  /// 加载指数目录：有新鲜缓存直接给，否则拉一次；失败回退旧缓存
+  Future<IndexCatalog?> loadIndexCatalog({
+    bool force = false,
+    void Function(int done, int total)? onProgress,
+  }) async {
+    if (!force && indexCatalog != null) return indexCatalog;
+    indexCatalogLoading = true;
+    indexCatalogProgress = '';
+    indexCatalogError = null;
+    notifyListeners();
+    try {
+      final c = force
+          ? await indexCatalogSource.refresh()
+          : await indexCatalogSource.load(onProgress: (done, total) {
+              indexCatalogProgress = '$done/$total';
+              onProgress?.call(done, total);
+              notifyListeners();
+            });
+      indexCatalog = c;
+      return c;
+    } catch (e) {
+      indexCatalogError = '指数目录取数失败（$e）';
+      return indexCatalog; // 有旧的先给旧的，没有就 null（界面如实说）
+    } finally {
+      indexCatalogLoading = false;
+      indexCatalogProgress = '';
+      notifyListeners();
+    }
+  }
+
+  /// 按**中证目录里的代码**查估值（目录里没有东财 `QuoteID`，符号按形状猜）
+  Future<IndexValuation?> loadIndexByCode(String code, {String? name}) async {
+    for (final s in symbolGuessesForCode(code)) {
+      final cached = _indexValuations[s];
+      if (cached != null) return cached;
+    }
+    final v = await indexEva.fetchCandidate(
+      IndexCandidate(quoteId: '', code: code, name: name ?? code),
+      expectName: name,
+    );
+    if (v != null) _rememberIndexValuation(v);
+    return v;
   }
 
   /// code → 表格算区间收益用的净值样本（最早一条 + 近 5 年）
