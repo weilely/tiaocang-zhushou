@@ -241,14 +241,6 @@ class AppState extends ChangeNotifier {
     return list;
   }
 
-  /// 指定账户的持仓市值合计（「按当前占比」填充目标时用）
-  double marketValueOf(int? accountId) =>
-      summarize(positionsOf(accountId)).marketValue;
-
-  /// 指定账户的按标的分布（同上）
-  List<AllocationSlice> allocationOf(int? accountId) =>
-      allocationByAsset(positionsOf(accountId));
-
   /// 指定账户的持仓；[accountId] 为 null = 全部账户（同 [allPositions]）
   List<Position> positionsOf(int? accountId) {
     if (accountId == null) return allPositions;
@@ -3161,9 +3153,6 @@ class AppState extends ChangeNotifier {
           shares: shares,
           nav: fq.nav,
           baseNav: liveNav?.price ?? base?.nav,
-          navDate: (liveNav != null && liveNav.infoDate.isNotEmpty)
-              ? liveNav.infoDate
-              : base?.date,
           pct: fq.pct,
           navIsActual: fq.actual,
           realtimePct: estMode,
@@ -3191,7 +3180,6 @@ class AppState extends ChangeNotifier {
           realtimePrice: q?.price,
         ),
         baseNav: base?.nav,
-        navDate: q?.infoDate.isNotEmpty == true ? q!.infoDate : base?.date,
         pct: q?.changePct ?? 0,
         navIsActual: true,
         realtimePct: q != null,

@@ -465,14 +465,9 @@ class _RebalancePageState extends State<RebalancePage> {
                     digits: isFund ? null : 2) // 场内报价按 2 位小数
                 : '--',
             hint,
-            // 日期后缀只在**有估值依据**时才有意义（说明预估是基于哪天的净值算的）；
-            // 场内看现价日期，非估值模式（非交易日）干脆不写日期。
-            suffix: () {
-              final d = t.navDate;
-              if (d == null || d.isEmpty) return null;
-              if (!isFund) return null; // 标签已经写明「现价」，不再重复
-              return t.estMode ? '预估净值（$d）' : null;
-            }(),
+            // 日期后缀只在**估值模式**下有，写的是**估值当天（今天）** ——
+            // 「预估净值」估的就是今天的净值，标成上一交易日的净值日期是错的。
+            suffix: estNavDateSuffix(estMode: t.estMode),
           ),
           _infoRow(
             // 股票/ETF 说「股数」，场外基金说「份额」

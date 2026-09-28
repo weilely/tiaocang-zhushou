@@ -414,11 +414,6 @@ class _SettingsPageState extends State<SettingsPage> {
     return CollapsibleSectionCard(
       title: '$title（${held.length} 只）',
       initiallyExpanded: false,
-      trailing: TextButton.icon(
-        onPressed: () => _fillByCurrent(st, accountId, held),
-        icon: const Icon(Icons.auto_fix_high, size: 18),
-        label: const Text('按当前占比'),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -503,22 +498,6 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     );
-  }
-
-  /// 按**该账户**的当前市值占比一键填充（省得手填一遍）
-  void _fillByCurrent(AppState st, int accountId, List<Asset> held) {
-    final total = st.marketValueOf(accountId);
-    if (total <= 0) return;
-    final byCode = {
-      for (final s in st.allocationOf(accountId))
-        s.key.replaceFirst('asset:', ''): s.value,
-    };
-    setState(() {
-      for (final a in held) {
-        final v = byCode[a.code] ?? 0;
-        _targetCtrl[_targetKey(accountId, a.code)]?.text = _pctText(v / total);
-      }
-    });
   }
 
   /// 保存**该账户**的目标

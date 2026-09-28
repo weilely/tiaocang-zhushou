@@ -46,9 +46,6 @@ class PlanTarget {
   /// 场外基金的基准（最新已公布净值）
   final double? baseNav;
 
-  /// 基准净值的日期
-  final String? navDate;
-
   /// 当日涨幅（%）：今天的净值已公布时是**真实涨幅**，否则是估算值
   final double pct;
 
@@ -84,7 +81,6 @@ class PlanTarget {
     required this.shares,
     required this.nav,
     this.baseNav,
-    this.navDate,
     this.pct = 0,
     this.navIsActual = false,
     this.realtimePct = false,
@@ -277,6 +273,21 @@ bool isFundEstMode({
   if (navActual || overridden) return false;
   if (estPct == null) return false;
   return estPct.abs() > 1e-9;
+}
+
+/// 卡片上「预估净值」那行后面缀的日期文案 —— 写的是**估值当天**（也就是今天）。
+///
+/// 用户 2026-09-25 报的：「调仓页面估值模式下，预估净值日期不对，应该是估值当天日期」。
+/// 早先这里标的是**作为估值基准的那份净值**的日期（上一交易日），
+/// 可「预估净值」估的是**今天**的净值 —— 日期该跟着估值走。
+/// 非估值模式返回 null：那会儿净值已经是真实值，不必再标日期。
+String? estNavDateSuffix({required bool estMode, DateTime? now}) {
+  if (!estMode) return null;
+  final d = now ?? DateTime.now();
+  final key = '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+  return '预估净值（$key）';
 }
 
 /// 实时行情里带的是不是**今天已公布的净值**（不是盘中估值）。
