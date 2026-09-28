@@ -265,7 +265,7 @@ class _RedeemFeeDialogState extends State<_RedeemFeeDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('改的是**费率（%）**，持有天数区间沿用当前档位。',
+              Text('改的是费率（%），持有天数区间沿用当前档位。',
                   style: TextStyle(fontSize: 12, color: Theme.of(ctx).hintColor)),
               const SizedBox(height: 10),
               for (var i = 0; i < _tiers.length; i++)

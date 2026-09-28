@@ -55,7 +55,7 @@ class DcaManagePage extends StatelessWidget {
                 ),
                 Text(
                   '关掉后不会自动生成任何交易，只在你手动点右上角「立即补记」时才补。\n'
-                  '每一期都用**那一期真实的净值/收盘价**算份额；取不到价格就跳过，下次重试。',
+                  '每一期都用那一期真实的净值/收盘价算份额；取不到价格就跳过，下次重试。',
                   style: TextStyle(
                       fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
                 ),

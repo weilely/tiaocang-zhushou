@@ -423,7 +423,7 @@ class _DividendCheckPageState extends State<DividendCheckPage> {
       '事件来自东财的净值与累计净值（每份分红 = 当天「累计净值 − 单位净值」的增量；'
       '拆分 = 折算系数）。与同花顺分红表的交叉核对见各基金的档案页。\n'
       '补记按「推荐方式」（红利再投：只加份额、不动现金）写入，'
-      '备注带日期因而**不会重复记**；不到 ¥1 的分红不补（残份额造成的分币级事件）。',
+      '备注带日期因而不会重复记；不到 ¥1 的分红不补（残份额造成的分币级事件）。',
       style: TextStyle(
           fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
     );

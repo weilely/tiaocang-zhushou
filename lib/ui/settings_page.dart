@@ -821,7 +821,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
             ],
           ),
-          Text('Key 会**一起进备份**（备份文件里有明文，别外传）。', style: hint),
+          Text('Key 会一起进备份（备份文件里有明文，别外传）。', style: hint),
         ],
       ),
     );
