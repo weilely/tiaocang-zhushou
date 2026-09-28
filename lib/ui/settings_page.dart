@@ -829,33 +829,13 @@ class _SettingsPageState extends State<SettingsPage> {
 
   /// 用**弹框**改 Key：不常驻在页面上（免得误填/误改）；保存即持久化
   Future<void> _editHithinkKey(AppState st) async {
-    final ctrl = TextEditingController(text: st.hithinkApiKey ?? '');
-    final ok = await showDialog<bool>(
+    // 输入框由弹框自己持有并随它一起销毁 —— 在外面建控制器再 dispose 会
+    // 撞上"弹框还在播放退场动画时控制器已被销毁"的断言
+    final text = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('同花顺 API Key'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          obscureText: true, // 不明文回显
-          decoration: const InputDecoration(
-            labelText: 'API Key',
-            hintText: '粘贴 fuyao.aicubes.cn 申请的 Key',
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存')),
-        ],
-      ),
+      builder: (_) => _HithinkKeyDialog(initial: st.hithinkApiKey ?? ''),
     );
-    final text = ctrl.text.trim();
-    ctrl.dispose();
-    if (ok != true) return;
+    if (text == null) return; // 取消
     await st.setHithinkApiKey(text);
     if (!mounted) return;
     _snack(text.isEmpty ? '已清除同花顺 Key' : '已保存同花顺 Key');
@@ -1809,5 +1789,52 @@ class _SettingsPageState extends State<SettingsPage> {
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+}
+
+/// 同花顺 Key 的弹框：打码输入，保存回传文本、取消回传 null
+///
+/// 输入控制器由弹框自己持有并销毁（在外面建再 dispose 会撞上退场动画期间的断言）。
+class _HithinkKeyDialog extends StatefulWidget {
+  const _HithinkKeyDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_HithinkKeyDialog> createState() => _HithinkKeyDialogState();
+}
+
+class _HithinkKeyDialogState extends State<_HithinkKeyDialog> {
+  late final TextEditingController _ctrl =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('同花顺 API Key'),
+      content: TextField(
+        controller: _ctrl,
+        autofocus: true,
+        obscureText: true, // 不明文回显
+        decoration: const InputDecoration(
+          labelText: 'API Key',
+          hintText: '粘贴 fuyao.aicubes.cn 申请的 Key',
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context, null),
+            child: const Text('取消')),
+        FilledButton(
+            onPressed: () => Navigator.pop(context, _ctrl.text.trim()),
+            child: const Text('保存')),
+      ],
+    );
   }
 }

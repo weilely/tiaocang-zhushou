@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -333,8 +334,14 @@ class _CollapsibleSectionCardState extends State<CollapsibleSectionCard> {
 
   void _toggle() {
     setState(() => _open = !_open);
-    // 存起来，下次启动保持不变
-    AppDatabase.instance.setSetting(_key, _open ? '1' : '0');
+    // 存起来，下次启动保持不变。
+    // **存不上不影响展开**：widget 测试里没有 sqflite 的 databaseFactory，
+    // 这里不兜住的话点一下卡片就抛异常（设置页的组件测试全得靠它）。
+    unawaited(
+      AppDatabase.instance
+          .setSetting(_key, _open ? '1' : '0')
+          .catchError((Object _) {}),
+    );
     //
     // 收起让卡片变矮 = 列表内容变短，而 Flutter 在内容变短时**不会**把滚动位置
     // 夹回范围内：位置会停在新 maxScrollExtent **之外**。表现就是画面看着停在
