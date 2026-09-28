@@ -13,6 +13,7 @@ import '../logic/holding_import.dart';
 import '../logic/period_return.dart';
 import '../state/app_state.dart';
 import 'fund_profile_page.dart';
+import 'stock_profile_page.dart';
 import 'holding_import_page.dart';
 import 'widgets/common.dart';
 import 'widgets/macro_card.dart';
@@ -147,9 +148,11 @@ class _WatchlistPageState extends State<WatchlistPage> {
                           ? '还没有关注的标的'
                           : '这个分类下还没有标的',
                       onTap: _showNavHistory,
-                      // 点「代码 / 名称」默认开**基金档案页**（用户 2026-09-28）；
+                      // 点「代码 / 名称」默认开**资料页**（用户 2026-09-28）；
+                      // 基金/ETF → 基金档案（同花顺基金接口）；
+                      // 股票/指数 → 股票资料（估值 / 财务 / 分红，同花顺 A 股接口）
                       // 点行内别处仍是净值历史，长按还是菜单
-                      onIdentityTap: (r) => _showFundProfile(r),
+                      onIdentityTap: (r) => _openProfile(r),
                       onMenu: (r) => _itemMenu(st, r),
                     ),
                   ),
@@ -426,6 +429,14 @@ class _WatchlistPageState extends State<WatchlistPage> {
                 title: const Text('基金档案（重仓股 / 分红）'),
                 onTap: () => Navigator.pop(ctx, 'profile'),
               ),
+            // 股票/指数：股票资料（同花顺 A 股接口：估值 / 财务 / 分红送配）
+            if (r.item.kind == AssetKind.stock || r.item.kind == AssetKind.other)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.assessment_outlined),
+                title: const Text('股票资料（估值 / 财务）'),
+                onTap: () => Navigator.pop(ctx, 'stock'),
+              ),
             ListTile(
               dense: true,
               leading: const Icon(Icons.savings_outlined),
@@ -452,6 +463,8 @@ class _WatchlistPageState extends State<WatchlistPage> {
         await _showNavHistory(r);
       case 'profile':
         await _showFundProfile(r);
+      case 'stock':
+        await _showStockProfile(r);
       case 'move':
         final row = HoldingImportRow(
           code: r.item.code,
@@ -470,6 +483,32 @@ class _WatchlistPageState extends State<WatchlistPage> {
       case 'delete':
         await st.removeFromWatch(r.item.id!);
     }
+  }
+
+  /// 点「代码 / 名称」的分流：基金/ETF 走基金档案，股票/指数走股票资料
+  ///
+  /// 2026-09-28 之前这里**不分类型一律开基金档案页** —— 股票点进去是空页
+  /// （基金接口对股票取不到数）。现在按 [AssetKind] 分流。
+  Future<void> _openProfile(WatchRow r) async {
+    final kind = r.item.kind;
+    if (kind == AssetKind.fund || kind == AssetKind.etf) {
+      await _showFundProfile(r);
+    } else {
+      await _showStockProfile(r);
+    }
+  }
+
+  /// 打开股票资料页（同花顺 A 股接口：估值 / 财务指标 / 分红送配）
+  ///
+  /// 该股票三块都取不到时，页面自己会降级成「只看历史净值」。
+  Future<void> _showStockProfile(WatchRow r) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => StockProfilePage(
+        code: r.item.code,
+        name: r.item.displayName,
+        kind: r.item.kind,
+      ),
+    ));
   }
 
   /// 打开基金档案页（同花顺详情接口：档案 / 重仓股 / 分红）

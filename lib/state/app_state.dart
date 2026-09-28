@@ -25,6 +25,7 @@ import '../data/nav_repo.dart';
 import '../data/nav_source.dart';
 import '../data/securities_repo.dart';
 import '../data/securities_source.dart';
+import '../data/stock_detail.dart';
 import '../data/update_source.dart';
 import '../logic/backup.dart';
 import '../logic/benchmark.dart';
@@ -1714,6 +1715,114 @@ class AppState extends ChangeNotifier {
     } else {
       _fundDetails.remove(code.trim());
     }
+  }
+
+  /// 股票资料缓存（键 = 6 位代码）：与基金档案同一套规矩 ——
+  /// **点进去才拉、拉过就留着**，不进 60 秒行情刷新（详情接口有配额）。
+  final Map<String, StockDetailBundle> _stockDetails = {};
+
+  /// 已缓存的股票资料（null = 这次进程里还没拉过）
+  StockDetailBundle? stockDetailOf(String code) =>
+      _stockDetails[code.trim()];
+
+  /// 清掉某只股票（不传 = 全部）的资料缓存
+  void clearStockDetail([String? code]) {
+    if (code == null) {
+      _stockDetails.clear();
+    } else {
+      _stockDetails.remove(code.trim());
+    }
+  }
+
+  /// 拉一只**股票**的资料（估值 / 财务指标 / 分红送配），**点进去才拉**。
+  ///
+  /// 与 [loadFundDetail] 的差别：
+  /// - **没有"主档案"这一条**（同花顺 A 股侧没有公司简介/行业接口），
+  ///   所以三块谁失败都不抛，全挂成各自的 error 字段；三块全空时由界面
+  ///   降级成「只看历史净值」（见 [StockDetailBundle.hasNothing]）。
+  /// - 财务指标要**报告期**：`report` 实测生效且每期都有数据，所以这里从
+  ///   "上一个已披露季度"往回试 [stockReportCandidates]，取第一个有值的，
+  ///   **不写死年份**（跨年后端会变）。
+  /// - 估值接口只认 A 股（场外基金码会 1002），股票代码走 [HithinkApi.thscodeFor]。
+  Future<StockDetailBundle> loadStockDetail(
+    String code, {
+    bool force = false,
+  }) async {
+    final key = (await db.setting('hithinkApiKey'))?.trim() ?? '';
+    if (!hithink.enabled(key)) {
+      throw HithinkException('未配置同花顺 API Key（设置 → 同花顺数据源）');
+    }
+    final cached = _stockDetails[code.trim()];
+    if (!force && cached != null) return cached;
+
+    final thscode = HithinkApi.thscodeFor(code);
+    if (thscode == null) {
+      throw HithinkException('认不出这只股票的代码：$code');
+    }
+
+    // ① 估值：失败只记原因（同花顺没覆盖的股票会 1002）
+    StockValuation? valuation;
+    String? valuationError;
+    try {
+      final j = await hithink.stockValuations([thscode], key);
+      final v = StockValuation.fromJson(j);
+      if (v == null || v.isEmpty) {
+        valuationError = '这只股票没有估值数据（同花顺未覆盖）';
+      } else {
+        valuation = v;
+      }
+    } on HithinkException catch (e) {
+      valuationError = e.message;
+    }
+
+    // ② 财务指标：往回试报告期，第一个有值的就是它
+    StockFinancials? financials;
+    String? financialsError;
+    var lastErr = '';
+    for (final report in stockReportCandidates(DateTime.now())) {
+      try {
+        final f = StockFinancials.fromJson(
+          await hithink.stockDetail(
+              '/api/a-share/financials/indicators', thscode, key,
+              report: report),
+        );
+        if (!f.isEmpty) {
+          financials = f;
+          break;
+        }
+      } on HithinkException catch (e) {
+        lastErr = e.message;
+      }
+    }
+    if (financials == null) {
+      financialsError = lastErr.isEmpty ? '没有取到财务指标' : lastErr;
+    }
+
+    // ③ 分红送配：失败只记原因
+    //    （文档里的 `/api/a-share/corporate-actions` 实测 404，只有这条通）
+    var dividends = <StockDividendEvent>[];
+    String? dividendsError;
+    try {
+      final j = await hithink.stockDetail(
+          '/api/a-share/corporate-actions/adjustment-factors', thscode, key);
+      dividends = parseStockDividendEvents(j);
+    } on HithinkException catch (e) {
+      dividendsError = e.message;
+    }
+
+    final bundle = StockDetailBundle(
+      code: code.trim(),
+      valuation: valuation,
+      financials: financials,
+      dividends: dividends,
+      valuationError: valuationError,
+      financialsError: financialsError,
+      dividendsError: dividendsError,
+      fetchedAt: DateTime.now(),
+    );
+    _stockDetails[code.trim()] = bundle;
+    notifyListeners();
+    return bundle;
   }
 
   // ---------------- 场外赎回档位（用户 2026-09-28：得参考基金档案赎回费率） ----------------

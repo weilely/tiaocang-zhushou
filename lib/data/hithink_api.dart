@@ -292,6 +292,52 @@ class HithinkApi {
     return out;
   }
 
+  /// 拉取**A 股资料类**接口的信封（`{code,message,data}`）—— 股票专用。
+  ///
+  /// [path] 目前用三条（2026-09-28 真 Key 实测都通）：
+  /// `/api/a-share/valuations/snapshot`（估值，**带中文名**）、
+  /// `/api/a-share/financials/indicators?thscode=&report=`（财务指标，**必须带 report**）、
+  /// `/api/a-share/corporate-actions/adjustment-factors`（分红送配事件）。
+  ///
+  /// 与快照类不同，这里**失败会抛** [HithinkException]：资料是用户点进去主动要的，
+  /// 得把"为什么没有"如实说出来，不能静默显示成"没有数据"。
+  /// 而且这是**按需**接口（同花顺有 `/api/quota/*` 配额），调用方要缓存，
+  /// 别把它塞进 60 秒一轮的行情刷新。
+  Future<Map<String, dynamic>> stockDetail(
+    String path,
+    String thscode,
+    String apiKey, {
+    String? report,
+  }) async {
+    if (!enabled(apiKey)) {
+      throw HithinkException('未配置同花顺 API Key');
+    }
+    final extra = report == null || report.isEmpty
+        ? ''
+        : '&report=${Uri.encodeQueryComponent(report)}';
+    final item = await _get(
+      '$path?thscode=${Uri.encodeQueryComponent(thscode)}$extra',
+      apiKey,
+    );
+    return Map<String, dynamic>.from(item);
+  }
+
+  /// 拉**估值快照**（股票）：`thscodes` 是**逗号批量**（实测两只一起返回 total=2）。
+  ///
+  /// ⚠️ 实测**只认 A 股**：场外基金码（`021362.OF`）会得到 `1002 Unknown ...`。
+  Future<Map<String, dynamic>> stockValuations(
+    List<String> thscodes,
+    String apiKey,
+  ) async {
+    if (!enabled(apiKey) || thscodes.isEmpty) return const {};
+    final joined = thscodes.join(',');
+    final item = await _get(
+      '/api/a-share/valuations/snapshot?thscodes=${Uri.encodeQueryComponent(joined)}',
+      apiKey,
+    );
+    return Map<String, dynamic>.from(item);
+  }
+
   /// 通用 GET：返回响应信封（`{code,message,data}`）；`code!=0` 抛 [HithinkException]
   Future<Map> _get(String path, String apiKey) async {
     final url = '$base$path';
