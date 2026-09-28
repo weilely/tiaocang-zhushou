@@ -67,10 +67,14 @@ def main(argv):
     emit(f"{'settings':<10}: {len(d.get('settings') or {})}")
     sec = d.get('securities') or []
     nav = d.get('navHistory') or []
+    macro = d.get('macroHistory') or []
     emit(f"{'securities':<10}: {len(sec)}   （金融基础数据）")
     emit(f"{'navHistory':<10}: {len(nav)}   （历史净值）")
+    emit(f"{'macroHistory':<10}: {len(macro)}   （股债利差每日点）")
     if not nav:
         emit("  提示：这份备份没有历史净值（v1~v3 老备份如此；恢复时不会动本地净值表）")
+    if not macro:
+        emit("  提示：这份备份没有股债利差历史（恢复时不会动本地 macro_history）")
 
     emit("\n=== 账户 ===")
     for a in d.get('accounts') or []:
@@ -134,6 +138,15 @@ def main(argv):
         emit("\n=== 金融基础数据 ===")
         kinds = Counter(s.get('kind') for s in sec)
         emit("  按类型: " + ', '.join(f"{k}={v}" for k, v in sorted(kinds.items())))
+
+    if macro:
+        emit("\n=== 股债利差历史（macro_history）===")
+        dates = sorted(r.get('date') or '' for r in macro)
+        emit(f"  {len(macro)} 天：{dates[0]} ~ {dates[-1]}")
+        last = sorted(macro, key=lambda r: r.get('date') or '')[-3:]
+        for r in last:
+            emit(f"    {r.get('date')} hs300_pe={r.get('hs300_pe')}"
+                 f" cn10y={r.get('cn10y')} erp={r.get('erp')}")
 
     st = d.get('settings') or {}
     emit("\n=== 关键设置 ===")

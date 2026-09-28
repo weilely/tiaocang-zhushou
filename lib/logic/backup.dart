@@ -12,7 +12,7 @@ class BackupException implements Exception {
 }
 
 /// 全局备份：账户 + 标的（含分类）+ 交易流水 + **现金流水** + 再平衡目标 + 设置
-/// + 关注列表 + 定投计划 + **金融基础数据** + **历史净值**
+/// + 关注列表 + 定投计划 + **金融基础数据** + **历史净值** + **宏观估值历史**
 ///
 /// 行情缓存（quotes）刻意不备份——它是可随时重新抓取的临期数据，
 /// 备份它只会让文件变大且可能过期。
@@ -25,6 +25,11 @@ class BackupException implements Exception {
 /// 它们都是**可重抓但要花很久**的数据（净值要一只只补、基础数据要下全量），
 /// 所以值得进备份；存的是**原样的表行**（列名与建表语句一致），恢复时直接入表。
 /// 老备份（v1~v3）没有这两段，解码时按空处理、恢复时**不动**这两张表。
+///
+/// `macro_history`（股债利差每日一点，`macroRows`）是 v4 之后**纯新增**的一段：
+/// 它同样是「本地一天一点攒出来的历史」，丢了要等下次联网回填 10 年。
+/// 老版本读到会忽略这个字段，新版本读到老 v4 备份时它为空（恢复时不动本表），
+/// 所以**不抬备份版本号**（与 targets 的 `account_id` 同一个先例）。
 /// **不进备份的密钥类设置**（备份文件会被人拷来拷去、也可能被工具打印出来）
 ///
 /// 目前只有同花顺的 API Key。恢复时本机原有的值会被保留（见 BackupStore）。
@@ -54,6 +59,13 @@ class AppBackup {
   /// 历史净值的表行（列名同 `nav_history` 建表语句）
   final List<Map<String, Object?>> navHistory;
 
+  /// 宏观估值（股债利差）每日点的表行（列名同 `macro_history` 建表语句）
+  ///
+  /// 为什么值得备份：这张表是**本地一天一点攒出来的历史**（回填能补齐 10 年，
+  /// 但要联网、要等接口通）。用户看的是「当前利差在历史多少分位」，
+  /// 恢复后若这段空着，宏观卡片就只有今天一个点。
+  final List<Map<String, Object?>> macroRows;
+
   AppBackup({
     this.version = currentVersion,
     required this.exportedAt,
@@ -67,11 +79,15 @@ class AppBackup {
     this.dcaPlans = const [],
     this.securities = const [],
     this.navHistory = const [],
+    this.macroRows = const [],
   });
 
   int get accountCount => accounts.length;
 
   int get navHistoryCount => navHistory.length;
+
+  /// 宏观估值（股债利差）历史点数
+  int get macroRowCount => macroRows.length;
 
   /// 有交易记录的标的数
   int get usedAssetCount {
@@ -94,10 +110,11 @@ class AppBackup {
         'watchlist': watchlist.map((e) => e.toMap()).toList(),
         'dcaPlans': dcaPlans.map((e) => e.toMap()).toList(),
         'settings': settings,
-        // 这两段行数很多（历史净值可能几万行），**不加缩进** ——
+        // 这几段行数很多（历史净值可能几万行、基础数据三万多行），**不加缩进** ——
         // 否则文件会大出好几倍，而它们本来就是给程序读的
         'securities': securities,
         'navHistory': navHistory,
+        'macroHistory': macroRows,
       };
 
   /// 备份里的账户 id（升序）；恢复时给「没有账户归属的老目标」找家
@@ -106,27 +123,28 @@ class AppBackup {
           if (a.id != null) a.id!,
       ]..sort();
 
-  /// 顶层保持缩进（便于人看），但两个大表用紧凑写法
+  /// 顶层保持缩进（便于人看），但行数多的几段用紧凑写法
   String encode() {
     final map = toJson();
-    final big = {
-      'securities': jsonEncode(map.remove('securities')),
-      'navHistory': jsonEncode(map.remove('navHistory')),
+    // 顺序 = 写进文件里的顺序；都是「表行」性质，一行一条、只给程序读
+    const compactKeys = ['securities', 'navHistory', 'macroHistory'];
+    final compact = <String, String>{
+      for (final k in compactKeys) k: jsonEncode(map.remove(k) ?? const []),
     };
     var text = const JsonEncoder.withIndent('  ').convert(map);
     // 把紧凑的大表塞回顶层（去掉原 JSON 的收尾大括号再补上）
     final trimmed = text.trimRight();
     assert(trimmed.endsWith('}'));
     final head = trimmed.substring(0, trimmed.length - 1).trimRight();
-    final sep = head.endsWith('{') ? '' : ',';
-    final buf = StringBuffer()
-      ..write(head)
-      ..write(sep)
-      ..write('\n  "securities": ')
-      ..write(big['securities'])
-      ..write(',\n  "navHistory": ')
-      ..write(big['navHistory'])
-      ..write('\n}');
+    var sep = head.endsWith('{') ? '' : ',';
+    final buf = StringBuffer()..write(head);
+    for (final k in compactKeys) {
+      buf.write(sep);
+      buf.write('\n  "$k": ');
+      buf.write(compact[k]);
+      sep = ',';
+    }
+    buf.write('\n}');
     return buf.toString();
   }
 
@@ -171,6 +189,8 @@ class AppBackup {
       // v4 起才有；老备份为空 → 恢复时不动这两张表
       securities: _list(map['securities']),
       navHistory: _list(map['navHistory']),
+      // v4 之后新增的一段；老备份为空 → 恢复时不动 macro_history
+      macroRows: _list(map['macroHistory']),
     );
   }
 

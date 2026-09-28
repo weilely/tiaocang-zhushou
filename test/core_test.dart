@@ -618,6 +618,61 @@ void main() {
       expect(back.navHistory, isEmpty);
     });
 
+    // -------- 股债利差历史（macroHistory，v4 之后的纯新增段） --------
+    test('股债利差历史也进备份，且能原样解回来', () {
+      final b = AppBackup(
+        exportedAt: DateTime(2026, 9, 25),
+        accounts: const [],
+        assets: const [],
+        txns: const [],
+        targets: const [],
+        settings: const {},
+        macroRows: const [
+          {'date': '2026-09-24', 'hs300_pe': 12.5, 'cn10y': 1.85, 'erp': 6.15},
+          {'date': '2026-09-25', 'hs300_pe': 12.6, 'cn10y': 1.86, 'erp': 6.08},
+        ],
+      );
+      final text = b.encode();
+      expect(text, contains('"macroHistory"'));
+      final back = AppBackup.decode(text);
+      expect(back.macroRowCount, 2);
+      expect(back.macroRows.last['date'], '2026-09-25');
+      expect(back.macroRows.last['erp'], 6.08);
+    });
+
+    test('老备份没有 macroHistory 段 → 解码为空（恢复时不许拿它清本机攒的历史）', () {
+      expect(AppBackup.decode(sample().encode()).macroRows, isEmpty);
+      expect(
+        AppBackup.decode('{"app":"invest_tracker","version":4}').macroRows,
+        isEmpty,
+      );
+    });
+
+    test('股债利差那段也是紧凑写法（一天一点也会攒到几千行）', () {
+      final rows = [
+        for (var i = 0; i < 300; i++)
+          {
+            'date': '2025-01-${(i % 28 + 1).toString().padLeft(2, '0')}',
+            'hs300_pe': 12.0 + i / 100,
+            'cn10y': 1.8,
+            'erp': 6.0,
+          },
+      ];
+      final text = AppBackup(
+        exportedAt: DateTime(2026, 9, 25),
+        accounts: const [],
+        assets: const [],
+        txns: const [],
+        targets: const [],
+        settings: const {},
+        macroRows: rows,
+      ).encode();
+      expect(AppBackup.decode(text).macroRows.length, 300);
+      final seg = text.substring(text.indexOf('"macroHistory"'));
+      expect(seg, contains('"macroHistory": [{"date"'),
+          reason: '股债利差那段应当是紧凑写法');
+    });
+
     test('大表用紧凑写法：几千行也不至于把文件撑大好几倍', () {
       final rows = [
         for (var i = 0; i < 500; i++)
@@ -674,6 +729,7 @@ void main() {
       expect(back.settings, isEmpty);
       expect(back.watchlist, isEmpty);
       expect(back.dcaPlans, isEmpty);
+      expect(back.macroRows, isEmpty);
     });
   });
 

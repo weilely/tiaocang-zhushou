@@ -26,6 +26,12 @@ extension BackupStore on AppDatabase {
     return await d.query('nav_history');
   }
 
+  /// 宏观估值（股债利差）每日点的**原样表行**（全局备份用）
+  Future<List<Map<String, Object?>>> allMacroRows() async {
+    final d = await database;
+    return await d.query('macro_history');
+  }
+
   /// 用备份内容整体替换本地数据（单事务，失败自动回滚）
   Future<void> replaceAllFromBackup(AppBackup b) async {
     final d = await database;
@@ -55,6 +61,8 @@ extension BackupStore on AppDatabase {
       // 老备份（v1~v3）这两段是空的，若照清不误会把本地数据白白清掉
       if (b.securities.isNotEmpty) await txn.delete('securities');
       if (b.navHistory.isNotEmpty) await txn.delete('nav_history');
+      // 宏观估值历史同理：老备份没有这一段，不许拿"空"去清本机攒的历史
+      if (b.macroRows.isNotEmpty) await txn.delete('macro_history');
 
       // 显式写入 id，保持账户 / 标的 / 流水 / 联动现金流水之间的引用关系
       for (final a in b.accounts) {
@@ -113,6 +121,7 @@ extension BackupStore on AppDatabase {
       // 而且历史净值动辄几万行，逐行 insert 会明显卡住恢复
       await _insertRows(txn, 'securities', b.securities);
       await _insertRows(txn, 'nav_history', b.navHistory);
+      await _insertRows(txn, 'macro_history', b.macroRows);
     });
   }
 

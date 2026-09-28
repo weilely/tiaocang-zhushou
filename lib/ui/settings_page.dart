@@ -736,7 +736,7 @@ class _SettingsPageState extends State<SettingsPage> {
             title: const Text('导出全局备份', style: TextStyle(fontSize: 14)),
             subtitle: Text(
               '持仓与流水、关注与定投、金融基础数据（${st.securitiesFundCount + st.securitiesStockCount} 条）、'
-              '历史净值（${st.navRowCount} 条）全都包含',
+              '历史净值（${st.navRowCount} 条）、股债利差历史 全都包含',
               style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
             ),
             onTap: _exportBackup,
@@ -1391,8 +1391,8 @@ class _SettingsPageState extends State<SettingsPage> {
             child: SelectableText(
               '文件路径：\n$path\n\n'
               '包含：账户、标的与分类、全部交易流水、现金流水、再平衡目标、\n'
-              '关注列表、定投计划、设置，以及金融基础数据与历史净值。\n'
-              '（不含行情缓存，恢复后会自动重新抓取）\n\n'
+              '关注列表、定投计划、设置，以及金融基础数据、历史净值与股债利差历史。\n'
+              '（不含行情缓存与同花顺密钥，恢复后行情会自动重新抓取）\n\n'
               '取回电脑：\nadb pull "$path" .',
               style: const TextStyle(fontSize: 12),
             ),
@@ -1492,13 +1492,16 @@ class _SettingsPageState extends State<SettingsPage> {
                   '流水 ${preview.txns.length} 笔 · 再平衡目标 ${preview.targets.length} 项',
                   style: const TextStyle(fontSize: 13),
                 ),
-                // 全局备份（v4）还带这两块，得如实说 —— 它们也会被整体覆盖
+                // 全局备份（v4）还带这几块，得如实说 —— 它们也会被整体覆盖
                 if (preview.navHistoryCount > 0 ||
-                    preview.securities.isNotEmpty) ...[
+                    preview.securities.isNotEmpty ||
+                    preview.macroRowCount > 0) ...[
                   const SizedBox(height: 4),
                   Text(
                     '另含 金融基础数据 ${preview.securities.length} 条 · '
-                    '历史净值 ${preview.navHistoryCount} 条（同样会被覆盖）',
+                    '历史净值 ${preview.navHistoryCount} 条'
+                    '${preview.macroRowCount > 0 ? ' · 股债利差 ${preview.macroRowCount} 天' : ''}'
+                    '（同样会被覆盖）',
                     style: const TextStyle(fontSize: 13),
                   ),
                 ],

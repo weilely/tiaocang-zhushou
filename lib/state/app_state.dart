@@ -3782,6 +3782,8 @@ class AppState extends ChangeNotifier {
       // v4 起：金融基础数据 + 历史净值（原样的表行，恢复时直接入表）
       securities: await db.allSecuritiesRows(),
       navHistory: await db.allNavRows(),
+      // 宏观估值（股债利差）历史：同样是本地一天一点攒出来的，一起带走
+      macroRows: await db.allMacroRows(),
     );
     return backup.encode();
   }
@@ -3808,6 +3810,11 @@ class AppState extends ChangeNotifier {
     threshold = await db.settingDouble('threshold', 0.05);
     final af = await db.setting('accountFilter');
     accountFilter = (af == null || af.isEmpty) ? null : int.tryParse(af);
+    // 宏观历史也从库里重读（备份带了就换成备份的，没带就还是本机原样的）
+    await loadMacroHistory();
+    // 设置页那几个"库内 N 条"的计数是**进页面时读一次**的，
+    // 恢复换了库却没人再读 → 不刷的话显示的仍是恢复前的条数
+    await loadSecuritiesStats();
     _recompute();
     if (txns.isNotEmpty) unawaited(refreshQuotes(silent: true));
     return backup.txns.length;
