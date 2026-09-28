@@ -40,6 +40,10 @@ class AssetTraits {
   /// 买入时用户**先填哪个**：场外基金按金额申购、场内按股数下单
   final bool buyByAmount;
 
+  /// 有没有「按持有天数的赎回费档位」——**只有场外基金有**（用户 2026-09-28）：
+  /// 场内 ETF/股票是市价成交，费用是佣金 + 印花税/过户费，没有赎回费这一说。
+  final bool hasRedeemFeeTiers;
+
   const AssetTraits({
     required this.unit,
     required this.unitIsFund,
@@ -49,6 +53,7 @@ class AssetTraits {
     required this.priceLabel,
     required this.priceDateLabel,
     required this.buyByAmount,
+    required this.hasRedeemFeeTiers,
   });
 
   /// 场内（ETF/股票）共用的一份：实时价、按手、买入先填股数
@@ -61,6 +66,7 @@ class AssetTraits {
     priceLabel: '最新价',
     priceDateLabel: '行情日期',
     buyByAmount: false,
+    hasRedeemFeeTiers: false,
   );
 
   static const AssetTraits _fund = AssetTraits(
@@ -72,6 +78,7 @@ class AssetTraits {
     priceLabel: '最新净值',
     priceDateLabel: '净值日期',
     buyByAmount: true,
+    hasRedeemFeeTiers: true,
   );
 
   /// ETF/LOF 是**场内基金**：按手买卖、有实时价，但单位习惯上还是说「份」
@@ -84,6 +91,7 @@ class AssetTraits {
     priceLabel: '最新价',
     priceDateLabel: '行情日期',
     buyByAmount: false,
+    hasRedeemFeeTiers: false,
   );
 
   /// 指数（基准线用，不进持仓）：有实时点位与日线，单位是「点」
@@ -96,6 +104,7 @@ class AssetTraits {
     priceLabel: '最新点位',
     priceDateLabel: '行情日期',
     buyByAmount: false,
+    hasRedeemFeeTiers: false,
   );
 
   static AssetTraits of(AssetKind kind) => switch (kind) {

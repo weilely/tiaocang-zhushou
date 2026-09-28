@@ -110,35 +110,72 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
         padding: const EdgeInsets.only(bottom: 32),
         children: [
           _actionBar(context, asset, p),
-          _tabBar(context),
-          if (_tab == 0)
-            _returnsCard(context, state, asset, p)
-          else
-            _perfCard(context, state, asset),
-          _metricsCard(context, p),
-          // 场外基金：卖出费率分布（按持有天数分档 + 先进先出） —— 与持仓卡片上的入口同一个弹框
-          if (asset.kind == AssetKind.fund)
-            _redeemFeeEntry(context, asset, p),
-          // 基金档案（同花顺详情接口，点进去才拉）：场外基金与场内 ETF/LOF 都有
+          // 用户 2026-09-28：「把基金档案移到买入卖出功能按钮下方」——
+          // 两个入口（基金档案 / 卖出费率分布）都紧跟动作栏
           if (asset.kind == AssetKind.fund || asset.kind == AssetKind.etf)
             _fundProfileEntry(context, asset),
+          if (asset.kind.traits.hasRedeemFeeTiers)
+            _redeemFeeEntry(context, asset, p),
+          // 页签与下面的图**同在一张卡片里**（用户 2026-09-28）
+          _chartCard(context, state, asset, p),
+          _metricsCard(context, p),
           _historyCard(context, p),
         ],
       ),
     );
   }
 
-  /// 页签行（参考图最上面那排；**没有「购买渠道」**）
-  Widget _tabBar(BuildContext context) {
+  /// 资产收益 / 业绩走势：**页签与图放在同一张卡片**（用户 2026-09-28）
+  Widget _chartCard(
+      BuildContext context, AppState state, Asset asset, Position p) {
+    final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
-      child: SegmentedPills<int>(
-        items: const [
-          (value: 0, label: '资产收益'),
-          (value: 1, label: '业绩走势'),
-        ],
-        selected: _tab,
-        onChanged: (v) => setState(() => _tab = v),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.cardColor,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: SegmentedPills<int>(
+                    items: const [
+                      (value: 0, label: '资产收益'),
+                      (value: 1, label: '业绩走势'),
+                    ],
+                    selected: _tab,
+                    onChanged: (v) => setState(() => _tab = v),
+                  ),
+                ),
+                // 资产收益那张图还能切「总收益 / 总资产」（原来的位置是卡片标题栏右侧）
+                if (_tab == 0) ...[
+                  const SizedBox(width: 8),
+                  SegmentedPills<int>(
+                    items: const [
+                      (value: 1, label: '总收益'),
+                      (value: 0, label: '总资产'),
+                    ],
+                    selected: _metric,
+                    onChanged: (v) => setState(() => _metric = v),
+                    expand: false,
+                    itemPadding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 6),
+            if (_tab == 0)
+              _returnsBody(context, state, asset, p)
+            else
+              _perfBody(context, state, asset),
+          ],
+        ),
       ),
     );
   }
@@ -163,7 +200,7 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
 
   // ---------------- 资产收益（参考图那张卡片） ----------------
 
-  Widget _returnsCard(
+  Widget _returnsBody(
       BuildContext context, AppState state, Asset asset, Position p) {
     final theme = Theme.of(context);
     final daily = state.assetDailySeries(
@@ -185,51 +222,38 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
         ? '--'
         : (_metric == 0 ? fmtMoney(last) : fmtMoneySigned(last));
 
-    return SectionCard(
-      title: '资产收益',
-      trailing: SegmentedPills<int>(
-        items: const [
-          (value: 1, label: '总收益'),
-          (value: 0, label: '总资产'),
-        ],
-        selected: _metric,
-        onChanged: (v) => setState(() => _metric = v),
-        expand: false,
-        itemPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 图例 + 当前值（参考图里是「— 总资产」）
-          Row(
-            children: [
-              Container(width: 14, height: 2.4, color: lineColor),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: TextStyle(fontSize: 12, color: theme.hintColor)),
-              const SizedBox(width: 8),
-              Text(current,
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: lineColor)),
-            ],
-          ),
-          const SizedBox(height: 6),
-          AssetValueChart(
-            points: points,
-            lineColor: lineColor,
-            showZeroLine: _metric == 1,
-          ),
-          _rangePills(context),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 图例 + 当前值（参考图里是「— 总资产」）
+        Row(
+          children: [
+            Container(width: 14, height: 2.4, color: lineColor),
+            const SizedBox(width: 6),
+            Text(label,
+                style: TextStyle(fontSize: 12, color: theme.hintColor)),
+            const SizedBox(width: 8),
+            Text(current,
+                style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: lineColor)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        AssetValueChart(
+          points: points,
+          lineColor: lineColor,
+          showZeroLine: _metric == 1,
+        ),
+        _rangePills(context),
+      ],
     );
   }
 
   // ---------------- 业绩走势（该基金自己的净值走势 + 大盘对照） ----------------
 
-  Widget _perfCard(BuildContext context, AppState state, Asset asset) {
+  Widget _perfBody(BuildContext context, AppState state, Asset asset) {
     final theme = Theme.of(context);
     final navs = state.navSamples[asset.code] ?? const <NavPoint>[];
     final pts = navReturnSeries(navs, _range.start, _range.end);
@@ -243,48 +267,45 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
           );
     final last = pts.isEmpty ? null : pts.last.pct;
 
-    return SectionCard(
-      title: '业绩走势',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(width: 14, height: 2.4, color: pnlColor(last ?? 0)),
-              const SizedBox(width: 6),
-              Text('本基金',
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(width: 14, height: 2.4, color: pnlColor(last ?? 0)),
+            const SizedBox(width: 6),
+            Text('本基金',
+                style: TextStyle(fontSize: 12, color: theme.hintColor)),
+            const SizedBox(width: 8),
+            Text(last == null ? '--' : fmtPct(last),
+                style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: pnlColor(last ?? 0))),
+            const Spacer(),
+            if (state.benchmark.kind == BenchmarkKind.marketIndex)
+              Text('对照 ${state.benchmark.legendName}',
+                  style: TextStyle(fontSize: 11, color: theme.hintColor)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        if (pts.length < 2)
+          SizedBox(
+            height: 168,
+            child: Center(
+              child: Text('这段时间没有这只标的的价格数据',
                   style: TextStyle(fontSize: 12, color: theme.hintColor)),
-              const SizedBox(width: 8),
-              Text(last == null ? '--' : fmtPct(last),
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: pnlColor(last ?? 0))),
-              const Spacer(),
-              if (state.benchmark.kind == BenchmarkKind.marketIndex)
-                Text('对照 ${state.benchmark.legendName}',
-                    style: TextStyle(fontSize: 11, color: theme.hintColor)),
-            ],
-          ),
-          const SizedBox(height: 6),
-          if (pts.length < 2)
-            SizedBox(
-              height: 168,
-              child: Center(
-                child: Text('这段时间没有这只标的的价格数据',
-                    style: TextStyle(fontSize: 12, color: theme.hintColor)),
-              ),
-            )
-          else
-            ReturnsLineChart(
-              points: pts,
-              refs: refs,
-              showCallout: true,
-              height: 168,
             ),
-          _rangePills(context),
-        ],
-      ),
+          )
+        else
+          ReturnsLineChart(
+            points: pts,
+            refs: refs,
+            showCallout: true,
+            height: 168,
+          ),
+        _rangePills(context),
+      ],
     );
   }
 

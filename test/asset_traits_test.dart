@@ -57,4 +57,13 @@ void main() {
       expect(AssetTraits.of(k).priceLabel, isNotEmpty, reason: '${k.label} 缺能力表');
     }
   });
+
+  // 用户 2026-09-28：卖出费率分布只对场外基金有意义
+  // （场内是市价成交，费用是佣金 + 印花税/过户费，没有赎回费）
+  test('只有场外基金有「按持有天数的赎回费档位」', () {
+    expect(AssetKind.fund.traits.hasRedeemFeeTiers, isTrue);
+    for (final k in [AssetKind.etf, AssetKind.stock, AssetKind.other]) {
+      expect(k.traits.hasRedeemFeeTiers, isFalse, reason: '${k.label} 不该有');
+    }
+  });
 }

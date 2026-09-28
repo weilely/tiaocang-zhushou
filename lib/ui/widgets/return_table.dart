@@ -14,6 +14,10 @@ class ReturnTable extends StatefulWidget {
   final void Function(WatchRow row)? onTap;
   final void Function(WatchRow row)? onMenu;
 
+  /// 点**「代码 / 名称」那一格**：[onIdentityTap]（没传就跟 [onTap] 一样）。
+  /// 关注页传它来「点代码或名称直接开基金档案」（用户 2026-09-28）。
+  final void Function(WatchRow row)? onIdentityTap;
+
   /// 列表为空时显示的话；默认沿用原来的文案
   final String emptyText;
 
@@ -28,6 +32,7 @@ class ReturnTable extends StatefulWidget {
     required this.rows,
     this.onTap,
     this.onMenu,
+    this.onIdentityTap,
     this.emptyText = '还没有关注的标的',
     this.firstWidth = 148,
   });
@@ -313,7 +318,8 @@ class _ReturnTableState extends State<ReturnTable> {
     final fitted = _fittedName(r, spanFor, avail, scale);
 
     return InkWell(
-      onTap: () => widget.onTap?.call(r),
+      // 点「代码 / 名称」：关注页用它直接开基金档案（没传就跟点整行一样）
+      onTap: () => (widget.onIdentityTap ?? widget.onTap)?.call(r),
       onLongPress: () => widget.onMenu?.call(r),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),

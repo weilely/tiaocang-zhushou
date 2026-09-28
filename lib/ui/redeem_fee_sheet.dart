@@ -7,38 +7,39 @@ import '../state/app_state.dart';
 
 /// 打开「卖出费率分布」：按持有天数分档 + 先进先出算出各档的区间份额
 ///
-/// 用户 2026-09-28 发来参考图（中基 App 的同类弹框）＋「得参考基金档案赎回费率」：
+/// 用户 2026-09-28 发来参考图（中基 App 的同类弹框）＋「得参考基金档案赎回费率」，
+/// 随后又要求「**弹出方式像我给你那张图一样，一卡片的方式显示**」——
+/// 所以这里用**居中的对话框卡片**（标题 + 表格 + 确定），不是底部弹层。
+///
 /// 档位**优先取基金档案**（同花顺 `fund/profile/detail` 的 redemption 行，
 /// 实测 004814 是 5 档、025497/021362/027858 只有 2 档），用户手动改过就用他的，
-/// 都没有才回落到内置默认档 —— 来源在弹框里如实标出来。
+/// 都没有才回落到内置默认档 —— 来源在卡片里如实标出来。
 Future<void> showRedeemFeeSheet(
   BuildContext context, {
   required int accountId,
   required int assetId,
 }) {
   final st = context.read<AppState>();
-  return showModalBottomSheet<void>(
+  return showDialog<void>(
     context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
     builder: (_) => ChangeNotifierProvider<AppState>.value(
       value: st,
-      child: _RedeemFeeSheet(accountId: accountId, assetId: assetId),
+      child: _RedeemFeeDialog(accountId: accountId, assetId: assetId),
     ),
   );
 }
 
-class _RedeemFeeSheet extends StatefulWidget {
-  const _RedeemFeeSheet({required this.accountId, required this.assetId});
+class _RedeemFeeDialog extends StatefulWidget {
+  const _RedeemFeeDialog({required this.accountId, required this.assetId});
 
   final int accountId;
   final int assetId;
 
   @override
-  State<_RedeemFeeSheet> createState() => _RedeemFeeSheetState();
+  State<_RedeemFeeDialog> createState() => _RedeemFeeDialogState();
 }
 
-class _RedeemFeeSheetState extends State<_RedeemFeeSheet> {
+class _RedeemFeeDialogState extends State<_RedeemFeeDialog> {
   bool _loading = true;
   List<RedeemTier> _tiers = kDefaultRedeemTiers;
   String _source = '';
@@ -92,67 +93,89 @@ class _RedeemFeeSheetState extends State<_RedeemFeeSheet> {
     // 当天买入的部分 T+1 不能卖，单独说一句（别让人以为少算了份额）
     final locked = allLots.fold<double>(0, (a, l) => a + l.shares) - sellable;
 
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('卖出费率分布',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 2),
-            Text('${asset.name.isEmpty ? asset.code : asset.name} · ${asset.code}',
-                style: hint),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Icon(
-                  _source.startsWith('基金档案')
-                      ? Icons.verified_outlined
-                      : _source.startsWith('你手动')
-                          ? Icons.edit_outlined
-                          : Icons.info_outline,
-                  size: 14,
-                  color: Theme.of(context).hintColor,
-                ),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                    _loading ? '正在取这只基金的赎回档位…' : '档位来源：$_source',
-                    style: hint,
+    // 参考图那种卡片：标题 + 表格 + 底部「确定」
+    return AlertDialog(
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('卖出费率分布',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 2),
+          Text('${asset.name.isEmpty ? asset.code : asset.name} · ${asset.code}',
+              style: hint),
+        ],
+      ),
+      content: SizedBox(
+        width: 340,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    _source.startsWith('基金档案')
+                        ? Icons.verified_outlined
+                        : _source.startsWith('你手动')
+                            ? Icons.edit_outlined
+                            : Icons.info_outline,
+                    size: 14,
+                    color: Theme.of(context).hintColor,
                   ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      _loading ? '正在取这只基金的赎回档位…' : '档位来源：$_source',
+                      style: hint,
+                    ),
+                  ),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 30),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed:
+                        _loading ? null : () => _editTiers(st, asset.code),
+                    child: const Text('编辑档位', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text('（档案没取到：$_error）', style: hint),
                 ),
-                TextButton(
-                  onPressed: _loading ? null : () => _editTiers(st, asset.code),
-                  child: const Text('编辑档位', style: TextStyle(fontSize: 12)),
+              const SizedBox(height: 4),
+              _table(context, rows, sellable, nav, est?.fee),
+              if (locked > 1e-9) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '另有 ${fmtSharesOf(locked, isFund: true)} 份是今天买入的，T+1 之后才能卖，'
+                  '没有算进上面的分布与费用估算。',
+                  style: hint,
                 ),
               ],
-            ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Text('（档案没取到：$_error）', style: hint),
-              ),
-            const SizedBox(height: 4),
-            _table(context, rows, sellable, nav, est?.fee),
-            if (locked > 1e-9) ...[
               const SizedBox(height: 8),
               Text(
-                '另有 ${fmtSharesOf(locked, isFund: true)} 份是**今天买入**的，T+1 之后才能卖，'
-                '没有算进上面的分布与费用估算。',
+                '算法：按先进先出把份额分到各档（先买的先卖），'
+                '费用 = Σ（命中份额 × 当日净值 × 该档费率）。'
+                '只用来估算赎回费，不影响持仓成本口径（仍是平均成本法）。',
                 style: hint,
               ),
             ],
-            const SizedBox(height: 8),
-            Text(
-              '算法：按**先进先出**把份额分到各档（先买的先卖），'
-              '费用 = Σ（命中份额 × 当日净值 × 该档费率）。'
-              '只用来估算赎回费，不影响持仓成本口径（仍是平均成本法）。',
-              style: hint,
-            ),
-          ],
+          ),
         ),
       ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('确定'),
+        ),
+      ],
     );
   }
 

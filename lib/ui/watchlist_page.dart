@@ -147,6 +147,9 @@ class _WatchlistPageState extends State<WatchlistPage> {
                           ? '还没有关注的标的'
                           : '这个分类下还没有标的',
                       onTap: _showNavHistory,
+                      // 点「代码 / 名称」默认开**基金档案页**（用户 2026-09-28）；
+                      // 点行内别处仍是净值历史，长按还是菜单
+                      onIdentityTap: (r) => _showFundProfile(r),
                       onMenu: (r) => _itemMenu(st, r),
                     ),
                   ),
