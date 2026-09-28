@@ -150,12 +150,10 @@ void main() {
   });
 
   // 用户 2026-09-25：「调仓页面估值模式下，预估净值日期不对，应该是估值当天日期」
-  group('预估净值后面那个日期 = 估值当天（今天）', () {
-    test('估值模式 → 日期是今天', () {
-      expect(
-        estNavDateSuffix(estMode: true, now: today),
-        '预估净值（2026-09-18）',
-      );
+  // 2026-09-28 又要求：标签里已有「预估净值」，后缀**只留日期**
+  group('预估净值后面那个日期 = 估值当天（今天），且只留日期', () {
+    test('估值模式 → 只有日期，不再重复「预估净值」四个字', () {
+      expect(estNavDateSuffix(estMode: true, now: today), '（2026-09-18）');
     });
 
     test('不是估值模式 → 不标日期（净值已是真实值，不必再写）', () {
@@ -163,10 +161,8 @@ void main() {
     });
 
     test('月/日补零，位数固定', () {
-      expect(
-        estNavDateSuffix(estMode: true, now: DateTime(2026, 1, 5)),
-        '预估净值（2026-01-05）',
-      );
+      expect(estNavDateSuffix(estMode: true, now: DateTime(2026, 1, 5)),
+          '（2026-01-05）');
     });
 
     test('写的是「今天」而不是基准净值那天（上一交易日）', () {

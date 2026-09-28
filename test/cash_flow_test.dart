@@ -486,11 +486,14 @@ void main() {
       expect(c.note, '来自卖出');
     });
 
-    test('分红：入账 = 成交金额，类型 dividend', () {
+    test('分红：入账 = 成交金额 − 手续费，类型 dividend', () {
       final c = linked(TxnType.dividend, amount: 88)!;
       expect(c.type, CashType.dividend);
       expect(c.amount, closeTo(88, 1e-9));
       expect(c.note, '来自分红');
+      // 用户 2026-09-28：「手动交易也要合并交易费用到现金流」——
+      // 分红那格手续费（渠道扣费）以前被漏掉了
+      expect(linked(TxnType.dividend, amount: 88, fee: 2)!.amount, closeTo(86, 1e-9));
     });
 
     test('金额为 0 时不写流水（不留一条没意义的 0）', () {
@@ -522,12 +525,40 @@ void main() {
             assetId: 1,
             type: TxnType.dividend,
             date: DateTime(2026, 9, 3),
-            amount: 345.67),
+            amount: 345.67,
+            fee: 3.45),
       ]) {
         final c = linkedCashTxnFor(t, 1)!;
         expect(c.amount, closeTo(t.netCash, 1e-9),
             reason: '${t.type.name}：联动流水应与 Txn.netCash 完全一致');
       }
+    });
+
+    test('手续费的符号方向：买入越扣越多、卖出与分红越扣越少', () {
+      expect(Txn(
+        accountId: 1,
+        assetId: 1,
+        type: TxnType.buy,
+        date: DateTime(2026, 9, 1),
+        amount: 3000,
+        fee: 2.5,
+      ).netCash, closeTo(-3002.5, 1e-9), reason: '买入 3000 + 费 2.5 → 支出 302.5');
+      expect(Txn(
+        accountId: 1,
+        assetId: 1,
+        type: TxnType.sell,
+        date: DateTime(2026, 9, 1),
+        amount: 3000,
+        fee: 2.5,
+      ).netCash, closeTo(2997.5, 1e-9));
+      expect(Txn(
+        accountId: 1,
+        assetId: 1,
+        type: TxnType.dividend,
+        date: DateTime(2026, 9, 1),
+        amount: 3000,
+        fee: 2.5,
+      ).netCash, closeTo(2997.5, 1e-9));
     });
   });
 }

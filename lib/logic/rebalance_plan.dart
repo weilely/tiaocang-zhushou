@@ -275,11 +275,12 @@ bool isFundEstMode({
   return estPct.abs() > 1e-9;
 }
 
-/// 卡片上「预估净值」那行后面缀的日期文案 —— 写的是**估值当天**（也就是今天）。
+/// 卡片上「预估净值」那行后面缀的**日期** —— 写的是**估值当天**（也就是今天）。
 ///
 /// 用户 2026-09-25 报的：「调仓页面估值模式下，预估净值日期不对，应该是估值当天日期」。
 /// 早先这里标的是**作为估值基准的那份净值**的日期（上一交易日），
 /// 可「预估净值」估的是**今天**的净值 —— 日期该跟着估值走。
+/// 用户 2026-09-28 又要求：标签里已经写了「预估净值」，后缀**只留日期**、别重复那四个字。
 /// 非估值模式返回 null：那会儿净值已经是真实值，不必再标日期。
 String? estNavDateSuffix({required bool estMode, DateTime? now}) {
   if (!estMode) return null;
@@ -287,7 +288,7 @@ String? estNavDateSuffix({required bool estMode, DateTime? now}) {
   final key = '${d.year.toString().padLeft(4, '0')}-'
       '${d.month.toString().padLeft(2, '0')}-'
       '${d.day.toString().padLeft(2, '0')}';
-  return '预估净值（$key）';
+  return '（$key）';
 }
 
 /// 实时行情里带的是不是**今天已公布的净值**（不是盘中估值）。

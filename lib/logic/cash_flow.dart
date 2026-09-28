@@ -154,7 +154,11 @@ class CashFlowStatement {
 /// 符号约定（与 `Txn.netCash` 一致）：
 /// - **买入** → `invest`，金额 `−(成交金额 + 手续费)`
 /// - **卖出** → `redeem`，金额 `成交金额 − 手续费`
-/// - **分红** → `dividend`，金额 `成交金额`
+/// - **分红** → `dividend`，金额 `成交金额 − 手续费`
+///
+/// **手续费一律并进现金流**（用户 2026-09-28 的口径：买入 3000 + 费 2.5 → 支出 302.5）。
+/// 分红那一格手续费是"渠道扣费之类"（见记一笔页面），以前这里把它漏掉了，
+/// 与真正写库的 `_linkCashFor`（它按 `金额 − 费` 写）口径不一致 —— 已对齐。
 ///
 /// 金额为 0 时返回 `null`（不写一条没有意义的流水）。
 ///
@@ -164,7 +168,7 @@ CashTxn? linkedCashTxnFor(Txn t, int txnId) {
   final (type, amount) = switch (t.type) {
     TxnType.buy => (CashType.invest, -(t.amount + t.fee)),
     TxnType.sell => (CashType.redeem, t.amount - t.fee),
-    TxnType.dividend => (CashType.dividend, t.amount),
+    TxnType.dividend => (CashType.dividend, t.amount - t.fee),
   };
   if (amount == 0) return null;
   return CashTxn(

@@ -154,10 +154,13 @@ class Txn {
   });
 
   /// 现金净流（负=投入资金，正=收回资金）
+  ///
+  /// **手续费一律并进现金流**（用户 2026-09-28 的口径：买入 3000 + 费 2.5 → 支出 302.5）：
+  /// 买入 `−(金额 + 费)`、卖出 `金额 − 费`、分红 `金额 − 费`（分红也可能被渠道扣费）。
   double get netCash => switch (type) {
         TxnType.buy => -(amount + fee),
         TxnType.sell => amount - fee,
-        TxnType.dividend => amount,
+        TxnType.dividend => amount - fee,
       };
 
   /// 成本调整流水的备注前缀（编辑页把单位成本差值记成它）
