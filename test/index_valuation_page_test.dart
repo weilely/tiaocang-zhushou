@@ -118,7 +118,7 @@ void main() {
     await tester.pumpWidget(host(page()));
     await tester.pumpAndSettle();
 
-    expect(find.text('指数估值'), findsOneWidget);
+    expect(find.text('查指数'), findsOneWidget); // 页面标题（内容也能单嵌进「指数看板」）
     expect(find.textContaining('共 4 条'), findsOneWidget);
     expect(find.textContaining('命中 4'), findsOneWidget);
     expect(find.text('中证红利'), findsWidgets);

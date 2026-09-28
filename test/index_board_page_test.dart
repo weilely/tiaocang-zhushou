@@ -135,6 +135,13 @@ void main() {
     expect(find.textContaining('分位是自己算的'), findsOneWidget);
     expect(find.textContaining('没有股息率/PB/ROE'), findsOneWidget);
     expect(find.text('--'), findsWidgets); // 股息率/PB/ROE 都是 --
+    // 这段文案里有好几个点号插值，专盯"漏花括号 → Instance of 'X'.field"
+    final sheetTexts = tester
+        .widgetList<Text>(find.byType(Text))
+        .map((t) => t.data ?? t.textSpan?.toPlainText() ?? '')
+        .join('\n');
+    expect(sheetTexts.contains("Instance of '"), isFalse);
+    expect(sheetTexts.contains('windowStart'), isFalse);
   });
 
   testWidgets('蛋卷那批的弹层写明数据源与分位窗口', (tester) async {
@@ -194,6 +201,8 @@ void main() {
     // 一旦漏了花括号，整张成员表会被 toString 打进文案里
     expect(texts.contains('symbol:'), isFalse);
     expect(texts.contains('.length'), isFalse);
+    // 这是"点号表达式漏花括号"的统一痕迹（`'$obj.field'` → Instance of 'X'.field）
+    expect(texts.contains("Instance of '"), isFalse);
   });
 
   testWidgets('窄屏 320dp + 字体 1.3：榜单与筛选都不溢出', (tester) async {
@@ -212,6 +221,6 @@ void main() {
     )));
     await tester.pumpAndSettle();
     expect(find.text('还没拿到数据'), findsOneWidget);
-    expect(find.textContaining('点右上角刷新'), findsOneWidget);
+    expect(find.textContaining('点卡头的刷新按钮'), findsOneWidget);
   });
 }

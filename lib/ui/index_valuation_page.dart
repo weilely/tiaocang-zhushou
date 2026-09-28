@@ -28,7 +28,43 @@ const int kIndexListPage = 60;
 /// ②**估值**（股息率/PE/PB/ROE/分位）来自蛋卷公开接口，**收录范围有限**：
 ///   查不到就如实说"暂无数据源"，绝不拿别的指数顶替；蛋卷的名字与目录不一致时
 ///   两个名字都显示出来（规矩：拿不准就别编）。
-class IndexValuationPage extends StatefulWidget {
+class IndexValuationPage extends StatelessWidget {
+  final Future<List<IndexCandidate>> Function(String query)? searchLoader;
+  final Future<IndexValuation?> Function(String symbol)? symbolLoader;
+  final Future<IndexValuation?> Function(IndexCandidate c)? candidateLoader;
+  final Future<IndexCatalog?> Function()? catalogLoader;
+  final Future<IndexValuation?> Function(String code, String? name)? codeLoader;
+  final Future<CsiPerfPoint?> Function(String code)? peLoader;
+  final Future<CsiIndicator?> Function(String code)? indicatorLoader;
+
+  const IndexValuationPage({
+    super.key,
+    this.searchLoader,
+    this.symbolLoader,
+    this.candidateLoader,
+    this.catalogLoader,
+    this.codeLoader,
+    this.peLoader,
+    this.indicatorLoader,
+  });
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(titleSpacing: 16, title: const Text('查指数')),
+        body: IndexValuationView(
+          searchLoader: searchLoader,
+          symbolLoader: symbolLoader,
+          candidateLoader: candidateLoader,
+          catalogLoader: catalogLoader,
+          codeLoader: codeLoader,
+          peLoader: peLoader,
+          indicatorLoader: indicatorLoader,
+        ),
+      );
+}
+
+/// 「查指数」的**内容**（不含 Scaffold/AppBar，可直接当标签页嵌进「指数看板」）
+class IndexValuationView extends StatefulWidget {
   /// 搜索函数（默认走 `AppState.searchIndexes`，东财联想）
   final Future<List<IndexCandidate>> Function(String query)? searchLoader;
 
@@ -51,7 +87,7 @@ class IndexValuationPage extends StatefulWidget {
   /// —— 蛋卷没收录的指数靠它，才能做到"想查哪个都能查到"
   final Future<CsiIndicator?> Function(String code)? indicatorLoader;
 
-  const IndexValuationPage({
+  const IndexValuationView({
     super.key,
     this.searchLoader,
     this.symbolLoader,
@@ -63,10 +99,10 @@ class IndexValuationPage extends StatefulWidget {
   });
 
   @override
-  State<IndexValuationPage> createState() => _IndexValuationPageState();
+  State<IndexValuationView> createState() => _IndexValuationViewState();
 }
 
-class _IndexValuationPageState extends State<IndexValuationPage> {
+class _IndexValuationViewState extends State<IndexValuationView> {
   final TextEditingController _query = TextEditingController();
   final ScrollController _scroll = ScrollController();
   Timer? _debounce;
@@ -374,28 +410,19 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
     final hits = _hits;
     final shown = hits.length > _limit ? hits.sublist(0, _limit) : hits;
 
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 16,
-        title: const Text('指数估值'),
-        actions: [
-          IconButton(
-            tooltip: '刷新指数目录',
-            icon: const Icon(Icons.refresh, size: 20),
-            onPressed: _catalogLoading ? null : () => _loadCatalog(force: true),
-          ),
-        ],
-      ),
-      bottomNavigationBar: _selected.isEmpty ? null : _compareBar(context),
-      body: ListView(
-        controller: _scroll,
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-        children: [
-          _searchCard(context, hits.length),
-          const SizedBox(height: 12),
-          if (_catalogLoading) _loadingCard(context),
-          if (_catalogError != null) _errorCard(context),
-          if (_loadingValue)
+    // 不给 Scaffold（可嵌进「指数看板」的标签页）；"开始对比"那条也跟着视图走
+    return Column(
+      children: [
+        Expanded(
+          child: ListView(
+            controller: _scroll,
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+            children: [
+              _searchCard(context, hits.length),
+              const SizedBox(height: 12),
+              if (_catalogLoading) _loadingCard(context),
+              if (_catalogError != null) _errorCard(context),
+              if (_loadingValue)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 20),
               child: Column(
@@ -427,14 +454,17 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
             const SizedBox(height: 12),
             _remoteCard(context),
           ],
-          if (recent.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            _recentCard(context, recent),
-          ],
-          const SizedBox(height: 12),
-          _footer(context),
-        ],
-      ),
+              if (recent.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _recentCard(context, recent),
+              ],
+              const SizedBox(height: 12),
+              _footer(context),
+            ],
+          ),
+        ),
+        if (_selected.isNotEmpty) _compareBar(context),
+      ],
     );
   }
 
@@ -442,11 +472,25 @@ class _IndexValuationPageState extends State<IndexValuationPage> {
     final theme = Theme.of(context);
     final cat = _catalog;
     return SectionCard(
-      title: '查指数',
-      trailing: cat == null
-          ? null
-          : Text('共 ${cat.items.length} 条 · 命中 $hitCount',
-              style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
+      title: '搜索指数',
+      // 刷新目录放卡头（单独打开与嵌进看板都够得着）
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (cat != null)
+            Text('共 ${cat.items.length} 条 · 命中 $hitCount',
+                style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
+          IconButton(
+            tooltip: '刷新指数目录',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            icon: const Icon(Icons.refresh, size: 18),
+            onPressed:
+                _catalogLoading ? null : () => _loadCatalog(force: true),
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

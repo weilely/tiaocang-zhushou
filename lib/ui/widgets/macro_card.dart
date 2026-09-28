@@ -4,8 +4,7 @@ import 'package:provider/provider.dart';
 import '../../data/db.dart';
 import '../../logic/macro_allocation.dart';
 import '../../state/app_state.dart';
-import '../index_board_page.dart';
-import '../index_valuation_page.dart';
+import '../index_insight_page.dart';
 
 /// 「市场估值」卡片：股债利差 + 沪深300 PE + 10年国债 + 历史分位
 ///
@@ -67,9 +66,7 @@ class _MacroCardState extends State<MacroCard> {
 
     final erp = latest.erp;
     // 利差高低用颜色暗示"股票相对便宜/贵"，但不下结论
-    final erpColor = erp >= 5.5
-        ? const Color(0xFFD93A3A)
-        : (erp >= 4.0 ? const Color(0xFFB4770A) : const Color(0xFF1A9C5B));
+    final erpColor = macroErpColor(erp);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
@@ -131,54 +128,30 @@ class _MacroCardState extends State<MacroCard> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _subtitle(st, latest),
+                      macroSubtitleText(st, latest),
                       style: TextStyle(fontSize: 10, color: theme.hintColor),
                     ),
                     const SizedBox(height: 6),
-                    // ①**低估榜**（用户 2026-09-29 口径「我就想看哪些指数低估」）——
-                    //   这是他真正要的主视图：结论式，一眼看完谁便宜。
+                    // **一个入口**：指数看板（页内用标签切换：低估榜 / 市场估值 / 查指数）
+                    // —— 用户 2026-09-29 口径「集成到一个页面，入口还在关注页」。
                     InkWell(
                       onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => const IndexBoardPage(),
+                        builder: (_) => const IndexInsightPage(),
                       )),
                       borderRadius: BorderRadius.circular(8),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.leaderboard,
+                          Icon(Icons.dashboard_customize,
                               size: 14, color: theme.colorScheme.primary),
                           const SizedBox(width: 4),
-                          Text('低估榜（哪些指数低估）',
+                          Text('指数看板（低估榜 / 市场估值 / 查指数）',
                               style: TextStyle(
                                   fontSize: 11.5,
                                   fontWeight: FontWeight.w600,
                                   color: theme.colorScheme.primary)),
                           Icon(Icons.chevron_right,
                               size: 16, color: theme.colorScheme.primary),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    // ②「查指数」页（用户要求「**保留查询功能**」）：搜索 / 分类 /
-                    //   排序 / 勾选对比 —— 想查某个具体指数时用，跟上面的"看排名"分工。
-                    InkWell(
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => const IndexValuationPage(),
-                      )),
-                      borderRadius: BorderRadius.circular(8),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.travel_explore,
-                              size: 14, color: theme.hintColor),
-                          const SizedBox(width: 4),
-                          Text('查指数（搜索 / 分类 / 对比）',
-                              style: TextStyle(
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w600,
-                                  color: theme.hintColor)),
-                          Icon(Icons.chevron_right,
-                              size: 16, color: theme.hintColor),
                         ],
                       ),
                     ),
@@ -191,13 +164,13 @@ class _MacroCardState extends State<MacroCard> {
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
                 child: SizedBox(
                   height: 132,
-                  child: _ErpChart(rows: st.macroHistory),
+                  child: ErpChart(rows: st.macroHistory),
                 ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
                 child: Text(
-                  _explain(st),
+                  macroExplainText(st),
                   style: TextStyle(
                       fontSize: 10, color: theme.hintColor, height: 1.5),
                 ),
@@ -208,72 +181,78 @@ class _MacroCardState extends State<MacroCard> {
       ),
     );
   }
-
-  /// 展开后的说明文字：利差口径 + **按分位折算的股债比** + 免责
-  ///
-  /// 股债比是用户 2026-09-22 要的，口径指定 **10 年**。所以优先用**本地利差分位**
-  /// —— 回填已经把本地历史补到约 10 年（东财数据中心的中美国债收益率 +
-  /// 中证官网日频 PE），这才是"股债利差本身"的 10 年分位。
-  /// 本地样本还不够长（回填失败/新装）时才退到蛋卷的长窗口 PE 分位，
-  /// 再不行就不折算 —— **每一条都把自己的口径与样本写出来**，不混着说。
-  String _explain(AppState st) {
-    final buf = StringBuffer(
-        '利差 = 沪深300盈利收益率(1/PE) − 10年国债收益率；越大说明股票相对债券越便宜。');
-
-    final ep = st.macroErpPercentile;
-    final lp = st.macroPePercentileLong;
-    final days = st.macroHistory.length;
-    if (ep != null && days >= _minDaysForSplit) {
-      buf.write('按本地利差分位（$days 天：${st.macroSampleRange}）折算：'
-          '${equityBondSplitText(ep)}'
-          '（＝分位×100 给权益、其余给债券，纯机械折算）。');
-    } else if (lp != null) {
-      final win = _ym(st.macroPeWindowStart);
-      buf.write('按沪深300 PE 长窗口分位${win.isEmpty ? '' : '（$win 起）'}折算：'
-          '${equityBondSplitText(lp)}（纯机械折算）。');
-    } else if (ep != null) {
-      buf.write('分位样本只有 $days 天，先按本地利差分位折算：'
-          '${equityBondSplitText(ep)}（纯机械折算）。');
-    } else {
-      buf.write('分位样本不足，暂不折算股债比。');
-    }
-    buf.write('仅为市场估值参考，不构成投资建议。');
-    return buf.toString();
-  }
-
-  /// 用本地利差分位折算所需的最少天数（约 1 年）。
-  ///
-  /// 低于这个数就不拿它当"10 年口径"用：要么退到蛋卷长窗口，要么如实说样本太短。
-  static const int _minDaysForSplit = 250;
-
-  /// 副标题：分位 + **样本区间**（必须写年限，否则容易被当成长周期分位）
-  String _subtitle(AppState st, MacroRow latest) {
-    final parts = <String>[];
-    final p = st.macroErpPercentile;
-    if (p == null) {
-      parts.add('本地样本 ${st.macroHistory.length} 天，攒够 20 天后显示分位');
-    } else {
-      parts.add('利差分位 ${(p * 100).toStringAsFixed(0)}%'
-          '（本地 ${st.macroHistory.length} 天：${st.macroSampleRange}）');
-    }
-    final lp = st.macroPePercentileLong;
-    if (lp != null) {
-      final win = _ym(st.macroPeWindowStart);
-      parts.add('沪深300 PE 长窗口分位 ${(lp * 100).toStringAsFixed(0)}%'
-          '${win.isEmpty ? '' : '（$win 起）'}');
-    }
-    return parts.join('　·　');
-  }
-
-  /// `2016-06`；拿不到就空串（宁可不写，也不写个猜的年份）
-  static String _ym(DateTime? d) => d == null
-      ? ''
-      : '${d.year}-${d.month.toString().padLeft(2, '0')}';
 }
 
+/// 展开后的说明文字：利差口径 + **按分位折算的股债比** + 免责
+///
+/// 股债比是用户 2026-09-22 要的，口径指定 **10 年**。所以优先用**本地利差分位**
+/// —— 回填已经把本地历史补到约 10 年（东财数据中心的中美国债收益率 +
+/// 中证官网日频 PE），这才是"股债利差本身"的 10 年分位。
+/// 本地样本还不够长（回填失败/新装）时才退到蛋卷的长窗口 PE 分位，
+/// 再不行就不折算 —— **每一条都把自己的口径与样本写出来**，不混着说。
+///
+/// （2026-09-29 从 `_MacroCardState` 的私有方法提成公共函数：「指数看板」页也用它）
+String macroExplainText(AppState st) {
+  final buf = StringBuffer(
+      '利差 = 沪深300盈利收益率(1/PE) − 10年国债收益率；越大说明股票相对债券越便宜。');
+
+  final ep = st.macroErpPercentile;
+  final lp = st.macroPePercentileLong;
+  final days = st.macroHistory.length;
+  if (ep != null && days >= kMacroMinDaysForSplit) {
+    buf.write('按本地利差分位（$days 天：${st.macroSampleRange}）折算：'
+        '${equityBondSplitText(ep)}'
+        '（＝分位×100 给权益、其余给债券，纯机械折算）。');
+  } else if (lp != null) {
+    final win = macroYm(st.macroPeWindowStart);
+    buf.write('按沪深300 PE 长窗口分位${win.isEmpty ? '' : '（$win 起）'}折算：'
+        '${equityBondSplitText(lp)}（纯机械折算）。');
+  } else if (ep != null) {
+    buf.write('分位样本只有 $days 天，先按本地利差分位折算：'
+        '${equityBondSplitText(ep)}（纯机械折算）。');
+  } else {
+    buf.write('分位样本不足，暂不折算股债比。');
+  }
+  buf.write('仅为市场估值参考，不构成投资建议。');
+  return buf.toString();
+}
+
+/// 用本地利差分位折算所需的最少天数（约 1 年）。
+///
+/// 低于这个数就不拿它当"10 年口径"用：要么退到蛋卷长窗口，要么如实说样本太短。
+const int kMacroMinDaysForSplit = 250;
+
+/// 副标题：分位 + **样本区间**（必须写年限，否则容易被当成长周期分位）
+String macroSubtitleText(AppState st, MacroRow latest) {
+  final parts = <String>[];
+  final p = st.macroErpPercentile;
+  if (p == null) {
+    parts.add('本地样本 ${st.macroHistory.length} 天，攒够 20 天后显示分位');
+  } else {
+    parts.add('利差分位 ${(p * 100).toStringAsFixed(0)}%'
+        '（本地 ${st.macroHistory.length} 天：${st.macroSampleRange}）');
+  }
+  final lp = st.macroPePercentileLong;
+  if (lp != null) {
+    final win = macroYm(st.macroPeWindowStart);
+    parts.add('沪深300 PE 长窗口分位 ${(lp * 100).toStringAsFixed(0)}%'
+        '${win.isEmpty ? '' : '（$win 起）'}');
+  }
+  return parts.join('　·　');
+}
+
+/// 利差高低的颜色暗示（高=红、中=橙、低=绿）——只作视觉提示，不下结论
+Color macroErpColor(double erp) => erp >= 5.5
+    ? const Color(0xFFD93A3A)
+    : (erp >= 4.0 ? const Color(0xFFB4770A) : const Color(0xFF1A9C5B));
+
+/// `2016-06`；拿不到就空串（宁可不写，也不写个猜的年份）
+String macroYm(DateTime? d) =>
+    d == null ? '' : '${d.year}-${d.month.toString().padLeft(2, '0')}';
+
 /// 股债利差历史曲线（自绘，单序列 + 中位参考线）
-class _ErpChart extends StatelessWidget {
-  const _ErpChart({required this.rows});
+class ErpChart extends StatelessWidget {
+  const ErpChart({super.key, required this.rows});
   final List<MacroRow> rows;
 
   @override

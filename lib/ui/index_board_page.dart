@@ -13,20 +13,38 @@ import 'widgets/common.dart';
 ///
 /// 与「查指数」页的分工：这里**只看排名**（结论式）；想查某个具体指数（搜索/分类/对比）
 /// 走入口里的「查指数」那一页。
-class IndexBoardPage extends StatefulWidget {
+/// **低估榜**（单独打开的页面壳）。
+///
+/// 真正的内容在 [IndexBoardView] —— 这样「指数看板」页可以把它当一个**标签页**嵌进去，
+/// 单独打开时又是个正常页面（2026-09-29 用户要求把三块合成一个看板、页内用标签切换）。
+class IndexBoardPage extends StatelessWidget {
+  final Future<List<IndexBoardEntry>> Function({bool force})? boardLoader;
+  final DateTime? dataAt;
+
+  const IndexBoardPage({super.key, this.boardLoader, this.dataAt});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(titleSpacing: 16, title: const Text('低估榜')),
+        body: IndexBoardView(boardLoader: boardLoader, dataAt: dataAt),
+      );
+}
+
+/// 低估榜的**内容**（不含 Scaffold/AppBar，可直接当标签页）
+class IndexBoardView extends StatefulWidget {
   /// 取榜单（默认 `AppState.loadIndexBoard`；测试注入）
   final Future<List<IndexBoardEntry>> Function({bool force})? boardLoader;
 
   /// 榜单的数据时间（测试注入；默认读 AppState）
   final DateTime? dataAt;
 
-  const IndexBoardPage({super.key, this.boardLoader, this.dataAt});
+  const IndexBoardView({super.key, this.boardLoader, this.dataAt});
 
   @override
-  State<IndexBoardPage> createState() => _IndexBoardPageState();
+  State<IndexBoardView> createState() => _IndexBoardViewState();
 }
 
-class _IndexBoardPageState extends State<IndexBoardPage> {
+class _IndexBoardViewState extends State<IndexBoardView> {
   List<IndexBoardEntry> _rows = const [];
   bool _loading = false;
   String? _error;
@@ -91,65 +109,52 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
         ? _rows
         : [for (final r in _rows) if (r.kind == _kind) r];
     final rows = sortBoard(filtered, _sort, desc: _desc);
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 16,
-        title: const Text('低估榜'),
-        actions: [
-          IconButton(
-            tooltip: '刷新',
-            icon: const Icon(Icons.refresh, size: 20),
-            onPressed: _loading ? null : _refresh,
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      children: [
+        _headCard(context, rows, progress),
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          SectionCard(
+            title: '这份榜单没刷新成功',
+            child: Text(
+              '$_error\n下面是上次拿到的数据（不是今天的最新值）。',
+              style: const TextStyle(fontSize: 12.5),
+            ),
           ),
         ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-        children: [
-          _headCard(context, rows, progress),
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            SectionCard(
-              title: '这份榜单没刷新成功',
-              child: Text(
-                '$_error\n下面是上次拿到的数据（不是今天的最新值）。',
-                style: const TextStyle(fontSize: 12.5),
-              ),
+        const SizedBox(height: 12),
+        if (rows.isEmpty && !_loading)
+          SectionCard(
+            title: '还没拿到数据',
+            child: Text(
+              '低估榜的成员是蛋卷收录的 $kBoardDanjuanCount 个指数 + '
+              '中证官网自算分位的 $kBoardComputedCount 个指数；'
+              '一个都没取到时这里会是空的 —— 点卡头的刷新按钮试试。',
+              style: TextStyle(
+                  fontSize: 12.5, color: Theme.of(context).hintColor),
             ),
-          ],
-          const SizedBox(height: 12),
-          if (rows.isEmpty && !_loading)
-            SectionCard(
-              title: '还没拿到数据',
-              child: Text(
-                '低估榜的成员是蛋卷收录的 $kBoardDanjuanCount 个指数 + '
-                '中证官网自算分位的 $kBoardComputedCount 个指数；'
-                '一个都没取到时这里会是空的 —— 点右上角刷新试试。',
-                style: TextStyle(
-                    fontSize: 12.5, color: Theme.of(context).hintColor),
-              ),
-            )
-          else
-            SectionCard(
-              title: _kind.isEmpty ? '指数估值排名' : '$_kind（估值排名）',
-              trailing: Text(
-                _at == null ? '' : '数据 ${fmtDate(_at!)}',
-                style: TextStyle(
-                    fontSize: 10.5, color: Theme.of(context).hintColor),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _sortBar(context),
-                  const Divider(height: 14),
-                  for (final r in rows) _row(context, r),
-                ],
-              ),
+          )
+        else
+          SectionCard(
+            title: _kind.isEmpty ? '指数估值排名' : '$_kind（估值排名）',
+            trailing: Text(
+              _at == null ? '' : '数据 ${fmtDate(_at!)}',
+              style: TextStyle(
+                  fontSize: 10.5, color: Theme.of(context).hintColor),
             ),
-          const SizedBox(height: 12),
-          _footer(context),
-        ],
-      ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _sortBar(context),
+                const Divider(height: 14),
+                for (final r in rows) _row(context, r),
+              ],
+            ),
+          ),
+        const SizedBox(height: 12),
+        _footer(context),
+      ],
     );
   }
 
@@ -172,10 +177,23 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
     final withData = rows.length - missing; // "有数据"要扣掉这次没取到的
     return SectionCard(
       title: '哪些指数低估',
-      trailing: _loading
-          ? Text(progress.isEmpty ? '刷新中…' : '刷新中 $progress',
-              style: TextStyle(fontSize: 11, color: theme.hintColor))
-          : null,
+      // 刷新放在卡头（这样"单独打开"和"当标签页嵌进指数看板"都够得着）
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_loading)
+            Text(progress.isEmpty ? '刷新中…' : '刷新中 $progress',
+                style: TextStyle(fontSize: 11, color: theme.hintColor)),
+          IconButton(
+            tooltip: '刷新榜单',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            icon: const Icon(Icons.refresh, size: 18),
+            onPressed: _loading ? null : _refresh,
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -426,8 +444,8 @@ class _IndexBoardPageState extends State<IndexBoardPage> {
             Text(
               r.symbol.isEmpty
                   ? '数据源：中证指数官网 PE 历史，分位是自己算的'
-                      '（最新 PE 在 ${r.windowStart.isEmpty ? '这段历史' : '$r.windowStart 起'}'
-                      ' $r.samples 个交易日里的位置）；这一路没有股息率/PB/ROE。'
+                      '（最新 PE 在 ${r.windowStart.isEmpty ? '这段历史' : '${r.windowStart} 起'}'
+                      ' ${r.samples} 个交易日里的位置）；这一路没有股息率/PB/ROE。'
                   : '数据源：蛋卷指数估值（公开接口）；'
                       '分位窗口起点 ${r.windowStart.isEmpty ? '未给出' : r.windowStart}。',
               style: TextStyle(fontSize: 11, color: theme.hintColor),
