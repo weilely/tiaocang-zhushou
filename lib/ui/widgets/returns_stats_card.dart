@@ -435,33 +435,35 @@ class _BenchmarkRow extends StatelessWidget {
         const SizedBox(width: 10),
         // 设计稿是一个浅灰圆角框：自定义时里面是区间收益率、框外带 %；
         // 指数时里面是「沪深300」。点开仍是切换面板，保留切指数的能力。
-        Flexible(
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              constraints: const BoxConstraints(minWidth: 74),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      text,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600),
-                    ),
+        // **基准框不参与 flex 分配**：它显示的是「参考是谁」，是这一行里最不能丢的信息。
+        // 原来它外面套着 Flexible，又和行尾的 Spacer 各占一份 flex → 剩余宽度被平分；
+        // 字体放大到 1.3 后框里只剩不到一个字的宽度，Flutter 连省略号都放不下就直接不画，
+        // 框看起来是空的（真机 400dp 实测；模拟器 450dp 会挤成「沪…」）。
+        InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            constraints: const BoxConstraints(minWidth: 74),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600),
                   ),
-                  const SizedBox(width: 4),
-                  Icon(Icons.expand_more, size: 16, color: theme.hintColor),
-                ],
-              ),
+                ),
+                const SizedBox(width: 4),
+                Icon(Icons.expand_more, size: 16, color: theme.hintColor),
+              ],
             ),
           ),
         ),
@@ -469,20 +471,33 @@ class _BenchmarkRow extends StatelessWidget {
           const SizedBox(width: 8),
           Text('%', style: TextStyle(fontSize: 14, color: theme.hintColor)),
         ],
-        // **变化的差值**（跟着点选走）：实际 − 参考
-        // —— 用户口径「实际-参考=（数值）」
-        if (diff != null) ...[
-          const SizedBox(width: 10),
-          Text('实际-参考=',
-              style: TextStyle(fontSize: 12, color: theme.hintColor)),
-          const SizedBox(width: 2),
-          Text(fmtPct(diff!),
-              style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: pnlColor(diff!))),
-        ],
-        const Spacer(),
+        // **变化的差值**（跟着点选走）：实际 − 参考 —— 用户口径「实际-参考=（数值）」
+        //
+        // 它是整行**唯一可被压缩**的一项：宽度不够时先在这里省略（末尾「…」），
+        // 而不是把左边的基准框挤到画不出来。原来它是两个不可压缩的 Text，
+        // 再加行尾一个 Spacer 与基准框平分剩余宽度 —— 字体放大到 1.3 就会把
+        // 基准名挤成一个字甚至空白（真机 400dp 实测）。
+        if (diff != null)
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 10),
+              child: Text.rich(
+                TextSpan(children: [
+                  TextSpan(
+                      text: '实际-参考=',
+                      style: TextStyle(fontSize: 12, color: theme.hintColor)),
+                  TextSpan(
+                      text: fmtPct(diff!),
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: pnlColor(diff!))),
+                ]),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
       ],
     );
   }
