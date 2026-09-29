@@ -329,8 +329,14 @@ class ChartWindow {
 const double kErpPadL = 30;
 const double kErpPadR = 6;
 
-/// 叠加的指数线颜色 —— 与「趋势图」里的大盘收益线同一支蓝，别另造一个
-const Color kErpIndexLine = Color(0xFF4A90D9);
+/// 叠加的指数线颜色
+///
+/// ⚠️ 2026-09-29 改过：原来是 `#4A90D9`（和「趋势图」大盘线同色的那种蓝），
+/// 但**股债利差那条主线的颜色是主题蓝 `#1F6FEB`** —— 两支蓝色相只差十几度，
+/// 用户当场反馈「两条线颜色区分不明显」。改用琥珀 `#E8A33D`
+/// （App 里「第二条参考线」一直在用的那支，见 `returns_line_chart` 的 `_ref2Color`）：
+/// 与蓝色色相相差约 150°，深浅也拉得开，右轴刻度用同色，能一眼对上哪条线看哪个轴。
+const Color kErpIndexLine = Color(0xFFE8A33D);
 
 /// 曲线窗口的控制器：**缩放按钮和曲线共用同一个窗口状态**
 ///
@@ -371,6 +377,7 @@ class ErpChart extends StatefulWidget {
     required this.rows,
     this.indexSeries = const [],
     this.interactive = false,
+    this.alignToErp = false,
     this.controller,
   });
 
@@ -381,6 +388,10 @@ class ErpChart extends StatefulWidget {
 
   /// 是否可缩放/拖动（关注页那张小卡不开，免得和外层的展开/滚动打架）
   final bool interactive;
+
+  /// **与利差对齐**（`AppState.alignErpIndex`）：打开后横轴只取利差自己的日期，
+  /// 只有指数一条线的"多余那段"不显示
+  final bool alignToErp;
 
   /// 外部控制器（给了就用它当窗口状态 —— 缩放按钮与手势共用）
   final ErpChartController? controller;
@@ -401,11 +412,17 @@ class ErpChart extends StatefulWidget {
 /// 这跟"同一天才有值、对不上就是 null"是同一条口径。
 ({List<String> dates, List<double?> erp, List<double?> idx}) erpChartAxis(
   List<MacroRow> rows,
-  List<NavPoint> indexSeries,
-) {
+  List<NavPoint> indexSeries, {
+  /// true = **与利差对齐**：横轴只取利差自己的日期（用户 2026-09-29 要的开关），
+  /// 早于利差起点、只有指数一条线的那段"多余的"就不画了。
+  /// false = 并集，沪深300 一路画到 2005。
+  bool alignToErp = false,
+}) {
   final erpBy = {for (final r in rows) r.date: r.erp};
   final idxBy = {for (final p in indexSeries) p.date: p.nav};
-  final dates = <String>{...erpBy.keys, ...idxBy.keys}.toList()..sort();
+  final dates = alignToErp
+      ? (erpBy.keys.toList()..sort())
+      : (<String>{...erpBy.keys, ...idxBy.keys}.toList()..sort());
   return (
     dates: dates,
     erp: [for (final d in dates) erpBy[d]],
@@ -436,8 +453,10 @@ class _ErpChartState extends State<ErpChart> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // 轴 = 利差 ∪ 指数（见 [erpChartAxis]）：补进来的早年日线也要有位置画
-    final axis = erpChartAxis(widget.rows, widget.indexSeries);
+    // 轴 = 利差 ∪ 指数（见 [erpChartAxis]）：补进来的早年日线也要有位置画；
+    // 打开「对齐」开关时只取利差那一段
+    final axis = erpChartAxis(widget.rows, widget.indexSeries,
+        alignToErp: widget.alignToErp);
     final erpCount = axis.erp.where((v) => v != null).length;
     final idxCount = axis.idx.where((v) => v != null).length;
     if (axis.dates.length < 2 || (erpCount < 2 && idxCount < 2)) {

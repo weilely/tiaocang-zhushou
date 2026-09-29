@@ -1421,6 +1421,29 @@ class AppState extends ChangeNotifier {
     await db.setSetting('showTrendCallout', v ? '1' : '0');
     notifyListeners();
   }
+
+  /// 「历史曲线」上**沪深300 收益线与利差线对齐**（用户 2026-09-29：
+  /// 「沪深300收益曲线与利差曲线设置一个对齐开关，打开后多余的就不显示了」）
+  ///
+  /// 打开 = 横轴退回**利差自己的日期**（2016-08-15 起，本地利差样本的 10 年），
+  /// 沪深300 补进来的早年那 11 年（2005-04-08 ~ 2016-08-12，只有它一条线）
+  /// 就不画了 —— 那段没有利差可比，留着只是把利差挤到右半边。
+  /// 关闭 = 横轴取两条序列的并集，沪深300 一路画到 2005。
+  ///
+  /// 默认**关**（保持"补的数据要看得到"的现状），要"只看能对齐的那段"就打开。
+  bool alignErpIndex = false;
+
+  Future<void> setAlignErpIndex(bool v) async {
+    alignErpIndex = v;
+    // **先让界面跟上**：写设置失败（库不可用等）不该把开关卡住，
+    // 顶多这次不落盘、下次启动读回旧值
+    notifyListeners();
+    try {
+      await db.setSetting('alignErpIndex', v ? '1' : '0');
+    } catch (_) {
+      // 忽略：开关已经生效，不因为落盘失败回滚
+    }
+  }
   RangePreset trendPreset = RangePreset.m6;
   DateTime? trendCustomStart;
   DateTime? trendCustomEnd;
@@ -1538,6 +1561,7 @@ class AppState extends ChangeNotifier {
       );
       // 趋势图的图内浮窗开关（用户要求可在「参考基准」面板里关掉）
     showTrendCallout = (await db.setting('showTrendCallout')) != '0';
+    alignErpIndex = (await db.setting('alignErpIndex')) == '1';
     await loadSecuritiesStats();
     } catch (e) {
       lastError = '本地数据加载失败：$e';

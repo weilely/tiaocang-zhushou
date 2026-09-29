@@ -256,6 +256,27 @@ void main() {
       expect(axis.idx, everyElement(isNull));
     });
 
+    // 用户 2026-09-29：「沪深300收益曲线与利差曲线设置一个对齐开关，
+    // 打开后多余的就不显示了」
+    test('对齐开关打开：轴退回利差区间，只有指数一条线的早年那段不显示', () {
+      final series = const [
+        NavPoint(code: 'sh000300', date: '2005-04-08', nav: 982.79),
+        NavPoint(code: 'sh000300', date: '2016-08-15', nav: 3393.42),
+        NavPoint(code: 'sh000300', date: '2026-09-29', nav: 4600),
+      ];
+      final aligned = erpChartAxis(erpRows(), series, alignToErp: true);
+      expect(aligned.dates.first, '2016-08-15', reason: '多余的 2005 那段不占轴');
+      expect(aligned.dates, ['2016-08-15', '2016-08-16', '2026-09-29']);
+      expect(aligned.idx.first, closeTo(3393.42, 1e-9),
+          reason: '对齐后指数线从利差起点那天开始');
+      expect(aligned.erp.every((v) => v != null), isTrue);
+
+      // 关掉时仍然是并集（补的数据要看得到）
+      final full = erpChartAxis(erpRows(), series, alignToErp: false);
+      expect(full.dates.first, '2005-04-08');
+      expect(full.erp.first, isNull);
+    });
+
     test('两条序列的日期交错时合并成一条有序轴，各取各的值', () {
       final axis = erpChartAxis(
         [
@@ -305,6 +326,28 @@ void main() {
       ));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  // 用户 2026-09-29：「两条线颜色区分不明显」
+  group('两条线的配色要能一眼分开', () {
+    test('叠加线不能再用蓝色系（主线的主题蓝 #1F6FEB 与它就差十几度色相）', () {
+      const primary = Color(0xFF1F6FEB); // 股债利差那条线（theme.colorScheme.primary）
+      final dHue =
+          (HSLColor.fromColor(kErpIndexLine).hue - HSLColor.fromColor(primary).hue)
+              .abs();
+      final gap = dHue > 180 ? 360 - dHue : dHue;
+      expect(gap, greaterThan(60),
+          reason: '色相差只有 ${gap.toStringAsFixed(1)}° 就会被看成一回事');
+      // 明度也要拉开，别靠"同色不同深浅"糊过去
+      final dL = (HSLColor.fromColor(kErpIndexLine).lightness -
+              HSLColor.fromColor(primary).lightness)
+          .abs();
+      expect(dL, greaterThan(0.05));
+    });
+
+    test('和图例 / 右轴刻度用的是同一个颜色（对得上哪条线看哪个轴）', () {
+      expect(kErpIndexLine, const Color(0xFFE8A33D));
     });
   });
 }

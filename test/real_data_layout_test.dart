@@ -1,12 +1,15 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/core/format.dart';
 import 'package:invest_tracker/data/asset_traits.dart';
+import 'package:invest_tracker/data/db.dart';
 import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/data/nav_models.dart';
 import 'package:invest_tracker/logic/backup.dart';
+import 'package:invest_tracker/logic/benchmark.dart';
 import 'package:invest_tracker/logic/cash_flow.dart';
 import 'package:invest_tracker/logic/range_preset.dart';
 import 'package:invest_tracker/logic/redeem_fee.dart';
@@ -14,8 +17,11 @@ import 'package:invest_tracker/state/app_state.dart';
 import 'package:invest_tracker/ui/all_txns_page.dart';
 import 'package:invest_tracker/ui/cash_manage_page.dart';
 import 'package:invest_tracker/ui/holdings_page.dart';
+import 'package:invest_tracker/ui/index_insight_page.dart';
+import 'package:invest_tracker/ui/macro_chart_page.dart';
 import 'package:invest_tracker/ui/settings_page.dart';
 import 'package:invest_tracker/ui/txn_edit_page.dart';
+import 'package:invest_tracker/ui/widgets/macro_card.dart';
 import 'package:invest_tracker/ui/widgets/returns_stats_card.dart';
 import 'package:invest_tracker/ui/widgets/segmented_pills.dart';
 import 'package:provider/provider.dart';
@@ -115,8 +121,8 @@ void main() {
 
   /// 真机视口 + 字体 1.3
   Future<void> pumpPage(WidgetTester tester, Widget page,
-      {AppState? state}) async {
-    tester.view.physicalSize = const Size(400, 880);
+      {AppState? state, Size size = const Size(400, 880)}) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
@@ -364,6 +370,107 @@ void main() {
       await tester.pumpAndSettle();
       expect(labelText(tester, '手续费（实际）'), isNot('9.99'),
           reason: '改卖出数量后，实际费用不许停在手填的旧值上');
+    });
+    // 用户 2026-09-29：「这个图能不能旋转方向，旋转适配屏幕尺寸」
+    testWidgets('历史曲线横屏全屏：进页面锁横屏、图占满长边，退出恢复跟随系统', (tester) async {
+      final orientCalls = <List<String>>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'SystemChrome.setPreferredOrientations') {
+            orientCalls.add([for (final s in (call.arguments as List)) '$s']);
+          }
+          return null;
+        },
+      );
+      addTearDown(() => tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null));
+
+      // 横屏视口：880×400（和 400×880 竖屏一模一样的一块屏，只是转过来）
+      await pumpPage(tester, const MacroChartPage(),
+          state: makeState(), size: const Size(880, 400));
+      expect(tester.takeException(), isNull);
+      expect(
+        orientCalls.last,
+        containsAll(
+            ['DeviceOrientation.landscapeLeft', 'DeviceOrientation.landscapeRight']),
+        reason: '进页面要把方向放开到横屏',
+      );
+      // 自绘组件别静默空白：宽度必须跟着屏幕长边走（CustomPaint 没 child 时
+      // 宽度算成 0 是历史踩过的坑，所以这里断言真实尺寸而不是"没报错"）
+      final w = tester.getSize(find.byType(ErpChart)).width;
+      expect(w, greaterThan(600), reason: '横屏 880 宽，绘图区要占满（实测 $w）');
+      final h = tester.getSize(find.byType(ErpChart)).height;
+      expect(h, greaterThan(150), reason: '横屏高度也该给满（实测 $h）');
+
+      // 退出 → 锁回竖屏（App 常态；用空列表"跟随系统"会让整个 App 跟着手机横过来）
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      expect(orientCalls.last, ['DeviceOrientation.portraitUp'],
+          reason: '退出要把方向锁回竖屏');
+    });
+    // 用户 2026-09-29：「沪深300收益曲线与利差曲线设置一个对齐开关，
+    // 打开后多余的就不显示了」
+    testWidgets('历史曲线：对齐开关（真数据 + 400dp 窄屏不溢出）', (tester) async {
+      final st = makeState();
+      // 他的库就是这样：沪深300 补到了 2005-04-08，利差只有 2016-08-15 起
+      st.indexNavs['sh000300'] = const [
+        NavPoint(code: 'sh000300', date: '2005-04-08', nav: 982.79),
+        NavPoint(code: 'sh000300', date: '2016-08-15', nav: 3393.42),
+        NavPoint(code: 'sh000300', date: '2026-09-28', nav: 4600),
+      ];
+      st.benchmark = st.benchmark.copyWith(
+          kind: BenchmarkKind.marketIndex, indexCode: 'sh000300', indexName: '沪深300');
+      // 利差历史：`makeState()` 不灌这一项，直接用备份里的真实行（2631 行，2016-08-15 起）。
+      // **必须按日期升序**：生产里 `db.macroHistory()` 是 `orderBy: 'date ASC'`，
+      // 而备份 JSON 里那段的顺序不保证（不排的话 `.first` 不是最早那天，图注会写错）。
+      if (st.macroHistory.length < 2) {
+        st.macroHistory = [
+          for (final m in back.macroRows)
+            MacroRow(
+              date: '${m['date']}',
+              hs300Pe: (m['hs300Pe'] as num?)?.toDouble() ?? 0,
+              cn10y: (m['cn10y'] as num?)?.toDouble() ?? 0,
+              erp: (m['erp'] as num?)?.toDouble() ?? 0,
+            ),
+        ]..sort((a, b) => a.date.compareTo(b.date));
+      }
+      if (st.macroHistory.length < 2) {
+        markTestSkipped('备份里没有利差历史');
+        return;
+      }
+
+      // 纯口径：关 = 并集（2005 起），开 = 退回利差区间
+      final full = erpChartAxis(st.macroHistory, st.benchmarkNavs);
+      final aligned =
+          erpChartAxis(st.macroHistory, st.benchmarkNavs, alignToErp: true);
+      expect(full.dates.first, '2005-04-08', reason: '关着的时候补的数据要看得到');
+      expect(aligned.dates.first, st.macroHistory.first.date,
+          reason: '打开对齐后多余的早年段不占轴（实测库里利差从 ${st.macroHistory.first.date} 起）');
+
+      // 界面：开关能点、状态跟着走、窄屏不溢出。
+      // **直接泵 MacroDetailView**（市场估值那块内容）：走 IndexInsightPage 的话
+      // 默认标签是「低估榜」，它会去拉数据、转圈动画永远 settle 不了（pumpAndSettle 超时）。
+      // 注意它自己就是可滚动的，别再套 SingleChildScrollView（嵌套滚动会 hasSize 断言失败）。
+      await pumpPage(tester, const Scaffold(body: MacroDetailView()), state: st);
+      expect(tester.takeException(), isNull);
+
+      final sw = find.byType(Switch);
+      expect(sw, findsOneWidget);
+      expect(st.alignErpIndex, isFalse, reason: '默认关（保持"补的数据看得到"）');
+      await tester.tap(sw);
+      await tester.pumpAndSettle();
+      expect(st.alignErpIndex, isTrue, reason: '开关要接上 setter');
+      expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue,
+          reason: 'setter 先改状态再落盘，界面要立刻跟上');
+      expect(tester.takeException(), isNull, reason: '落盘失败也不该抛到界面');
+      // 图注跟着开关改口（页面是懒构建的，先滚到那段文字）
+      await tester.scrollUntilVisible(find.textContaining('已与利差对齐'), 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('已与利差对齐'), findsOneWidget,
+          reason: '图注要跟着开关改口，不能说还是 2005 起');
+      expect(tester.takeException(), isNull);
     });
   });
 }

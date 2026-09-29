@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import 'index_board_page.dart';
 import 'index_valuation_page.dart';
+import 'macro_chart_page.dart';
 import 'widgets/common.dart';
 import 'widgets/macro_card.dart';
 
@@ -208,25 +209,43 @@ class _MacroDetailViewState extends State<MacroDetailView> {
         SectionCard(
           title: '历史曲线',
           // 缩放按钮放卡头：手机上双指不好按，按钮才是主要入口（手势同样支持）
-          trailing: ListenableBuilder(
-            listenable: _chart,
-            builder: (ctx, _) => Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _zoomBtn(Icons.remove, '缩小', _chart.canZoomIn,
-                    _chart.zoomOut),
-                _zoomBtn(Icons.add, '放大', _chart.canZoomIn, _chart.zoomIn),
-                IconButton(
-                  tooltip: '复位',
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints(minWidth: 32, minHeight: 32),
-                  icon: const Icon(Icons.restart_alt, size: 18),
-                  onPressed: _chart.isFull ? null : _chart.reset,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 横屏全屏看（用户 2026-09-29：「这个图能不能旋转方向，旋转适配屏幕尺寸」）
+              // 图标用**标准全屏符号**（四个角括号）——用户在模拟器上看到 `open_in_full`
+              // 那个对角双箭头后说「用全屏符号呀」，`Icons.fullscreen` 才是大家认的那个
+              IconButton(
+                tooltip: '横屏全屏',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                icon: const Icon(Icons.fullscreen, size: 20),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const MacroChartPage()),
                 ),
-              ],
-            ),
+              ),
+              ListenableBuilder(
+                listenable: _chart,
+                builder: (ctx, _) => Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _zoomBtn(Icons.remove, '缩小', _chart.canZoomIn,
+                        _chart.zoomOut),
+                    _zoomBtn(Icons.add, '放大', _chart.canZoomIn, _chart.zoomIn),
+                    IconButton(
+                      tooltip: '复位',
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(minWidth: 32, minHeight: 32),
+                      icon: const Icon(Icons.restart_alt, size: 18),
+                      onPressed: _chart.isFull ? null : _chart.reset,
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -249,16 +268,33 @@ class _MacroDetailViewState extends State<MacroDetailView> {
                   rows: st.macroHistory,
                   indexSeries: indexSeries,
                   interactive: true,
+                  alignToErp: st.alignErpIndex,
                   controller: _chart,
                 ),
               ),
+              // 对齐开关（用户 2026-09-29：「沪深300收益曲线与利差曲线设置一个对齐开关，
+              // 打开后多余的就不显示了」）：打开 = 横轴退回利差那 10 年，
+              // 只有指数一条线的 2005~2016 不画
+              if (indexSeries.isNotEmpty)
+                Row(
+                  children: [
+                    Text('与利差对齐',
+                        style: TextStyle(fontSize: 11.5, color: theme.hintColor)),
+                    const Spacer(),
+                    Switch(
+                      value: st.alignErpIndex,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onChanged: (v) => st.setAlignErpIndex(v),
+                    ),
+                  ],
+                ),
               const SizedBox(height: 4),
               Text(
                 indexSeries.isEmpty
                     ? '${st.benchmark.indexName}的历史还没入库 —— 去「资产收益 → 趋势图」'
                         '把基准选成它就会抓一次，之后这里能叠上它的收益曲线。'
-                    : '${st.benchmark.indexName} 这条线从 ${indexSeries.first.date} 起'
-                        '（利差从 ${st.macroHistory.isEmpty ? '—' : st.macroHistory.first.date} 起）；'
+                    : '${st.benchmark.indexName} 这条线'
+                        '${st.alignErpIndex ? '已与利差对齐（${st.macroHistory.isEmpty ? '—' : st.macroHistory.first.date} 起）' : '从 ${indexSeries.first.date} 起（利差从 ${st.macroHistory.isEmpty ? '—' : st.macroHistory.first.date} 起）'}；'
                         '它的区间收益以当前可见窗口的第一天为基准。'
                         '点卡头 − / + 缩放、复位回全览，也可以双指缩放、单指拖动、双击复位。',
                 style: TextStyle(fontSize: 10.5, color: theme.hintColor),
