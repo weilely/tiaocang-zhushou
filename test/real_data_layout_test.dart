@@ -9,6 +9,7 @@ import 'package:invest_tracker/data/nav_models.dart';
 import 'package:invest_tracker/logic/backup.dart';
 import 'package:invest_tracker/logic/cash_flow.dart';
 import 'package:invest_tracker/logic/range_preset.dart';
+import 'package:invest_tracker/logic/redeem_fee.dart';
 import 'package:invest_tracker/state/app_state.dart';
 import 'package:invest_tracker/ui/all_txns_page.dart';
 import 'package:invest_tracker/ui/cash_manage_page.dart';
@@ -265,5 +266,77 @@ void main() {
       expect(find.textContaining(st.flowPreset.label), findsWidgets,
           reason: '连预设名一起写，才知道这是哪一段');
     });
+
+    // 用户 2026-09-29：「在卖出标的时，在确认手续费的逻辑，尤其是基金卖出档位费率，
+    // 要真实，当改变卖出数量时，后面相关的数据要随动，尤其是实际费用」
+    testWidgets('卖出：档位用真档，改份额 → 「手续费（实际）」跟着重算', (tester) async {
+      final st = makeState();
+      final held = st.allPositions.where((p) => p.shares > 1).toList()
+        ..sort((a, b) => b.shares.compareTo(a.shares));
+      if (held.isEmpty) {
+        markTestSkipped('备份里没有持仓');
+        return;
+      }
+      final p = held.first;
+      // 给这只基金一档「真实」费率：7 天内 1.5% / 7~30 天 0.5% / 30 天以上 0
+      st.userRedeemTiers[p.asset.code] = const [
+        RedeemTier(0, 7, 1.5),
+        RedeemTier(7, 30, 0.5),
+        RedeemTier(30, null, 0),
+      ];
+
+      await pumpPage(
+        tester,
+        TxnEditPage(
+          presetAccountId: p.accountId,
+          presetAsset: p.asset,
+          presetType: TxnType.sell,
+          maxShares: p.shares,
+        ),
+        state: st,
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      // 档位取到了「你手动设的」那一档（不是默认档）→ 费用才是真的
+      // （档位框和预测框的 helper 都会写这句，所以不止一处）
+      expect(find.textContaining('档位是你设的'), findsWidgets);
+
+      // 测试环境没有库/网，净值手填一个
+      await tester.enterText(labelField(tester, '净值'), '1.20');
+      await tester.pumpAndSettle();
+      final full = labelText(tester, '手续费（实际）');
+      expect(full, isNotEmpty, reason: '份额与净值都有 → 实际费用自动填出来');
+      expect(double.tryParse(full), isNotNull);
+
+      // 份额改成一半 → 实际费用必须跟着重算
+      await tester.enterText(
+          labelField(tester, '卖出份'), (p.shares / 2).toStringAsFixed(2));
+      await tester.pumpAndSettle();
+      final half = labelText(tester, '手续费（实际）');
+      expect(half, isNot(full), reason: '份额变了，实际费用要随动');
+
+      // 就算之前手改过「实际」，改份额也要把它拉回重算值
+      await tester.enterText(labelField(tester, '手续费（实际）'), '9.99');
+      await tester.pumpAndSettle();
+      expect(labelText(tester, '手续费（实际）'), '9.99');
+      await tester.enterText(
+          labelField(tester, '卖出份'), (p.shares / 4).toStringAsFixed(2));
+      await tester.pumpAndSettle();
+      expect(labelText(tester, '手续费（实际）'), isNot('9.99'),
+          reason: '改卖出数量后，实际费用不许停在手填的旧值上');
+    });
   });
+}
+
+/// 某个 label 对应的输入框（TextFormField）
+Finder labelField(WidgetTester tester, String label) => find
+    .ancestor(of: find.text(label), matching: find.byType(TextFormField))
+    .first;
+
+/// 读某个输入框里的文本
+String labelText(WidgetTester tester, String label) {
+  final tf = tester.widget<TextField>(find
+      .descendant(of: labelField(tester, label), matching: find.byType(TextField))
+      .first);
+  return tf.controller?.text ?? '';
 }

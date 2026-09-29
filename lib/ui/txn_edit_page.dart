@@ -396,16 +396,20 @@ class _TxnEditPageState extends State<TxnEditPage> {
     return '按持有天数自动算（档位用内置默认）';
   }
 
-  /// 把 FIFO 估出来的赎回费**自动填进「手续费（实际）」**（用户 2026-09-28 选的 B）
+  /// 把 FIFO 估出来的赎回费**自动填进「手续费（实际）」**
   ///
-  /// 只在「场外卖出 + 用户还没手改过实际值」时同步；用户一动那个框就不再覆盖。
-  void _autoFillFee() {
-    if (_feeTouched) return;
+  /// 两条规则（用户 2026-09-28 选的 B + 2026-09-29 的补充）：
+  /// - 默认只在「场外卖出 + 用户还没手改过实际值」时同步；
+  /// - **改了卖出份额就必须重算**（[force]）—— 赎回费本来就是份额的函数，
+  ///   份额一变旧值就作废。用户原话：「当改变卖出数量时，后面相关的数据要随动，
+  ///   尤其是实际费用」。
+  void _autoFillFee({bool force = false}) {
     // 编辑既有记录：手续费是**这笔真实发生过的**数，打开页面或改份额都不许被
     // FIFO 估算悄悄改掉（否则一进来就"有改动"、还能一按保存把费改了）。
     // 想看估算值：点「一键导入预测值」或「赎回费档位」都还在。
     if (widget.existing != null) return;
     if (_type != TxnType.sell || _kind.isExchange) return;
+    if (_feeTouched && !force) return;
     final fee = _fifoRedeemFee();
     if (fee == null) return;
     final text = fee.toStringAsFixed(2);
@@ -413,6 +417,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
       _fee.text = text;
       if (mounted) setState(() {});
     }
+    // 重算过 = 这一格又回到"自动值"，之后净值再变也跟着走
+    if (force) _feeTouched = false;
   }
 
   /// 费率框 —— 场内是「佣金费率（万分之几）」（免五圆点嵌在框里）；
@@ -435,11 +441,15 @@ class _TxnEditPageState extends State<TxnEditPage> {
             suffix: TextButton(
               onPressed: _accountId == null || _assetId == null
                   ? null
-                  : () => showRedeemFeeSheet(
+                  : () async {
+                      await showRedeemFeeSheet(
                         context,
                         accountId: _accountId!,
                         assetId: _assetId!,
-                      ),
+                      );
+                      // 弹层里可能改了档位 → 回来重新取一次并重算实际费用
+                      if (mounted) await _loadRedeemTiers();
+                    },
               child: const Text('档位', style: TextStyle(fontSize: 12)),
             ),
           ),
@@ -576,6 +586,9 @@ class _TxnEditPageState extends State<TxnEditPage> {
       _autoAmount = true; // 卖出：份额是主字段，手改后金额跟着算
     }
     _syncDerived();
+    // 卖出：份额是主字段 —— 份额一动，金额、**实际手续费**都要跟着重算
+    // （用户 2026-09-29：「当改变卖出数量时，后面相关的数据要随动，尤其是实际费用」）
+    if (_type == TxnType.sell) _autoFillFee(force: true);
     setState(() {}); // 「预测」那一格要跟着金额/份额重算
   }
 
@@ -589,6 +602,7 @@ class _TxnEditPageState extends State<TxnEditPage> {
       _autoAmount = false;
     }
     _syncDerived();
+    if (_type == TxnType.sell) _autoFillFee(force: true);
     setState(() {});
   }
 
@@ -737,6 +751,9 @@ class _TxnEditPageState extends State<TxnEditPage> {
                 // 买入用申购费率、卖出用赎回费率 → 换类型要把费率框跟着换
                 _reloadFeeRate();
                 _syncDerived();
+                // 切到「卖出」要把这只基金**真实的赎回档位**取回来（用户改过 →
+                // 基金档案 → 默认档），否则估出来的费用一直用默认档、不真实
+                if (_type == TxnType.sell) unawaited(_loadRedeemTiers());
               }),
             ),
             const SizedBox(height: 20),
@@ -1375,6 +1392,8 @@ class _TxnEditPageState extends State<TxnEditPage> {
     // 代码定了，净值就能按当前日期查出来了
     _syncNav();
     _syncDerived();
+    // 换标的 → 赎回档位也要跟着换（卖出时才真的去取）
+    unawaited(_loadRedeemTiers());
   }
 
   Widget _buildSearchResults(BuildContext context, AppState st) {
