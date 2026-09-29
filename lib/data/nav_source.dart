@@ -81,14 +81,16 @@ class NavSource {
   /// 指数 / 带前缀标的的**东财全量日线**（`push2his` 的 kline，`f51=日期 f53=收盘`）
   ///
   /// 东财的 secid 前缀：上交所 `1.`、深交所 / 北交所 `0.`。
+  /// [beg]/[end] 都是 `yyyyMMdd`；调用方可以**分块**拉（一次几年），
+  /// 这样单个请求小、遇到限流/断连时也只丢一块（见 `ensureIndexHistory`）。
   Future<List<NavPoint>> eastKline(Asset asset,
-      {String beg = '20050101'}) async {
+      {String beg = '20050101', String end = '20500101'}) async {
     final m = RegExp(r'^(sh|sz|bj)(\d{6})$').firstMatch(asset.code.trim());
     if (m == null) return const [];
     final market = m.group(1) == 'sh' ? '1' : '0';
     final url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
         '?secid=$market.${m.group(2)}'
-        '&klt=101&fqt=1&beg=$beg&end=20500101&fields1=f1,f2,f3&fields2=f51,f53';
+        '&klt=101&fqt=1&beg=$beg&end=$end&fields1=f1,f2,f3&fields2=f51,f53';
     final res = await _raw(url);
     if (res.statusCode != 200) throw MarketException('HTTP ${res.statusCode}');
     final body = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true));

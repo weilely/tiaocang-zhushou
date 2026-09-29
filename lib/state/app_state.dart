@@ -1569,7 +1569,10 @@ class AppState extends ChangeNotifier {
     // 启动时把基准指数的历史读回内存（库里可能早就抓过了）；
     // 库里没有（用户从没切过指数基准）就顺手抓一次，
     // 否则趋势图的基准线要等「更新净值」跑完才画得出来
-    unawaited(_fetchBenchmarkIndex());
+    unawaited(_fetchBenchmarkIndex()
+        // 顺手补指数的**早年缺口**（老版本只有新浪 1500 条 → 沪深300 从 2020-07 起）：
+        // 跟"行情有没有取到"无关，所以挂在启动链上，而不是只挂在刷新成功之后
+        .then((_) => ensureIndexHistory()));
   }
 
   /// 重新算派生数据（现金余额/收益、逐日序列缓存作废）
@@ -3971,12 +3974,78 @@ class AppState extends ChangeNotifier {
   /// 更新历史净值：无数据全量、有数据增量
   ///
   /// 逐个串行 + 200ms 节流（比并发更不容易被限流）；失败只记账不写半截。
+  /// 补齐指数日线的**早年缺口**（用户 2026-09-29：「为什么沪深300收益日期从 2020-07-20，
+  /// 有没有更多的数据源，最好对齐」）
+  ///
+  /// 老版本走新浪日K，`datalen` 上限 1500 条（约 6 年）→ 沪深300 只有 2020-07 起，
+  /// 与股债利差（2016-08 起）对不齐。这里用东财 push2his 的全量日线（2005 起）
+  /// 把「已有最早那天之前」的点补进去。
+  ///
+  /// **幂等、且不拖慢刷新**：存量已经够长（最早 ≤ 2016-01-01）就一条请求都不发；
+  /// 每个指数失败单独吞掉，不影响别的。跑在 [_backfillNavIfStale] 里（行情拉完
+  /// 调一次，启动与手动刷新都会走到）。
+  Future<void> ensureIndexHistory() async {
+    if (navUpdating) return;
+    // 指数代码的两个来源：①**选中的基准**（他的基准 kind 是 `custom`，
+    // `navTargets` 里那条 marketIndex 分支不会带上它 ✗ 曾经因此一个都没补）；
+    // ②navTargets 里本来就是 8 位前缀的（关注列表里的指数等）
+    final seen = <String>{};
+    final codes = <Asset>[];
+    void add(String code, String name) {
+      final c = code.trim();
+      if (!RegExp(r'^(sh|sz|bj)\d{6}$').hasMatch(c)) return;
+      if (!seen.add(c)) return;
+      codes.add(Asset(code: c, name: name, kind: AssetKind.other));
+    }
+
+    add(benchmark.indexCode, benchmark.indexName);
+    for (final a in navTargets) {
+      add(a.code, a.name);
+    }
+
+    for (final a in codes) {
+      try {
+        final earliest = (await db.navEarliestFor([a.code]))[a.code]?.date ?? '';
+        if (earliest.isNotEmpty && earliest.compareTo('2016-01-01') <= 0) {
+          continue; // 已经够长了
+        }
+        // **分块往回补**（一块 5 年 ≈ 1200 个交易日）：请求小不容易被掐，
+        // 中途失败就停 —— 已经补进去的留着，下次启动从新的最早那天继续。
+        var endKey = earliest.isEmpty ? '20500101' : earliest.replaceAll('-', '');
+        var added = 0;
+        for (var i = 0; i < 8 && endKey.compareTo('20050101') > 0; i++) {
+          final endYear = int.parse(endKey.substring(0, 4));
+          final begKey = '${(endYear - 5).toString().padLeft(4, '0')}0101';
+          final pts = await navSource.eastKline(a, beg: begKey, end: endKey);
+          final older = [
+            for (final p in pts)
+              if (earliest.isEmpty || p.date.compareTo(earliest) < 0) p,
+          ];
+          if (older.isEmpty) break;
+          await db.upsertNavPoints(older);
+          added += older.length;
+          endKey = begKey; // 继续往前一块
+        }
+        if (added == 0) continue;
+        await loadIndexNavs();
+        await loadNavSamples();
+        lastMessage = '已补齐 ${a.code} 的早年日线 $added 条';
+        notifyListeners();
+      } catch (_) {
+        // 单个指数补不到就算了（限流/断网都可能），下次刷新再试
+      }
+    }
+  }
+
   /// 行情已公布净值比历史表新 → 补一次历史净值（**自愈**）
   ///
   /// 判断用纯函数 [staleNavCodes]（有单测）。没落后就**什么都不做**，
   /// 不给刷新增加多余的网络请求；失败也静默，下次刷新还会再试。
   void _backfillNavIfStale() {
     try {
+      // 指数日线的**早年缺口**跟"净值是否落后"无关：老版本只从新浪拿了 1500 条
+      // （约 6 年，沪深300 只有 2020-07 起），这里顺手补齐（幂等，够长就一个请求都不发）
+      unawaited(ensureIndexHistory());
       final stale = staleNavCodes(
         historyLastDate: {
           for (final e in quotes.entries)
@@ -4017,33 +4086,9 @@ class AppState extends ChangeNotifier {
 
         try {
           var latest = await db.latestNavDate(a.code);
-          // 指数走新浪日K，条数上限实测 1500（2000 返回空）
+          // 指数走新浪日K，条数上限实测 1500（2000 返回空）——
+          // 早年缺口由 `ensureIndexHistory()` 负责补（与这里的增量更新分开）
           final isIndex = RegExp(r'^(sh|sz|bj)\d{6}$').hasMatch(a.code);
-
-          // 指数的**早年缺口补一次**：老版本只从新浪拿了 1500 条（约 6 年），
-          // 沪深300 因此从 2020-07-20 才起（用户 2026-09-29 问「为什么…从
-          // 2020-07-20，有没有更多的数据源，最好对齐」）→ 东财日K 有全量
-          // （2005 起），这里把已有最早那天之前的补上。幂等：按 code+date upsert。
-          if (isIndex) {
-            final earliest = (await db.navEarliestFor([a.code]))[a.code];
-            if (earliest == null || earliest.date.compareTo('2016-01-01') > 0) {
-              try {
-                final full = await navSource.eastKline(a);
-                final older = [
-                  for (final p in full)
-                    if (earliest == null || p.date.compareTo(earliest.date) < 0)
-                      p,
-                ];
-                if (older.isNotEmpty) {
-                  await db.upsertNavPoints(older);
-                  written += older.length;
-                }
-              } catch (_) {
-                // 补不到就算了，别影响后面的增量更新
-              }
-            }
-          }
-
             final pts = latest == null
                 ? await navSource.fullHistory(a, datalen: isIndex ? 1500 : 1000)
                 : (manual
