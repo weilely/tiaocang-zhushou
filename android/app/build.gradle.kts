@@ -36,26 +36,38 @@ android {
         versionName = flutter.versionName
     }
 
+    // 发布签名（key.properties 存在时才有）
+    val releaseSigning = if (keystoreProps.getProperty("storeFile") != null) {
+        signingConfigs.create("release") {
+            storeFile = file(keystoreProps.getProperty("storeFile"))
+            storePassword = keystoreProps.getProperty("storePassword")
+            keyAlias = keystoreProps.getProperty("keyAlias")
+            keyPassword = keystoreProps.getProperty("keyPassword")
+        }
+    } else {
+        null
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
         // 正式发布用 key.properties 里的签名；文件不存在时退回 debug 便于本机调试
-        signingConfig = if (keystoreProps.getProperty("storeFile") != null) {
-            signingConfigs.create("release") {
-                storeFile = file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
-            }
-        } else {
-            signingConfigs.getByName("debug")
-        }
+        signingConfig = releaseSigning ?: signingConfigs.getByName("debug")
             // ML Kit 引用了未打包的语种模型类，需要 proguard-rules.pro 里的 -dontwarn
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+        // **热重载调试**：debug / profile 也签发布包那把钥匙。
+        // 原因：`flutter run` 装的是 debug 包，签名不同就没法覆盖安装到
+        // 已经装着发布包、**且里面有真实数据**的机器上（adb 会要求先卸载，
+        // 而卸载会把 App 数据一起删掉）。签同一把钥匙就能直接覆盖，数据不动。
+        // 注意：`profile` 这个 buildType 是 Flutter 插件注册的（不是静态访问器），
+        // 所以只能用 findByName/maybeCreate，写 `profile { }` 会解析到 Kotlin 源集。
+        if (releaseSigning != null) {
+            getByName("debug") { signingConfig = releaseSigning }
+            (findByName("profile") ?: maybeCreate("profile")).signingConfig =
+                releaseSigning
         }
     }
 }

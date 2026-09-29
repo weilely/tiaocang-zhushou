@@ -70,6 +70,10 @@ class _TxnEditPageState extends State<TxnEditPage> {
   /// 等净值公布后由 `AppState.fillPendingTxns()` 自动补（用户 2026-09-28 选的做法）
   bool _pending = false;
 
+  /// 打开编辑页那一刻的表单快照：没有任何改动时「保存」置灰
+  /// （用户 2026-09-29：「数据没有改动保存就不能用」）
+  late String _initialSnapshot;
+
   /// 场外**卖出**用的赎回档位（异步从基金档案取；取到前先按内置默认档估）
   List<RedeemTier> _redeemTiers = kDefaultRedeemTiers;
   String _tiersSource = '';
@@ -144,6 +148,9 @@ class _TxnEditPageState extends State<TxnEditPage> {
       // 编辑既有记录：打开时一个字段都不动，改哪个哪个说了算
       _autoAmount = false;
       _autoShares = false;
+      // 「待确认」是**记账当时**的选择，编辑时照原样带出来
+      // （用户 2026-09-29：编辑页里不该出现「改为待确认」这个开关）
+      _pending = e.pending;
     } else {
       _accountId = widget.presetAccountId ??
           st.accountFilter ??
@@ -176,6 +183,10 @@ class _TxnEditPageState extends State<TxnEditPage> {
     _reloadFeeRate();
     // 「实际」手续费默认为 0（用户要求）；编辑既有流水则沿用记录里的值
     if (widget.existing == null) _fee.text = '0';
+
+    // 记下"刚打开时长什么样"：没有任何改动时「保存」要置灰
+    // （用户 2026-09-29：「数据没有改动保存就不能用」）
+    _initialSnapshot = _formSnapshot();
 
     // 进来就带着标的（从持仓详情页）时，先按当前日期查一次净值
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -390,6 +401,10 @@ class _TxnEditPageState extends State<TxnEditPage> {
   /// 只在「场外卖出 + 用户还没手改过实际值」时同步；用户一动那个框就不再覆盖。
   void _autoFillFee() {
     if (_feeTouched) return;
+    // 编辑既有记录：手续费是**这笔真实发生过的**数，打开页面或改份额都不许被
+    // FIFO 估算悄悄改掉（否则一进来就"有改动"、还能一按保存把费改了）。
+    // 想看估算值：点「一键导入预测值」或「赎回费档位」都还在。
+    if (widget.existing != null) return;
     if (_type != TxnType.sell || _kind.isExchange) return;
     final fee = _fifoRedeemFee();
     if (fee == null) return;
@@ -694,6 +709,19 @@ class _TxnEditPageState extends State<TxnEditPage> {
             if (_locked) ...[
               _lockedHeader(context, state),
               const SizedBox(height: 16),
+            ] else if (widget.existing != null) ...[
+              // 编辑既有记录：**只看得到这笔本来的操作行为**，类型不给改
+              // （用户 2026-09-29：「买入就是买入，卖出就是卖出，分红就是分红，
+              //   再投就是再投，其他不相干的功能禁用」）
+              SegmentedButton<String>(
+                segments: [
+                  ButtonSegment(value: _lockedType, label: Text(_lockedType)),
+                ],
+                selected: {_lockedType},
+                // 禁用：改类型等于把一笔买入改成卖出，那不是"编辑"是"记错重记"
+                onSelectionChanged: null,
+              ),
+              const SizedBox(height: 20),
             ] else ...[
             SegmentedButton<TxnType>(
               segments: const [
@@ -931,12 +959,18 @@ class _TxnEditPageState extends State<TxnEditPage> {
             ),
             const SizedBox(height: 28),
 
-            FilledButton(
-              onPressed: _save,
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
+            // 「保存」跟着"有没有改动"走：备注/金额这些框改了不会走 setState，
+            // 所以这里直接听控制器，改一下按钮立刻亮/灭。
+            ListenableBuilder(
+              listenable: Listenable.merge(
+                  [_code, _name, _shares, _price, _amount, _fee, _note]),
+              builder: (_, _) => FilledButton(
+                onPressed: _dirty ? _save : null,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
+                child: const Text('保存'),
               ),
-              child: const Text('保存'),
             ),
           ],
         ),
@@ -947,12 +981,55 @@ class _TxnEditPageState extends State<TxnEditPage> {
 
   // ---------------- 表单字段 ----------------
 
+  /// 编辑既有记录时顶部显示的操作行为名。
+  ///
+  /// **「再投」要显示成再投**（用户 2026-09-29：「再投就是再投」）—— 红利再投在
+  /// 库里就是一笔备注带 `红利再投 / 再投` 的买入（不掉现金），所以按备注现判，
+  /// 与 `Txn.isReinvest` 同一套规则：改了备注这里也跟着变。
+  String get _lockedType {
+    if (_type != TxnType.buy) return _type.label;
+    final n = _note.text.trim();
+    return n.startsWith(Txn.reinvestNote) || n.startsWith('再投') ? '再投' : '买入';
+  }
+
+  /// 表单当前值的快照（只含**会被写进那笔记录**的字段）。
+  ///
+  /// 费率框不在里面：它不是这笔记录的一部分，改它是即时写进设置的。
+  String _formSnapshot() {
+    String num(TextEditingController c) =>
+        (double.tryParse(c.text.trim()) ?? 0).toStringAsFixed(6);
+    return [
+      _type.name,
+      '$_accountId',
+      '$_assetId',
+      _kind.name,
+      _code.text.trim(),
+      _name.text.trim(),
+      num(_shares),
+      num(_price),
+      num(_amount),
+      num(_fee),
+      _note.text.trim(),
+      fmtDate(_date),
+      '$_pending',
+    ].join('|');
+  }
+
+  /// 有没有改动过：新建的永远可存（空值由校验器拦），
+  /// 编辑的要有改动才给存（用户 2026-09-29：「数据没有改动保存就不能用」）
+  bool get _dirty =>
+      widget.existing == null || _formSnapshot() != _initialSnapshot;
+
   /// 这一笔能不能按「待确认」记：**场外基金的买入与卖出**，且所选日期的净值不是精确命中
   /// （今天还没公布 → 查到的多半是上一交易日的）。
   ///
   /// 买入等的是**份额**、卖出等的是**金额**（场外赎回按份额下单，成交金额同样是按
   /// 当日净值确认的 —— 用户 2026-09-28 追问「场外基金当天卖出没有净值不也得待确认」）。
+  ///
+  /// **编辑既有记录时不出现**（用户 2026-09-29）：待确认是记账当时的选择，
+  /// 事后改一笔老账不该把它翻回"待确认"。
   bool get _canPending =>
+      widget.existing == null &&
       !_kind.isExchange &&
       (_type == TxnType.buy || _type == TxnType.sell) &&
       (_pending || _navFill == null || !_navFill!.exact);
