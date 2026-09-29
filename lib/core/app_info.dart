@@ -9,7 +9,7 @@
 /// 真正发布时仍走 `bump_version.ps1`。
 library;
 
-const String appVersion = '1.2.0';
+const String appVersion = '1.3.0';
 
 /// 作者署名
 const String appAuthor = '吹角天明@MLB';
