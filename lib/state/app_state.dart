@@ -4016,7 +4016,17 @@ class AppState extends ChangeNotifier {
         for (var i = 0; i < 8 && endKey.compareTo('20050101') > 0; i++) {
           final endYear = int.parse(endKey.substring(0, 4));
           final begKey = '${(endYear - 5).toString().padLeft(4, '0')}0101';
-          final pts = await navSource.eastKline(a, beg: begKey, end: endKey);
+          // 东财优先（一次能给全量），不通就换腾讯（同样有全量早年日线）——
+          // 2026-09-29 实测东财会整段掐连接，只写东财这条腿等于补不上。
+          var pts = <NavPoint>[];
+          try {
+            pts = await navSource.eastKline(a, beg: begKey, end: endKey);
+          } catch (_) {
+            // 掉到腾讯
+          }
+          if (pts.isEmpty) {
+            pts = await navSource.tencentKline(a, beg: begKey, end: endKey);
+          }
           final older = [
             for (final p in pts)
               if (earliest.isEmpty || p.date.compareTo(earliest) < 0) p,

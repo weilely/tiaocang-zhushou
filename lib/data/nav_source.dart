@@ -68,7 +68,13 @@ class NavSource {
         final pts = await eastKline(asset);
         if (pts.isNotEmpty) return pts;
       } catch (_) {
-        // 东财不通就掉到下面的新浪日K（宁可短，也别没有）
+        // 东财不通就往下走（腾讯 → 新浪，宁可短，也别没有）
+      }
+      try {
+        final pts = await tencentKline(asset);
+        if (pts.isNotEmpty) return pts;
+      } catch (_) {
+        // 同上
       }
     }
     return sinaDaily(asset, datalen: datalen);
@@ -110,6 +116,63 @@ class NavSource {
     }
     out.sort((a, b) => a.date.compareTo(b.date));
     return out;
+  }
+
+  /// **腾讯日K**（`web.ifzq.gtimg.cn`）—— 东财不通时的备胎（含早年全量历史）
+  ///
+  /// 为什么需要它：东财 `push2his` 会不可预期地掐连接（2026-09-29 实测：模拟器
+  /// `curl` 返 `000`、Dart 报 `Connection closed before full header was received`），
+  /// 而同时刻腾讯这条路是 `200`。沪深300 早年日线补齐因此改走「东财 → 腾讯」两条腿。
+  ///
+  /// 腾讯的两个脾气（都实测过）：① 单次最多 **2000** 根，`6000` 直接 `param error`；
+  /// ② 它是**从 [end]往回数** 2000 根（不是从 beg 往后），所以分块补齐时按 `end`
+  /// 一段段往前拉，拿到后再裁到 `[beg, end]`。
+  /// 返回行格式：`[日期, 开, 收, 高, 低, 量]`（**收盘价在 index 2**）。
+  Future<List<NavPoint>> tencentKline(Asset asset,
+      {String beg = '20050101',
+      String end = '20500101',
+      int count = 2000}) async {
+    if (!_isIndexCode(asset.code)) return const [];
+    final code = asset.code.trim();
+    final url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get'
+        '?param=$code,day,${_dash(beg)},${_dash(_today(end))},$count,qfq';
+    final res = await _raw(url, referer: 'https://gu.qq.com/');
+    if (res.statusCode != 200) throw MarketException('HTTP ${res.statusCode}');
+    final body = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true));
+    if (body is! Map) return const [];
+    final data = body['data'];
+    if (data is! Map) return const [];
+    final node = data[code];
+    if (node is! Map) return const [];
+    final rows = node['qfqday'] ?? node['day'];
+    if (rows is! List) return const [];
+    final begDate = _dash(beg);
+    final endDate = _dash(_today(end));
+    final out = <NavPoint>[];
+    for (final r in rows) {
+      if (r is! List || r.length < 3) continue;
+      final date = '${r[0]}'.trim();
+      final close = double.tryParse('${r[2]}');
+      if (date.length != 10 || close == null || close <= 0) continue;
+      if (date.compareTo(begDate) < 0 || date.compareTo(endDate) > 0) continue;
+      out.add(NavPoint(code: asset.code, date: date, nav: close));
+    }
+    out.sort((a, b) => a.date.compareTo(b.date));
+    return out;
+  }
+
+  /// `yyyyMMdd` → `yyyy-MM-dd`（腾讯的入参格式）；已经是短横线格式就原样返回
+  static String _dash(String key) => key.length == 8
+      ? '${key.substring(0, 4)}-${key.substring(4, 6)}-${key.substring(6, 8)}'
+      : key;
+
+  /// 腾讯不接受未来的 `end`，`20500101` 这类占位值换成今天
+  static String _today(String end) {
+    if (end.compareTo('20500101') < 0) return end;
+    final now = DateTime.now();
+    return '${now.year.toString().padLeft(4, '0')}'
+        '${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}';
   }
 
   /// `pingzhongdata/{code}.js` —— 净值与累计净值两条序列，按时间戳对齐

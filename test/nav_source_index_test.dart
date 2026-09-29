@@ -232,4 +232,96 @@ void main() {
       src.dispose();
     });
   });
+
+  group('腾讯日K（东财备胎）：早年日线补齐的第二条腿', () {
+    // 真实返回形状（2026-09-29 实测 sh000300）：data.sh000300.day = [[日期,开,收,高,低,量]]
+    const tencentBody = '{"code":0,"msg":"","data":{"sh000300":{"day":['
+        '["2005-01-04","994.770","982.790","994.770","981.020","0.000"],'
+        '["2005-01-05","983.970","992.840","996.950","981.610","0.000"],'
+        '["2005-01-06","993.310","983.170","993.310","981.460","0.000"]'
+        '],"qt":{}}}}';
+
+    test('解析：收盘价取 index 2（不是 index 1 的开盘价）、升序', () async {
+      final src = NavSource(MockClient(
+          (_) async => http.Response.bytes(utf8.encode(tencentBody), 200)));
+      final pts = await src.tencentKline(
+          Asset(code: 'sh000300', name: '沪深300', kind: AssetKind.other));
+      expect(pts.map((p) => p.date).toList(),
+          ['2005-01-04', '2005-01-05', '2005-01-06']);
+      expect(pts.first.nav, closeTo(982.790, 1e-9),
+          reason: '腾讯行是 [日期,开,收,高,低,量]，取错会拿成开盘 994.77');
+      src.dispose();
+    });
+
+    test('请求串：param 为 `<code>,day,<beg>,<end>,<count>,qfq`，end 用今天而非 2050', () async {
+      late Uri seen;
+      final src = NavSource(MockClient((req) async {
+        seen = req.url;
+        return http.Response.bytes(utf8.encode(tencentBody), 200);
+      }));
+      await src.tencentKline(
+          Asset(code: 'sh000300', name: '沪深300', kind: AssetKind.other),
+          beg: '20050101',
+          end: '20100101');
+      final param = seen.queryParameters['param']!;
+      expect(param, 'sh000300,day,2005-01-01,2010-01-01,2000,qfq');
+      src.dispose();
+    });
+
+    test('裁到 [beg, end]：腾讯从 end 往回给 2000 根，会带出区间外的点', () async {
+      final src = NavSource(MockClient(
+          (_) async => http.Response.bytes(utf8.encode(tencentBody), 200)));
+      final pts = await src.tencentKline(
+          Asset(code: 'sh000300', name: '沪深300', kind: AssetKind.other),
+          beg: '20050105',
+          end: '20050105');
+      expect(pts.map((p) => p.date).toList(), ['2005-01-05']);
+      src.dispose();
+    });
+
+    test('非指数代码不发请求', () async {
+      var hit = 0;
+      final src = NavSource(MockClient((_) async {
+        hit++;
+        return http.Response.bytes(utf8.encode(tencentBody), 200);
+      }));
+      final pts = await src.tencentKline(
+          Asset(code: '021362', name: '易方达黄金股指数发起式A', kind: AssetKind.fund));
+      expect(pts, isEmpty);
+      expect(hit, 0);
+      src.dispose();
+    });
+
+    test('fullHistory：东财抛错时自动掉到腾讯（而不是掉到只有 1500 条的新浪）', () async {
+      final seenHosts = <String>[];
+      final src = NavSource(MockClient((req) async {
+        seenHosts.add(req.url.host);
+        if (req.url.host.contains('eastmoney')) {
+          throw http.ClientException('Connection closed before full header was '
+              'received', req.url);
+        }
+        return http.Response.bytes(utf8.encode(tencentBody), 200);
+      }));
+      final pts = await src.fullHistory(
+          Asset(code: 'sh000300', name: '沪深300', kind: AssetKind.other));
+      expect(seenHosts.first, 'push2his.eastmoney.com');
+      expect(seenHosts, contains('web.ifzq.gtimg.cn'));
+      expect(pts.map((p) => p.date).toList().first, '2005-01-04',
+          reason: '东财不通时不能退化成 2020-07 起的新浪短序列');
+      src.dispose();
+    });
+
+    test('东财返回空（非抛错）也掉到腾讯', () async {
+      final src = NavSource(MockClient((req) async {
+        if (req.url.host.contains('eastmoney')) {
+          return http.Response.bytes(utf8.encode('{"data":null}'), 200);
+        }
+        return http.Response.bytes(utf8.encode(tencentBody), 200);
+      }));
+      final pts = await src.fullHistory(
+          Asset(code: 'sh000300', name: '沪深300', kind: AssetKind.other));
+      expect(pts.length, 3);
+      src.dispose();
+    });
+  });
 }
