@@ -19,6 +19,7 @@ import 'widgets/common.dart';
 import 'widgets/macro_card.dart';
 import 'widgets/return_table.dart';
 import 'widgets/segmented_pills.dart';
+import 'widgets/sparkline.dart';
 
 class WatchlistPage extends StatefulWidget {
   const WatchlistPage({super.key});
@@ -153,6 +154,8 @@ class _WatchlistPageState extends State<WatchlistPage> {
                       // 股票/指数 → 股票资料（估值 / 财务 / 分红，同花顺 A 股接口）
                       // 点行内别处仍是净值历史，长按还是菜单
                       onIdentityTap: (r) => _openProfile(r),
+                      // 右滑：展现这一只**近一年的收益曲线**（用户 2026-09-29）
+                      onSwipeRight: (r) => _showYearCurve(r),
                       onMenu: (r) => _itemMenu(st, r),
                     ),
                   ),
@@ -390,6 +393,96 @@ class _WatchlistPageState extends State<WatchlistPage> {
   }
 
   // ---------------- 交互 ----------------
+
+  /// 右滑展现**近一年收益曲线**（用户 2026-09-29）
+  ///
+  /// 曲线口径复用 `navReturnSeries`（与「业绩走势」图同一条实现：优先累计净值 =
+  /// 分红再投资，起点为 0%），取近 365 天。历史不够 2 个点就如实说"还没有净值数据"，
+  /// **不画一条假线**。
+  Future<void> _showYearCurve(WatchRow r) async {
+    final st = context.read<AppState>();
+    final pts = st.navSamples[r.item.code] ?? const <NavPoint>[];
+    final today = DateTime.now();
+    final from = today.subtract(const Duration(days: 365));
+    final series = navReturnSeries(pts, from, today);
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final values = [for (final p in series) p.pct];
+        final last = values.isEmpty ? null : values.last;
+        final line = last == null ? theme.hintColor : pnlColor(last);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(r.item.name.isEmpty ? r.item.code : r.item.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(
+                  '${r.item.code} · 近一年'
+                  '${series.isEmpty ? '' : '（${fmtDate(series.first.date)} ~ ${fmtDate(series.last.date)}）'}',
+                  style: TextStyle(fontSize: 11, color: theme.hintColor),
+                ),
+                const SizedBox(height: 10),
+                if (values.length < 2)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 28),
+                    child: Center(
+                      child: Text(
+                          pts.isEmpty ? '还没有净值数据，点右上角刷新' : '净值点太少，先攒几天',
+                          style: TextStyle(
+                              fontSize: 13, color: theme.hintColor)),
+                    ),
+                  )
+                else ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(formatReturnPct(last),
+                          style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                              color: line)),
+                      const SizedBox(width: 8),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text('区间收益',
+                            style: TextStyle(
+                                fontSize: 11, color: theme.hintColor)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  SizedBox(
+                    height: 150,
+                    width: double.infinity,
+                    child: Sparkline(
+                        values: values, line: line, strokeWidth: 1.8),
+                  ),
+                  const SizedBox(height: 6),
+                  Text('区间内最高 ${formatReturnPct(values.reduce((a, b) => a > b ? a : b))}'
+                      ' · 最低 ${formatReturnPct(values.reduce((a, b) => a < b ? a : b))}',
+                      style: TextStyle(
+                          fontSize: 11, color: theme.hintColor, height: 1.5)),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   Future<void> _refreshNav(AppState st) async {
     final n = await st.updateNavHistory(manual: true);

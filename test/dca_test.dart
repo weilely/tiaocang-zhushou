@@ -112,7 +112,7 @@ void main() {
       expect(ds, isEmpty);
     });
 
-    test('超过 24 期时只取最近的 24 期', () {
+    test('超过 24 期时取**最早**的 24 期（剩下的下一轮继续，一期都不丢）', () {
       final ds = pendingDcaDates(
         plan: plan(
           start: DateTime(2024, 1, 1),
@@ -122,13 +122,123 @@ void main() {
         today: DateTime(2026, 9, 14),
       );
       expect(ds.length, 24);
-      // 最后一期应是 2026-09-01
-      expect(dayKey(ds.last), '2026-09-01');
-      // 第一期应是 2024-10-01（2026-09 往回数 24 期）
-      expect(dayKey(ds.first), '2024-10-01');
+      // 从最早那期开始数 24 期（2024-01 ~ 2025-12）
+      expect(dayKey(ds.first), '2024-01-01');
+      expect(dayKey(ds.last), '2025-12-01');
+      // 关键：断点停在 2025-12-01，下一轮的待补记从 2026-01-01 接上（中间不会缺）
+      final next = pendingDcaDates(
+        plan: plan(
+          start: DateTime(2024, 1, 1),
+          lastRun: ds.last,
+          freq: DcaFrequency.monthly,
+          day: 1,
+        ),
+        today: DateTime(2026, 9, 14),
+      );
+      expect(dayKey(next.first), '2026-01-01');
     });
 
-    // 用户 2026-09-29：「定投设置起始和终止日期」
+    // 用户 2026-09-29：「定投周期增加日定投」
+    test('日定投：每天一期，区间内逐日排开', () {
+      final ds = dcaPeriods(
+        start: DateTime(2026, 9, 1),
+        frequency: DcaFrequency.daily,
+        dayOfPeriod: 1,
+        until: DateTime(2026, 9, 5),
+      );
+      expect(ds.map((d) => dayKey(d)).toList(),
+          ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05']);
+      expect(DcaFrequency.daily.label, '每日');
+    });
+
+    test('日定投：计划建得很早时只取最近 hardLimit 期（不能返回几年前那批）', () {
+      final ds = dcaPeriods(
+        start: DateTime(2020, 1, 1),
+        frequency: DcaFrequency.daily,
+        dayOfPeriod: 1,
+        until: DateTime(2026, 9, 30),
+        hardLimit: 100,
+      );
+      expect(ds.length, 100);
+      expect(dayKey(ds.last), '2026-09-30');
+      expect(dayKey(ds.first), '2026-06-23', reason: '往回数 99 天');
+    });
+
+    test('日定投：待补记按天算，且超过上限时取**最早**那批（不丢中间）', () {
+      final p = DcaPlan(
+        accountId: 1,
+        assetId: 1,
+        amount: 100,
+        frequency: DcaFrequency.daily,
+        dayOfPeriod: 1,
+        startDate: DateTime(2026, 9, 1),
+      );
+      final ds = pendingDcaDates(plan: p, today: DateTime(2026, 9, 5));
+      expect(ds.map((d) => dayKey(d)).toList(),
+          ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05']);
+
+      // 40 期待补、上限 24 → 取最早的 24 期，断点停在 09-24，剩下的下次继续
+      final many = pendingDcaDates(
+          plan: p, today: DateTime(2026, 10, 10), maxNew: 24);
+      expect(many.length, 24);
+      expect(dayKey(many.first), '2026-09-01');
+      expect(dayKey(many.last), '2026-09-24');
+      // 从断点继续：不会漏掉 09-25 起的那批
+      final next = pendingDcaDates(
+        plan: p.copyWith(lastRunDate: DateTime(2026, 9, 24)),
+        today: DateTime(2026, 10, 10),
+        maxNew: 24,
+      );
+      expect(dayKey(next.first), '2026-09-25');
+      expect(next.length, 16, reason: '09-25 ~ 10-10 共 16 天');
+    });
+
+    test('日定投遇周末/休市：顺延到之后第一个有净值的日子', () {
+      // 2026-09-25(五) 有净值，09-26/27 是周末、09-28(一) 有净值
+      final prices = {
+        '2026-09-25': 1.5,
+        '2026-09-28': 1.6,
+      };
+      final sat = resolveDcaPrice(
+        due: DateTime(2026, 9, 26),
+        today: DateTime(2026, 9, 30),
+        priceByDay: prices,
+      );
+      expect(dayKey(sat!.date), '2026-09-28', reason: '周末顺延到周一');
+      expect(sat.price, closeTo(1.6, 1e-9), reason: '用扣款日那天的净值');
+    });
+
+    test('双周：首期就是期日（不再漂到"首期后 14 天"）', () {
+      final ds = dcaPeriods(
+        start: DateTime(2026, 9, 3),
+        frequency: DcaFrequency.biweekly,
+        dayOfPeriod: 1,
+        until: DateTime(2026, 10, 3),
+      );
+      expect(ds.map((d) => dayKey(d)).toList(),
+          ['2026-09-03', '2026-09-17', '2026-10-01']);
+    });
+
+    // 用户 2026-09-29：「新增定投添加搜索框选择新的定投目标添加定投计划」
+    // —— 没持有的标的也能建计划，所以不能一建就被"标的已清仓"自动掐掉
+    test('「从没交易过的标的」不停用计划；清过仓的才停用', () {
+      expect(
+        shouldDisableForEmptyPosition(everTraded: false, positionEmpty: true),
+        isFalse,
+        reason: '新搜的标的还没买过 → 计划要能开跑，第一笔买入自己建仓',
+      );
+      expect(
+        shouldDisableForEmptyPosition(everTraded: true, positionEmpty: true),
+        isTrue,
+        reason: '买过又清仓了 → 老口径，停用',
+      );
+      expect(
+        shouldDisableForEmptyPosition(everTraded: true, positionEmpty: false),
+        isFalse,
+        reason: '还有持仓，当然不停用',
+      );
+    });
+
     test('终止日期之后的期数不再生成（含当天）', () {
       final p = plan(start: DateTime(2026, 1, 1))
           .copyWith(endDate: DateTime(2026, 3, 31));

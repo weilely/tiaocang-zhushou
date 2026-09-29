@@ -19,6 +19,7 @@ void main() {
     String name, {
     double? nav,
     String? navDate,
+    double? dayPct,
   }) {
     final rets = <String, double?>{};
     for (final p in tablePeriods) {
@@ -28,6 +29,7 @@ void main() {
       item: item(code, name),
       nav: nav,
       navDate: navDate,
+      dayPct: dayPct,
       returns: rets,
     );
   }
@@ -68,7 +70,8 @@ void main() {
         row('025497', '某基金', nav: null, navDate: null),
       ]));
 
-      expect(find.text('--'), findsOneWidget);
+      // 「净值」和「当日」各一个 --（当日涨幅这一列是 2026-09-29 加的）
+      expect(find.text('--'), findsNWidgets(2));
       // 不该出现任何看起来像日期的文本
       expect(find.textContaining(RegExp(r'^\d{2}-\d{2}$')), findsNothing);
     });
@@ -138,6 +141,72 @@ void main() {
       final dataCenter = tester.getCenter(find.text('+1.50%').first).dx;
       expect((headerCenter - dataCenter).abs(), lessThan(2.0),
           reason: '数值列应保持表头与数据居中对齐');
+    });
+  });
+
+  // 用户 2026-09-29：「关注列表在净值后增加当日涨幅」
+  group('当日涨幅列', () {
+    testWidgets('表头在「净值」右边，数值带符号并跟着涨跌上色', (tester) async {
+      await tester.pumpWidget(host([
+        row('025497', '某基金', nav: 1.2345, navDate: '2026-09-11', dayPct: 1.23),
+        row('021362', '另一只', nav: 2.0, navDate: '2026-09-11', dayPct: -0.45),
+      ]));
+
+      expect(find.text('当日'), findsOneWidget);
+      // 「当日」表头必须排在「净值」右侧
+      expect(tester.getCenter(find.text('净值')).dx,
+          lessThan(tester.getCenter(find.text('当日')).dx));
+      expect(find.text('+1.23%'), findsOneWidget);
+      expect(find.text('-0.45%'), findsOneWidget);
+
+      // 涨红跌绿（与全 App 一致）
+      final up = tester.widget<Text>(find.text('+1.23%')).style!.color;
+      final down = tester.widget<Text>(find.text('-0.45%')).style!.color;
+      expect(up, const Color(0xFFD93A3A));
+      expect(down, const Color(0xFF1A9C5B));
+    });
+
+    testWidgets('没有行情时显示 --（不拿 0 顶）', (tester) async {
+      await tester.pumpWidget(host([
+        row('025497', '某基金', nav: 1.0, navDate: '2026-09-11'),
+      ]));
+      // 该行当日涨幅为 null → 这一格是 --
+      expect(find.text('--'), findsWidgets);
+    });
+
+    testWidgets('可以按当日涨幅排序（点表头三态）', (tester) async {
+      await tester.pumpWidget(host([
+        row('A', '小涨', nav: 1, dayPct: 0.1),
+        row('B', '大涨', nav: 1, dayPct: 5.0),
+      ]));
+
+      // 左侧首列是 Text.rich（代码+名称拼在一段里），所以按**数值格**的位置比顺序
+      // 点一下 → 降序（+5.00% 在前）
+      await tester.tap(find.text('当日'));
+      await tester.pumpAndSettle();
+      expect(tester.getCenter(find.text('+5.00%')).dy,
+          lessThan(tester.getCenter(find.text('+0.10%')).dy),
+          reason: '第一下是降序：当日涨得多的排前面');
+    });
+
+    testWidgets('右滑首列触发回调（展现近一年曲线用）', (tester) async {
+      WatchRow? swiped;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 400,
+            child: ReturnTable(
+              rows: [row('025497', '某基金', nav: 1.0, dayPct: 0.5)],
+              onSwipeRight: (r) => swiped = r,
+            ),
+          ),
+        ),
+      ));
+
+      // 首列（代码名称那格）宽 148：从它的中间往右拖
+      await tester.dragFrom(const Offset(70, 40), const Offset(120, 0));
+      await tester.pumpAndSettle();
+      expect(swiped?.item.code, '025497', reason: '右滑要能拿到这一行');
     });
   });
 }

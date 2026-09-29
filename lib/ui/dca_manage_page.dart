@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/format.dart';
 import '../data/dca_models.dart';
 import '../data/models.dart';
+import '../data/securities_repo.dart';
 import '../logic/dca.dart';
 import '../state/app_state.dart';
 import 'asset_detail_page.dart';
@@ -194,7 +197,7 @@ class DcaManagePage extends StatelessWidget {
   /// 那条的铅笔）。
   Future<void> _addPlan(BuildContext context, AppState state) async {
     if (state.accounts.isEmpty) return;
-    final picked = await showModalBottomSheet<({int accountId, int assetId})>(
+    final picked = await showModalBottomSheet<_PickedTarget>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -207,11 +210,17 @@ class DcaManagePage extends StatelessWidget {
       context,
       accountId: picked.accountId,
       assetId: picked.assetId,
+      pendingRow: picked.row,
     );
   }
 }
 
-/// 「新增定投」的选标的弹层（账户 + 该账户当前持有的标的）
+/// 选标的弹层返回的东西：
+/// - 库里的标的 → 给 [assetId]；
+/// - 搜索结果（还没落库）→ 给 [row]，由计划弹层在保存时才建标的。
+typedef _PickedTarget = ({int accountId, int? assetId, SecurityRow? row});
+
+/// 「新增定投」的选标的弹层（账户 + 该账户当前持有的标的 + 搜索框）
 class _PlanTargetPicker extends StatefulWidget {
   const _PlanTargetPicker({required this.initialAccountId});
 
@@ -223,6 +232,63 @@ class _PlanTargetPicker extends StatefulWidget {
 
 class _PlanTargetPickerState extends State<_PlanTargetPicker> {
   late int _picked = widget.initialAccountId;
+
+  /// 搜索框（用户 2026-09-29：「新增定投添加搜索框选择新的定投目标添加定投计划」）——
+  /// 能搜**没持有**的标的：选中后先 `ensureAsset` 落库，再拿它的 id 建计划。
+  final _search = TextEditingController();
+  Timer? _debounce;
+  bool _searching = false;
+  List<SecurityRow> _results = const [];
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _onQueryChanged(String kw) {
+    _debounce?.cancel();
+    final q = kw.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _results = const [];
+        _searching = false;
+      });
+      return;
+    }
+    setState(() => _searching = true);
+    // 和「记一笔」「关注页」同一套搜索（先查本地 securities，再联网东财）
+    _debounce = Timer(const Duration(milliseconds: 300), () async {
+      final st = context.read<AppState>();
+      try {
+        final res = await st.searchAssets(q, limit: 20);
+        if (!mounted || _search.text.trim() != q) return;
+        setState(() {
+          _results = res.rows;
+          _searching = false;
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _results = const [];
+          _searching = false;
+        });
+      }
+    });
+  }
+
+  /// 搜索结果 → **交给计划弹层**（到点「保存」时才落库成资产，取消不留垃圾行）
+  void _pickResult(SecurityRow r) {
+    Navigator.of(context)
+        .pop((accountId: _currentAccountId, assetId: null, row: r));
+  }
+
+  /// 当前选中的账户（build 里算过一遍，这里再取一次给搜索结果用）
+  int get _currentAccountId {
+    final accounts = context.read<AppState>().accounts;
+    return accounts.any((a) => a.id == _picked) ? _picked : accounts.first.id!;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -236,6 +302,7 @@ class _PlanTargetPickerState extends State<_PlanTargetPicker> {
       for (final p in st.positionsOf(accountId))
         if (!p.isEmpty) p.asset,
     ]..sort((a, b) => a.code.compareTo(b.code));
+    final querying = _search.text.trim().isNotEmpty;
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -247,10 +314,28 @@ class _PlanTargetPickerState extends State<_PlanTargetPicker> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
             Text(
-              '选一个该账户当前持有的标的（没有持仓的标的建了会被自动暂停）。'
-              '同一个标的可以建多条计划（比如每周小额定投 + 每月大额定投）；'
-              '想改哪条，回列表点那条的铅笔。',
+              '搜一个标的建计划（持有与否都行）；同一个标的可以建多条计划'
+              '（比如每日小额 + 每月大额）。想改哪条，回列表点那条的铅笔。',
               style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor, height: 1.5),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _search,
+              onChanged: _onQueryChanged,
+              decoration: InputDecoration(
+                labelText: '搜索基金 / 股票（代码或名称）',
+                prefixIcon: const Icon(Icons.search, size: 18),
+                suffixIcon: querying
+                    ? IconButton(
+                        tooltip: '清空',
+                        icon: const Icon(Icons.close, size: 16),
+                        onPressed: () {
+                          _search.clear();
+                          _onQueryChanged('');
+                        },
+                      )
+                    : null,
+              ),
             ),
             const SizedBox(height: 14),
             if (accounts.length > 1)
@@ -274,6 +359,44 @@ class _PlanTargetPickerState extends State<_PlanTargetPicker> {
                     style:
                         TextStyle(fontSize: 13, color: Theme.of(context).hintColor)),
               )
+            else if (querying)
+              // 搜索结果：本地没有的标的也能建计划（选中即落库成资产）
+              if (_searching)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text('搜索中…',
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: Theme.of(context).hintColor)),
+                  ),
+                )
+              else if (_results.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Text('没搜到「${_search.text.trim()}」，换个代码或名称试试',
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: Theme.of(context).hintColor)),
+                )
+              else
+                for (final r in _results)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: Text(
+                        r.name.isEmpty ? r.code : '${r.name}（${r.code}）',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14)),
+                    subtitle: Text(
+                        r.secType.isEmpty ? r.assetKind.label : r.secType,
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Theme.of(context).hintColor)),
+                    trailing: const Icon(Icons.chevron_right, size: 20),
+                    onTap: () => _pickResult(r),
+                  )
             else
               for (final a in held)
                 ListTile(
@@ -296,7 +419,7 @@ class _PlanTargetPickerState extends State<_PlanTargetPicker> {
                             color: Theme.of(context).colorScheme.primary)),
                   },
                   onTap: () => Navigator.of(context)
-                      .pop((accountId: accountId, assetId: a.id!)),
+                      .pop((accountId: accountId, assetId: a.id, row: null)),
                 ),
           ],
         ),

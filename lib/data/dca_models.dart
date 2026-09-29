@@ -1,12 +1,24 @@
 import 'models.dart';
 
 /// 定投频率
-enum DcaFrequency { weekly, biweekly, monthly }
+///
+/// 「每日」是用户 2026-09-29 加的（原话：「定投周期增加日定投」）。
+/// 注意它的 [DcaPlan.dayOfPeriod] **不参与**（每天都是期日）。
+enum DcaFrequency { daily, weekly, biweekly, monthly }
 
 extension DcaFrequencyX on DcaFrequency {
   String get label => switch (this) {
+        DcaFrequency.daily => '每日',
         DcaFrequency.weekly => '每周',
         DcaFrequency.biweekly => '每两周',
+        DcaFrequency.monthly => '每月',
+      };
+
+  /// 分段控件上的短标签（400dp + 字体 1.3 下四个段要挤得下）
+  String get shortLabel => switch (this) {
+        DcaFrequency.daily => '每日',
+        DcaFrequency.weekly => '每周',
+        DcaFrequency.biweekly => '两周',
         DcaFrequency.monthly => '每月',
       };
 
@@ -70,9 +82,10 @@ class DcaPlan {
 
   /// 期日的展示文案
   String get dayLabel => switch (frequency) {
+        DcaFrequency.daily => '每日',
         DcaFrequency.monthly => '每月 $dayOfPeriod 日',
         DcaFrequency.weekly => '每周${const ['', '一', '二', '三', '四', '五', '六', '日'][dayOfPeriod.clamp(1, 7)]}',
-        DcaFrequency.biweekly => '自首期起每 14 天',
+        DcaFrequency.biweekly => '每两周',
       };
 
   /// 起止区间（`2026-01-05 ~ 2026-12-31` / 无终止时只写起点）

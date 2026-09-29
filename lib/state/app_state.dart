@@ -4037,6 +4037,8 @@ class AppState extends ChangeNotifier {
         item: w,
         nav: last?.nav,
         navDate: last?.date,
+        // 当日涨幅取行情快照的 changePct（用户 2026-09-29 要的列）
+        dayPct: quotes[w.code]?.changePct,
         returns: rets,
         navCount: pts.length,
       );
@@ -4464,15 +4466,27 @@ class AppState extends ChangeNotifier {
         // 过了终止日期的计划不再生新期数（用户 2026-09-29 加的终止日期）
         if (plan.endedBy(today)) continue;
 
+        // 持仓空了怎么办：
+        // - **从来没交易过**这个标的（新建计划就是要开始投的，用户 2026-09-29 能在
+        //   选标的里搜没持有的标的）→ 不能停用，第一笔买入会自己把持仓建起来；
+        // - 有过交易、现在清仓了 → 才算"标的已清仓"，自动停用（老口径）。
+        final everTraded = txns.any(
+            (t) => t.accountId == plan.accountId && t.assetId == plan.assetId);
         final pos = positionOf(plan.accountId, plan.assetId);
-        if (pos == null || pos.isEmpty) {
+        if (shouldDisableForEmptyPosition(
+            everTraded: everTraded, positionEmpty: pos == null || pos.isEmpty)) {
           await db.setDcaPlanEnabled(plan.id!, false);
           report.disabledPlans++;
           touched = true;
           continue;
         }
 
-        final due = pendingDcaDates(plan: plan, today: today);
+        final due = pendingDcaDates(
+          plan: plan,
+          today: today,
+          // 日定投一天一期，一轮多补几天（按月算一整月），不然要开好几次才追平
+          maxNew: plan.frequency == DcaFrequency.daily ? 31 : 24,
+        );
         if (due.isEmpty) continue;
 
         // 这个「账户+标的」下只有这一条计划吗？只有一条时才允许退回

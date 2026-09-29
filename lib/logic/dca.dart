@@ -11,12 +11,18 @@ DateTime dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
 /// 生成 `[start, until]` 区间内所有应投日期（升序）。
 ///
+/// - `daily`：每天一期（用户 2026-09-29 新增；**非交易日的期数会被
+///   [resolveDcaPrice] 顺延到之后第一个交易日**，所以这里的"每天"就是日历日）
 /// - `monthly`：每月 `dayOfPeriod` 号（1–28，超出月份天数时钳制到月末）
 /// - `weekly`：从 start 起第一个星期几等于 `dayOfPeriod`（1=周一…7=周日）的日子，然后每 7 天
 /// - `biweekly`：start 起每 14 天
 ///
 /// [end] 是计划的**终止日期**（含当天；用户 2026-09-29「定投设置起始和终止日期」）：
 /// 传了就取 `min(until, end)` 当上界，过期末不再生成。
+///
+/// **超过 [hardLimit] 期时返回最近的 [hardLimit] 期**（不是最早的那批）——
+/// 日定投一天一期，计划建得早的话几千期都算得出来，取最近的对补记才有意义
+/// （`pendingDcaDates` 会再按 `lastRunDate` 过滤）。
 List<DateTime> dcaPeriods({
   required DateTime start,
   required DcaFrequency frequency,
@@ -34,6 +40,18 @@ List<DateTime> dcaPeriods({
   final out = <DateTime>[];
 
   switch (frequency) {
+    case DcaFrequency.daily:
+      // 只要最近 hardLimit 天：从 start 一路数到 until 会在计划建得早时白算几千次
+      final total = u.difference(s).inDays;
+      var d = total > hardLimit - 1
+          ? u.subtract(Duration(days: hardLimit - 1))
+          : s;
+      for (var i = 0; i < hardLimit && !d.isAfter(u); i++) {
+        out.add(d);
+        d = d.add(const Duration(days: 1));
+      }
+      break;
+
     case DcaFrequency.monthly:
       var y = s.year;
       var m = s.month;
@@ -78,7 +96,9 @@ List<DateTime> dcaPeriods({
 
 /// 从 `lastRunDate` 之后到 `today`（且不超过计划终止日期）的待补记日期。
 ///
-/// 超过 [maxNew] 期时只取**最近**的 [maxNew] 期（避免首次启用就补出上百笔）。
+/// 超过 [maxNew] 期时取**最早的** [maxNew] 期（不是最近的）——这样每期都会
+/// 轮到：补完这 24 期后 `lastRunDate` 停在它们最后一期，剩下的下一轮继续补。
+/// 以前取"最近 24 期"，日定投（一天一期）下中间那段会被永久跳过 ✗。
 List<DateTime> pendingDcaDates({
   required DcaPlan plan,
   required DateTime today,
@@ -96,7 +116,7 @@ List<DateTime> pendingDcaDates({
   final pending =
       last == null ? all : all.where((d) => d.isAfter(dayOnly(last))).toList();
   if (pending.length <= maxNew) return pending;
-  return pending.sublist(pending.length - maxNew);
+  return pending.sublist(0, maxNew);
 }
 
 /// 一期定投实际使用的成交日与价格
@@ -145,10 +165,25 @@ DateTime? nextDcaDate(DcaPlan plan, DateTime today) {
     dayOfPeriod: plan.dayOfPeriod,
     until: horizon,
     end: plan.endDate,
+    // 日定投只往后看几天就够（默认 600 期会白算一年）
+    hardLimit: plan.frequency == DcaFrequency.daily ? 8 : 600,
   );
   if (future.isEmpty) return null;
   return future.first;
 }
+
+/// 该不该因为"持仓空了"把这个计划自动停用？
+///
+/// - **从来没交易过**这个标的（`everTraded == false`）→ 不停用：这正是
+///   「搜一个没持有的标的、建计划开始投」的场景（用户 2026-09-29 加的搜索选目标），
+///   第一笔买入会自己把持仓建起来；
+/// - 有过交易、现在清仓了（`everTraded && positionEmpty`）→ 停用（老口径，
+///   免得已清仓的标的继续被补记）。
+bool shouldDisableForEmptyPosition({
+  required bool everTraded,
+  required bool positionEmpty,
+}) =>
+    everTraded && positionEmpty;
 
 /// 一期定投的手续费（元）＝ 每期金额 × **每期申购费率（%）**，钱落到分。
 ///

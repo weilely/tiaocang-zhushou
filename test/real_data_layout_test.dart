@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:invest_tracker/core/format.dart';
 import 'package:invest_tracker/data/asset_traits.dart';
 import 'package:invest_tracker/data/db.dart';
+import 'package:invest_tracker/data/dca_models.dart';
 import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/data/nav_models.dart';
 import 'package:invest_tracker/logic/backup.dart';
@@ -22,9 +23,12 @@ import 'package:invest_tracker/ui/index_insight_page.dart';
 import 'package:invest_tracker/ui/macro_chart_page.dart';
 import 'package:invest_tracker/ui/settings_page.dart';
 import 'package:invest_tracker/ui/txn_edit_page.dart';
+import 'package:invest_tracker/ui/watchlist_page.dart';
 import 'package:invest_tracker/ui/widgets/macro_card.dart';
+import 'package:invest_tracker/ui/widgets/return_table.dart';
 import 'package:invest_tracker/ui/widgets/returns_stats_card.dart';
 import 'package:invest_tracker/ui/widgets/segmented_pills.dart';
+import 'package:invest_tracker/ui/widgets/sparkline.dart';
 import 'package:provider/provider.dart';
 
 /// **真数据布局体检**：不建 APK、不连模拟器，十几秒把最容易挤爆的几个界面
@@ -584,6 +588,90 @@ void main() {
       expect(find.textContaining('顺延到之后第一个交易日'), findsWidgets);
       // 新建时是「保存并补记」，不是编辑态的「保存」
       expect(find.text('保存并补记'), findsOneWidget);
+      // 四个频率段（用户 2026-09-29：「定投周期增加日定投」）+ 默认每月
+      for (final f in ['每日', '每周', '两周', '每月']) {
+        expect(find.text(f), findsWidgets, reason: '频率段 $f 要在');
+      }
+      expect(
+        tester
+            .widget<SegmentedButton<DcaFrequency>>(
+                find.byType(SegmentedButton<DcaFrequency>))
+            .selected,
+        {DcaFrequency.monthly},
+      );
+      // 切到「每日」→ 不该再显示「每月几号」，改显示顺延说明
+      await tester.tap(find.text('每日'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '四个频率段不许溢出');
+      expect(find.text('每月几号'), findsNothing);
+      expect(find.textContaining('每个自然日一期'), findsOneWidget);
+    });
+
+    testWidgets('定投：选标的弹层有搜索框，能搜没持有的标的建计划', (tester) async {
+      final st = makeState();
+      await pumpPage(tester, const DcaManagePage(), state: st);
+      await tester.tap(find.byTooltip('新增定投计划'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      // 搜索框在
+      final box = find.widgetWithText(TextField, '搜索基金 / 股票（代码或名称）');
+      expect(box, findsOneWidget);
+      // 空查询时列的是该账户持有的标的（原来的列表还在）
+      expect(find.byType(ListTile), findsWidgets);
+
+      // 输入关键字 → 结果列表（测试环境没有 securities 库/网络，多半为空，
+      // 但界面必须给出"没搜到"的交代，而不是白屏）
+      await tester.enterText(box, '沪深300');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining('搜索中'), findsNothing,
+          reason: '防抖结束后不该一直转圈');
+    });
+    // 用户 2026-09-29：「关注列表在净值后增加当日涨幅，右滑展现各标的近一年的收益曲线」
+    testWidgets('关注页：净值后有「当日」列；右滑一行展现近一年收益曲线', (tester) async {
+      final st = makeState();
+      // `makeState()` 不灌关注列表 —— 用备份里**真实的关注列表**
+      if (st.watchlist.isEmpty) st.watchlist = List.of(back.watchlist);
+      if (st.watchlist.isEmpty) {
+        markTestSkipped('备份里没有关注列表');
+        return;
+      }
+      // 给第一只关注塞一段**真实净值**（取备份里的 navHistory；那是这只的后复权序列）
+      final w = st.watchlist.first;
+      final pts = <NavPoint>[
+        for (final row in back.navHistory)
+          if (NavPoint.fromMap(row).code == w.code) NavPoint.fromMap(row),
+      ]..sort((a, b) => a.date.compareTo(b.date));
+      if (pts.length < 2) {
+        markTestSkipped('备份里 ${w.code} 没有净值');
+        return;
+      }
+      st.navSamples[w.code] = pts;
+
+      // 关注页是**标签页内容**（本身不套 Scaffold，外壳在 HomeShell 里），
+      // 所以这里给它一个 Scaffold —— 否则 TextField 找不到 Material 祖先
+      await pumpPage(tester, const Scaffold(body: WatchlistPage()), state: st);
+      expect(tester.takeException(), isNull);
+      expect(find.text('当日'), findsOneWidget, reason: '净值后面要有当日涨幅这一列');
+      // 「当日」要在「净值」右边
+      expect(tester.getCenter(find.text('净值')).dx,
+          lessThan(tester.getCenter(find.text('当日')).dx));
+
+      // 右滑表格第一行的首列 → 弹面板
+      final box = tester.getRect(find.byType(ReturnTable));
+      await tester.dragFrom(
+          Offset(box.left + 70, box.top + 34 + 24), const Offset(140, 0));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '面板在 400dp 不许溢出');
+      expect(find.textContaining('近一年'), findsWidgets);
+      expect(find.textContaining('区间收益'), findsWidgets);
+      // 自绘组件别静默空白（这个项目踩过 CustomPaint 宽度算成 0 的坑）
+      expect(find.byType(Sparkline), findsOneWidget);
+      final size = tester.getSize(find.byType(Sparkline));
+      expect(size.width, greaterThan(200), reason: '曲线要真画出来（实测宽 $size）');
+      expect(size.height, greaterThan(80));
     });
   });
 }

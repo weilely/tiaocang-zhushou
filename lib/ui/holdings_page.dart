@@ -15,6 +15,7 @@ import 'holding_import_page.dart';
 import 'redeem_fee_sheet.dart';
 import 'widgets/common.dart';
 import 'widgets/inline_marquee.dart';
+import 'widgets/sparkline.dart';
 
 /// 持仓页
 ///
@@ -905,9 +906,7 @@ class HoldingCard extends StatelessWidget {
         SizedBox(
           height: 44,
           width: double.infinity,
-          child: CustomPaint(
-            painter: _SparklinePainter(values: ytd.values, line: line),
-          ),
+          child: Sparkline(values: ytd.values, line: line),
         ),
       ],
     );
@@ -956,71 +955,8 @@ class HoldingCard extends StatelessWidget {
 
 }
 
-/// 卡片里的迷你走势线（「今年以来收益率」）—— 按项目约定自绘，不引第三方图表库
-class _SparklinePainter extends CustomPainter {
-  final List<double> values;
-  final Color line;
-
-  const _SparklinePainter({required this.values, required this.line});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (values.length < 2 || size.width <= 0 || size.height <= 0) return;
-
-    var lo = values.first;
-    var hi = values.first;
-    for (final v in values) {
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    }
-    var span = hi - lo;
-    if (span.abs() < 1e-9) {
-      // 全平（比如刚成立、还没波动）：撑开一点，免得除以 0 画成一条贴边的线
-      hi = lo + 1;
-      span = 1;
-    }
-
-    const pad = 2.0;
-    final h = size.height - pad * 2;
-    final dx = size.width / (values.length - 1);
-    double yOf(double v) => pad + (1 - (v - lo) / span) * h;
-
-    // 曲线跨 0 时画一条 0% 基准虚线，方便看"现在是赚还是亏"
-    if (lo < 0 && hi > 0) {
-      final y0 = yOf(0);
-      final dash = Paint()
-        ..color = line.withValues(alpha: 0.32)
-        ..strokeWidth = 1;
-      for (var x = 0.0; x < size.width; x += 4) {
-        canvas.drawLine(Offset(x, y0), Offset(x + 2, y0), dash);
-      }
-    }
-
-    final path = Path()..moveTo(0, yOf(values.first));
-    for (var i = 1; i < values.length; i++) {
-      path.lineTo(i * dx, yOf(values[i]));
-    }
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = line
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4
-        ..strokeJoin = StrokeJoin.round,
-    );
-    // 末点一个实心小圆（跟市场估值卡片一致，标出"现在在哪"）
-    canvas.drawCircle(
-        Offset(size.width, yOf(values.last)), 2.0, Paint()..color = line);
-  }
-
-  @override
-  bool shouldRepaint(covariant _SparklinePainter old) =>
-      old.line != line ||
-      old.values.length != values.length ||
-      (old.values.isNotEmpty &&
-          values.isNotEmpty &&
-          old.values.last != values.last);
-}
+/// 迷你走势线（「今年以来收益率」）已提到 `widgets/sparkline.dart` 共用：
+/// 关注页右滑出来的「近一年收益曲线」也用同一条实现。
 
 /// 小标签（无行情、账户名、预估）
 class Tag extends StatelessWidget {

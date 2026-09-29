@@ -480,6 +480,12 @@ class WatchRow {
 
   /// 最新净值所属日期（`yyyy-MM-dd`），关注表在净值下方显示它的 `MM-dd`
   final String? navDate;
+
+  /// **当日涨幅（%）** —— 用户 2026-09-29：「关注列表在净值后增加当日涨幅」。
+  /// 取自行情快照 `changePct`（场外是估值/净值的日变动，场内是现价涨跌幅）；
+  /// 没有行情时为 null（界面显示 `--`，不拿 0 顶）。
+  final double? dayPct;
+
   final Map<String, double?> returns; // ReturnPeriod.name -> %
   final int navCount;
 
@@ -487,6 +493,7 @@ class WatchRow {
     required this.item,
     required this.nav,
     this.navDate,
+    this.dayPct,
     required this.returns,
     this.navCount = 0,
   });

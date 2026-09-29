@@ -18,6 +18,12 @@ class ReturnTable extends StatefulWidget {
   /// 关注页传它来「点代码或名称直接开基金档案」（用户 2026-09-28）。
   final void Function(WatchRow row)? onIdentityTap;
 
+  /// **右滑**某一行的首列（代码/名称那格）：关注页用它展现「近一年收益曲线」
+  /// （用户 2026-09-29：「右滑展现各标的近一年的收益曲线」）。
+  ///
+  /// 手势只挂在首列：右侧那些列本身要横向滑动看更多区间，抢手势会打架。
+  final void Function(WatchRow row)? onSwipeRight;
+
   /// 列表为空时显示的话；默认沿用原来的文案
   final String emptyText;
 
@@ -33,6 +39,7 @@ class ReturnTable extends StatefulWidget {
     this.onTap,
     this.onMenu,
     this.onIdentityTap,
+    this.onSwipeRight,
     this.emptyText = '还没有关注的标的',
     this.firstWidth = 148,
   });
@@ -40,7 +47,18 @@ class ReturnTable extends StatefulWidget {
   static const double colWidth = 86;
 
   /// 行高：首列正文两行约 37dp + 少量内边距 —— 按需求把行距收紧（58 → 48）
+  ///
+  /// ⚠️ 这是**字体缩放 1.0** 下的基准高度。真机字体调到「大」（本项目钳到 1.3）时，
+  /// 首列那两行（代码 13 + 名称 12）实测要 ~53dp，写死 48 会**行内纵向溢出 12px**
+  /// （2026-09-29 刚把关注页纳入体检就被逮到；release 下不报错、只是被裁）。
+  /// 所以实际行高走 [rowHeightFor]，跟着 textScaler 长。
   static const double rowHeight = 48;
+
+  /// 按字体缩放算实际行高（上限 1.3，与全 App 的钳制一致）
+  static double rowHeightFor(BuildContext context) {
+    final scale = MediaQuery.textScalerOf(context).scale(1);
+    return rowHeight * scale.clamp(1.0, 1.3);
+  }
 
   /// 首列最多几行
   static const int firstColLines = 2;
@@ -66,6 +84,9 @@ class _ReturnTableState extends State<ReturnTable> {
   String? _sortKey;
   bool _desc = true;
   bool _syncing = false;
+
+  /// 首列右滑累计位移（松手时判定"是不是一次右滑"）
+  double _dragDx = 0;
 
   @override
   void initState() {
@@ -105,6 +126,8 @@ class _ReturnTableState extends State<ReturnTable> {
     switch (_sortKey) {
       case 'nav':
         return r.nav;
+      case 'day':
+        return r.dayPct;
       case null:
         return null;
       default:
@@ -150,7 +173,10 @@ class _ReturnTableState extends State<ReturnTable> {
   @override
   Widget build(BuildContext context) {
     final rows = _sorted;
-    final returnsWidth = ReturnTable.colWidth * 8;
+    // 列宽：净值 + 当日 + 各区间收益（写死 8 会在加列时错位）
+    final returnsWidth = ReturnTable.colWidth * (2 + tablePeriods.length);
+    // 行高随字体缩放长（字体 1.3 时首列两行放不进 48）
+    final rowH = ReturnTable.rowHeightFor(context);
 
     return Column(
       children: [
@@ -176,6 +202,7 @@ class _ReturnTableState extends State<ReturnTable> {
                     child: Row(
                       children: [
                         _headerCell(context, '净值', 'nav'),
+                        _headerCell(context, '当日', 'day'),
                         for (final p in tablePeriods)
                           _headerCell(context, p.label, p.name),
                       ],
@@ -204,7 +231,7 @@ class _ReturnTableState extends State<ReturnTable> {
                       width: widget.firstWidth,
                       child: ListView.builder(
                         controller: _leftVCtrl,
-                        itemExtent: ReturnTable.rowHeight,
+                        itemExtent: rowH,
                         itemCount: rows.length,
                         itemBuilder: (_, i) => _firstCell(context, rows[i]),
                       ),
@@ -217,7 +244,7 @@ class _ReturnTableState extends State<ReturnTable> {
                           width: returnsWidth,
                           child: ListView.builder(
                             controller: _rightVCtrl,
-                            itemExtent: ReturnTable.rowHeight,
+                            itemExtent: rowH,
                             itemCount: rows.length,
                             itemBuilder: (_, i) => _returnCells(context, rows[i]),
                           ),
@@ -317,21 +344,37 @@ class _ReturnTableState extends State<ReturnTable> {
 
     final fitted = _fittedName(r, spanFor, avail, scale);
 
-    return InkWell(
-      // 点「代码 / 名称」：关注页用它直接开基金档案（没传就跟点整行一样）
-      onTap: () => (widget.onIdentityTap ?? widget.onTap)?.call(r),
-      onLongPress: () => widget.onMenu?.call(r),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text.rich(
-            // 与测量时用的是同一棵 span 树，所见即所测
-            spanFor(fitted),
-            textAlign: TextAlign.left,
-            softWrap: true,
-            maxLines: ReturnTable.firstColLines,
-            overflow: TextOverflow.ellipsis,
+    return GestureDetector(
+      // **右滑**：展现这一只近一年的收益曲线（用户 2026-09-29）。
+      // 判定用「位移 + 速度」两个条件取其一：安卓各家上报的速度符号不完全一致，
+      // 只看速度偶尔会失灵；位移够了就认。
+      onHorizontalDragStart: widget.onSwipeRight == null ? null : (_) => _dragDx = 0,
+      onHorizontalDragUpdate:
+          widget.onSwipeRight == null ? null : (d) => _dragDx += d.delta.dx,
+      onHorizontalDragEnd: widget.onSwipeRight == null
+          ? null
+          : (d) {
+              final v = d.primaryVelocity ?? 0;
+              final rightward = _dragDx > 40 || v > 250;
+              _dragDx = 0;
+              if (rightward) widget.onSwipeRight!(r);
+            },
+      child: InkWell(
+        // 点「代码 / 名称」：关注页用它直接开基金档案（没传就跟点整行一样）
+        onTap: () => (widget.onIdentityTap ?? widget.onTap)?.call(r),
+        onLongPress: () => widget.onMenu?.call(r),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text.rich(
+              // 与测量时用的是同一棵 span 树，所见即所测
+              spanFor(fitted),
+              textAlign: TextAlign.left,
+              softWrap: true,
+              maxLines: ReturnTable.firstColLines,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ),
       ),
@@ -366,6 +409,8 @@ class _ReturnTableState extends State<ReturnTable> {
     return Row(
       children: [
         _navCell(context, r),
+        // 当日涨幅：用户 2026-09-29「在净值后增加当日涨幅」
+        _cell(context, formatReturnPct(r.dayPct), r.dayPct),
         for (final p in tablePeriods)
           _cell(context, formatReturnPct(r.returns[p.name]),
               r.returns[p.name]),

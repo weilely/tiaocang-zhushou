@@ -4,17 +4,27 @@ import 'package:provider/provider.dart';
 import '../core/format.dart';
 import '../data/dca_models.dart';
 import '../data/models.dart';
+import '../data/securities_repo.dart';
 import '../logic/dca.dart';
 import '../state/app_state.dart';
 import 'widgets/cn_date_picker.dart';
 
 /// 定投计划的创建 / 编辑弹层
+///
+/// 目标标的两种给法（二选一）：
+/// - [assetId]：库里已有这个标的（从持仓列表、详情页进来）；
+/// - [pendingRow]：**搜索结果里还没落库的标的**（用户 2026-09-29 要的搜索选目标）——
+///   到点「保存」时再 `ensureAsset` 落库。这样"搜了一下又取消"不会在库里
+///   留下一条没用的空标的（我在模拟器上试出来过这个垃圾行）。
 Future<void> showDcaPlanSheet(
   BuildContext context, {
   required int accountId,
-  required int assetId,
+  int? assetId,
+  SecurityRow? pendingRow,
   DcaPlan? existing,
 }) async {
+  assert(assetId != null || pendingRow != null || existing != null,
+      '要么给已有的 assetId，要么给搜索结果 pendingRow');
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -24,6 +34,7 @@ Future<void> showDcaPlanSheet(
       child: _DcaPlanEditor(
         accountId: accountId,
         assetId: assetId,
+        pendingRow: pendingRow,
         existing: existing,
       ),
     ),
@@ -32,12 +43,18 @@ Future<void> showDcaPlanSheet(
 
 class _DcaPlanEditor extends StatefulWidget {
   final int accountId;
-  final int assetId;
+
+  /// 库里已有的标的 id（和 [pendingRow] 二选一）
+  final int? assetId;
+
+  /// 搜索结果（还没落库），保存时才建标的
+  final SecurityRow? pendingRow;
   final DcaPlan? existing;
 
   const _DcaPlanEditor({
     required this.accountId,
-    required this.assetId,
+    this.assetId,
+    this.pendingRow,
     this.existing,
   });
 
@@ -63,7 +80,11 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
     _start = DateTime.now();
     _start = DateTime(_start.year, _start.month, _start.day);
     final st = context.read<AppState>();
-    final asset = st.assetsById[widget.assetId];
+    // 搜索结果还没落库 → 用它的代码预填费率；已有标的就直接查
+    final code = widget.pendingRow?.code ??
+        (widget.assetId == null ? null : st.assetsById[widget.assetId!]?.code);
+    final asset =
+        widget.assetId == null ? null : st.assetsById[widget.assetId!];
     if (widget.existing != null) {
       final e = widget.existing!;
       _amount.text = e.amount.toStringAsFixed(e.amount == e.amount.roundToDouble() ? 0 : 2);
@@ -74,9 +95,9 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
       _note.text = e.note;
       // 0 不预填成 "0"，留空更好填
       _feeRate.text = e.feeRate > 0 ? _trimNum(e.feeRate) : '';
-    } else if (asset != null && !asset.kind.isExchange) {
+    } else if (code != null && (asset == null || !asset.kind.isExchange)) {
       // 新建场外计划：用**该基金在「记一笔」里设过的申购费率**预填（一处设定、两处用）
-      final pct = st.subFeeRateOf(asset.code);
+      final pct = st.subFeeRateOf(code);
       _feeRate.text = pct == null ? '' : _trimNum(pct);
     }
   }
@@ -108,7 +129,11 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final asset = state.assetsById[widget.assetId];
+    final asset =
+        widget.assetId == null ? null : state.assetsById[widget.assetId!];
+    // 搜索结果还没落库 → 直接用它带的名称/代码显示
+    final title = asset?.name ?? widget.pendingRow?.name ?? '';
+    final code = asset?.code ?? widget.pendingRow?.code ?? '';
     final isEdit = widget.existing != null;
 
     return SafeArea(
@@ -121,7 +146,7 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
             Text(
-              '${asset?.name ?? ''} · ${asset?.code ?? ''}',
+              '$title · $code',
               style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
             ),
             const SizedBox(height: 18),
@@ -158,10 +183,16 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
             Text('频率', style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
             const SizedBox(height: 6),
             SegmentedButton<DcaFrequency>(
-              segments: const [
-                ButtonSegment(value: DcaFrequency.weekly, label: Text('每周')),
-                ButtonSegment(value: DcaFrequency.biweekly, label: Text('每两周')),
-                ButtonSegment(value: DcaFrequency.monthly, label: Text('每月')),
+              // 四个段在 400dp + 字体 1.3 下要挤得下 → 用 shortLabel（「两周」而不是「每两周」）
+              showSelectedIcon: false,
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                padding: WidgetStatePropertyAll(
+                    EdgeInsets.symmetric(horizontal: 6)),
+              ),
+              segments: [
+                for (final f in DcaFrequency.values)
+                  ButtonSegment(value: f, label: Text(f.shortLabel)),
               ],
               selected: {_freq},
               onSelectionChanged: (s) => setState(() {
@@ -197,8 +228,11 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
                 ],
                 onChanged: (v) => setState(() => _day = v ?? 1),
               )
-            else
+            else if (_freq == DcaFrequency.biweekly)
               Text('自首期起每 14 天一期',
+                  style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor))
+            else
+              Text('每个自然日一期；周末/休市顺延到之后第一个交易日',
                   style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
             const SizedBox(height: 16),
 
@@ -359,10 +393,27 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
     }
     setState(() => _busy = true);
     final st = context.read<AppState>();
+    // 搜索来的标的**到这一步才落库**（取消弹层就不留空标的）
+    var targetId = widget.assetId;
+    if (targetId == null) {
+      final r = widget.pendingRow;
+      if (r == null) {
+        setState(() => _busy = false);
+        _snack('没有选定标的');
+        return;
+      }
+      final created = await st.ensureAsset(Asset(
+        code: r.code,
+        name: r.name,
+        kind: r.assetKind,
+        market: r.market,
+      ));
+      targetId = created.id;
+    }
     final plan = (widget.existing ??
             DcaPlan(
               accountId: widget.accountId,
-              assetId: widget.assetId,
+              assetId: targetId!,
               amount: amount,
               frequency: _freq,
               dayOfPeriod: _day,
