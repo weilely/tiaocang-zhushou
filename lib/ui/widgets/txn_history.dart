@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/format.dart';
+import '../../data/dca_models.dart';
 import '../../data/models.dart';
 import '../../logic/cash_flow.dart';
 import '../../state/app_state.dart';
@@ -190,6 +191,25 @@ Widget txnTile(
     if (t.note.isNotEmpty) t.note,
   ].join(' · ');
 
+  // 这条是哪条**定投计划**生成的（用户 2026-09-30：「可以标记哪些定投记录是
+  // 哪个定投计划产生的，这样就好定位编辑删除了」）。
+  // 老记录（这条字段是后加的）没有标记 → 不显示，不假装知道。
+  final planId = t.dcaPlanId;
+  DcaPlan? plan;
+  if (planId != null) {
+    for (final p in state.dcaPlans) {
+      if (p.id == planId) {
+        plan = p;
+        break;
+      }
+    }
+  }
+  final planTag = planId == null
+      ? null
+      : (plan == null
+          ? '计划已删'
+          : '${plan.dayLabel.replaceAll(' ', '')}·${fmtCompact(plan.amount)}');
+
   final tile = ListTile(
     onTap: selectable
         ? onToggle
@@ -240,6 +260,20 @@ Widget txnTile(
             ),
             child: const Text('待确认',
                 style: TextStyle(fontSize: 10, color: Color(0xFFB4770A))),
+          ),
+        // 这条是哪条定投计划生成的（点进去能改/删）
+        if (planTag != null)
+          Container(
+            margin: const EdgeInsets.only(left: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.13),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(planTag,
+                style: TextStyle(
+                    fontSize: 10,
+                    color: Theme.of(context).colorScheme.primary)),
           ),
       ],
     ),

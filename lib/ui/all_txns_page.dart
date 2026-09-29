@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/format.dart';
+import '../data/dca_models.dart';
 import '../data/models.dart';
 import '../state/app_state.dart';
 import 'widgets/common.dart';
@@ -18,7 +19,11 @@ import 'widgets/txn_history.dart';
 /// 底部一条操作栏可以全选 / 删除，删除会连带清掉该笔交易联动生成的现金流水
 /// （和单笔删除同一个入口 `AppState.removeTxn`）。
 class AllTxnsPage extends StatefulWidget {
-  const AllTxnsPage({super.key});
+  const AllTxnsPage({super.key, this.planId});
+
+  /// 只看**某条定投计划**产生的记录（定投卡片上点「查看记录」进来）。
+  /// 用户 2026-09-30：「可以标记哪些定投记录是哪个定投计划产生的，这样就好定位编辑删除了」。
+  final int? planId;
 
   @override
   State<AllTxnsPage> createState() => _AllTxnsPageState();
@@ -33,6 +38,15 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
 
   /// 类型筛选，词表与现金流水页同一套：全部 / 买入 / 卖出 / 分红 / 定投 / 再投
   String _kind = 'all';
+
+  /// 只看这条计划（来自 [AllTxnsPage.planId]；页内可清掉）
+  int? _planId;
+
+  @override
+  void initState() {
+    super.initState();
+    _planId = widget.planId;
+  }
 
   /// 按标的视图里已展开的标的（默认一个都不展开）
   final Set<int> _openGroups = {};
@@ -60,9 +74,19 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    // 这条计划还在不在（被删了就只按 id 过滤，标题上如实说明）
+    DcaPlan? plan;
+    for (final p in state.dcaPlans) {
+      if (p.id == _planId) {
+        plan = p;
+        break;
+      }
+    }
     final list = state.txns
         .where((t) =>
             state.accountFilter == null || t.accountId == state.accountFilter)
+        // 只看这条计划产生的记录（定投卡片点「查看记录」进来的）
+        .where((t) => _planId == null || t.dcaPlanId == _planId)
         .where(_matchKind)
         .toList();
 
@@ -158,6 +182,35 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
         children: [
           // 选着的时候不显示筛选条：免得选中范围被中途改掉
           if (!_selecting) _filterBar(context),
+          // 「只看某条定投计划」的标注（从定投卡片点「查看记录」进来时）
+          if (_planId != null && !_selecting)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
+              child: Row(
+                children: [
+                  Icon(Icons.event_repeat, size: 14,
+                      color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      plan == null
+                          ? '只看定投计划 #$_planId（这条计划已删除）'
+                          : '只看定投计划：${plan.dayLabel} · 每期 ${plan.amount.toStringAsFixed(2)} 元'
+                              '（${list.length} 笔）',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          color: Theme.of(context).colorScheme.primary),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() => _planId = null),
+                    child: const Text('看全部', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: list.isEmpty
                 ? EmptyHint(

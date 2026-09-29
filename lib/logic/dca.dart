@@ -119,6 +119,36 @@ List<DateTime> pendingDcaDates({
   return pending.sublist(0, maxNew);
 }
 
+/// 手上这批「日期 → 价格」够不够算完 [due] 里的**每一期**？
+///
+/// 判定窗口与 [resolveDcaPrice] 的顺延规则一致：每一期都要能在
+/// `[due, min(today, due + 12 天)]` 里找到价格（净值公布不会拖过 12 天）。
+/// **不够就别省那次网络请求** —— 本地 nav_history 只覆盖在关注/持仓里的标的，
+/// 定投计划指向别的基金时本地是空的。
+bool coversAllDue(
+  List<DateTime> due,
+  Map<String, double> priceByDay,
+  DateTime today,
+) {
+  if (priceByDay.isEmpty) return false;
+  final t = dayOnly(today);
+  for (final d in due) {
+    final d0 = dayOnly(d);
+    var found = false;
+    for (var i = 0; i <= 12; i++) {
+      final day = d0.add(Duration(days: i));
+      if (day.isAfter(t)) break;
+      final v = priceByDay[dayKey(day)];
+      if (v != null && v > 0) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
 /// 一期定投实际使用的成交日与价格
 class DcaPriceRef {
   final DateTime date;
@@ -128,13 +158,20 @@ class DcaPriceRef {
 
 /// 给定应投日，从「日期 → 价格」表里定出实际成交日与价格。
 ///
-/// 规则：**当天有价用当天；否则顺延到 `due` 之后、不超过 `today` 的第一个有价日。**
-/// 找不到就返回 null —— 调用方应当**跳过该期且不推进断点**，下次再试。
+/// 规则：**当天有价用当天；否则顺延到 `due` 之后、不超过 `today` 的第一个有价日**，
+/// 但顺延**最多 [maxForwardDays] 天**（默认 15：够覆盖周末与最长约 9 天的长假）。
+/// 找不到就返回 null —— 调用方应当**跳过该期且不越过断点**，下次再试。
 /// 刻意不向前回退取价：那等于用定投日之前的净值成交，是错的。
+///
+/// ⚠️ 上限是 2026-09-30 补的：实测把一条"起始日在两年前"的计划补历史时，
+/// 2024-10-01 那期被顺延到 **28 天后**（2024-10-29，基金成立首日、净值 1.0000）成交 ——
+/// 那笔钱当时根本还没投进去，是"拿一个远在未来的价"冒充。超过 15 天只可能是
+/// 休市/停牌/**基金还没成立**，都该如实跳过。
 DcaPriceRef? resolveDcaPrice({
   required DateTime due,
   required DateTime today,
   required Map<String, double> priceByDay,
+  int maxForwardDays = 15,
 }) {
   final d0 = dayOnly(due);
   final t = dayOnly(today);
@@ -143,7 +180,8 @@ DcaPriceRef? resolveDcaPrice({
   if (exact != null && exact > 0) return DcaPriceRef(d0, exact);
 
   var d = d0.add(const Duration(days: 1));
-  while (!d.isAfter(t)) {
+  final limit = d0.add(Duration(days: maxForwardDays));
+  while (!d.isAfter(t) && !d.isAfter(limit)) {
     final p = priceByDay[dayKey(d)];
     if (p != null && p > 0) return DcaPriceRef(d, p);
     d = d.add(const Duration(days: 1));

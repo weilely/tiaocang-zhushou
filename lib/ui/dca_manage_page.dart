@@ -9,6 +9,7 @@ import '../data/models.dart';
 import '../data/securities_repo.dart';
 import '../logic/dca.dart';
 import '../state/app_state.dart';
+import 'all_txns_page.dart';
 import 'asset_detail_page.dart';
 import 'dca_plan_sheet.dart';
 import 'widgets/common.dart';
@@ -90,13 +91,22 @@ class DcaManagePage extends StatelessWidget {
     final account = state.accountsById[p.accountId];
     final next = nextDcaDate(p, DateTime.now());
     final fee = dcaFeeFor(amount: p.amount, feeRatePct: p.feeRate);
-    // 「已补记 N 笔」按**这条计划**数（同标的多计划时不能按标的数一遍，
-    // 否则两条计划会显示同一个数字）；老数据没有 dcaPlanId，退回按备注+同标的。
-    final legacyWide = state.dcaPlansFor(p.accountId, p.assetId).length == 1;
+    // 「已补记 N 笔」：本计划自己生成的（带计划标记）+ ——**只有该标的最早那条
+    // 计划**—— 再算上老记录（没有计划标记，是加标记之前生成的，或他手动记的）。
+    // 这样"同标的多计划"之后，最早那条仍显示历史笔数，新计划只显示自己的。
+    final sameAsset = state.dcaPlansFor(p.accountId, p.assetId);
+    var oldestId = 1 << 30;
+    for (final x in sameAsset) {
+      final id = x.id;
+      if (id != null && id < oldestId) oldestId = id;
+    }
+    final legacyWide = p.id == oldestId;
     final generated = state.txns
         .where((t) => t.accountId == p.accountId && t.assetId == p.assetId)
         .where((t) => p.id != null && t.dcaPlanId == p.id ||
-            (legacyWide && t.note.startsWith('定投')))
+            (legacyWide &&
+                t.dcaPlanId == null &&
+                t.note.startsWith('定投')))
         .length;
 
     return SectionCard(
@@ -138,6 +148,16 @@ class DcaManagePage extends StatelessWidget {
                 label: const Text('立即补记'),
               ),
               const Spacer(),
+              // 只看这条计划产生的记录（用户 2026-09-30：「标记…好定位编辑删除」）。
+              // 用图标：400dp + 字体 1.3 下这一行塞不下两个文字按钮 + 三个图标
+              // （体检当场报过 64px 横溢）。
+              IconButton(
+                tooltip: '查看这条计划的记录',
+                icon: const Icon(Icons.receipt_long_outlined),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => AllTxnsPage(planId: p.id),
+                )),
+              ),
               IconButton(
                 tooltip: p.enabled ? '暂停' : '启用',
                 icon: Icon(p.enabled
@@ -179,8 +199,10 @@ class DcaManagePage extends StatelessWidget {
   }
 
   Future<void> _runOne(BuildContext context, AppState state, DcaPlan p) async {
-    // 单计划补记：临时只跑它 —— 复用全局流程即可（其它计划已补过不会被重复生成）
-    final report = await state.runDueDca(manual: true);
+    // 真的**只跑这一条**（用户 2026-09-30：「顺手把单计划按钮改成真的只跑那一条」）。
+    // 以前这里是 `runDueDca(manual: true)`，跑的是全量 —— 靠幂等不出错，但名不符实。
+    final report =
+        await state.runDueDca(manual: true, onlyPlanId: p.id);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(report.summary), duration: const Duration(seconds: 4)),

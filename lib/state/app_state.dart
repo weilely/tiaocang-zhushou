@@ -4443,12 +4443,16 @@ class AppState extends ChangeNotifier {
 
   /// 把定投计划里漏掉的期数补齐。
   ///
+  /// [onlyPlanId] 只补这一条计划（定投卡片上那个「立即补记」按钮用它；
+  /// 以前那个按钮其实跑的是**全部**计划，名不符实）。
+  ///
   /// 安全约束：
   /// - 只生成 `> last_run_date` 的期数，绝不重复
-  /// - 取不到历史价格的那一期**跳过且不推进断点**，下次重试；绝不拿今天的价冒充
-  /// - 标的已清仓的计划自动停用
-  /// - 单次每计划最多补 24 期
-  Future<DcaRunReport> runDueDca({bool manual = false}) async {
+  /// - 取不到历史价格的那一期：**停下不越过它**（否则断点一推，这期就永久补不上了）；
+  ///   只有"应投日已经过去 30 天还取不到价"才认定数据本身缺失、明示跳过
+  /// - 标的**曾经交易过、现在清仓**的计划自动停用（从没交易过的不停用）
+  /// - 单次每计划最多补 24 期（日定投 31 期），取最早那批
+  Future<DcaRunReport> runDueDca({bool manual = false, int? onlyPlanId}) async {
     final report = DcaRunReport();
     if (!manual && !dcaAutoRun) return report;
     if (dcaRunning) return report;
@@ -4456,7 +4460,10 @@ class AppState extends ChangeNotifier {
 
     try {
       final today = DateTime.now();
-      final plans = await db.dcaPlans(onlyEnabled: true);
+      final all = await db.dcaPlans(onlyEnabled: true);
+      final plans = onlyPlanId == null
+          ? all
+          : [for (final p in all) if (p.id == onlyPlanId) p];
       var touched = false;
 
       for (final plan in plans) {
@@ -4489,19 +4496,40 @@ class AppState extends ChangeNotifier {
         );
         if (due.isEmpty) continue;
 
-        // 这个「账户+标的」下只有这一条计划吗？只有一条时才允许退回
-        // 「同标的同一天 + 备注含定投」的老口径（认手动记的那笔）；
-        // 多条计划共存时，判定必须落到**具体哪条计划**上，否则互相吞期数。
-        final legacyAssetWide =
-            dcaPlansFor(plan.accountId, plan.assetId).length == 1;
+        // 「老口径」判定（同账户同标的同一天 + 备注含定投，认他手动记的那笔）
+        // 只对**该标的最早那条计划**生效：老记录没有计划标记，把它们算给最早那条
+        // 计划最合理（新的计划都有自己的标记，不会被抢）。
+        // 以前是"该标的只有一条计划时才认" —— 一旦加了第二条，老计划就显示
+        // 「已补记 0 笔」、手记的定投也不再被认（2026-09-30 在模拟器上看到过）。
+        final sameAssetPlans = dcaPlansFor(plan.accountId, plan.assetId);
+        var oldestPlanId = 1 << 30;
+        for (final p in sameAssetPlans) {
+          final id = p.id;
+          if (id != null && id < oldestPlanId) oldestPlanId = id;
+        }
+        final legacyAssetWide = plan.id == oldestPlanId;
 
         final from = due.first.subtract(const Duration(days: 10));
-        Map<String, double> prices;
+        // 价格：**先看本地 nav_history**（零请求、离线可用），缺了才去取
+        Map<String, double> prices = const {};
         try {
-          prices = await dcaSource.historyFor(asset, from, today);
-        } on MarketException catch (e) {
-          report.messages.add('${asset.displayName}：${e.message}');
-          continue; // 不改断点，下次重试
+          final local = await db.navSamplesFor([asset.code],
+              earliestDate: _dayKey(from));
+          prices = {
+            for (final p in (local[asset.code] ?? const <NavPoint>[]))
+              if (p.nav > 0) p.date: p.nav,
+          };
+        } catch (_) {
+          // 本地读不到就当没有，走网络
+        }
+        if (!coversAllDue(due, prices, today)) {
+          try {
+            final remote = await dcaSource.historyFor(asset, from, today);
+            prices = {...prices, ...remote};
+          } on MarketException catch (e) {
+            report.messages.add('${asset.displayName}：${e.message}');
+            continue; // 不改断点，下次重试
+          }
         }
         if (prices.isEmpty) {
           report.skippedNoPrice += due.length;
@@ -4509,6 +4537,7 @@ class AppState extends ChangeNotifier {
         }
 
         DateTime? advancedTo;
+        String? gapStop;
         for (final d in due) {
           // 非工作日顺延：当天没有净值就用之后第一个有净值的交易日，
           // 并以**那天的净值**成交（用户 2026-09-29：「定投日是非工作日，
@@ -4516,7 +4545,18 @@ class AppState extends ChangeNotifier {
           final ref =
               resolveDcaPrice(due: d, today: today, priceByDay: prices);
           if (ref == null) {
+            // 取不到价这一期**停下，不越过它** —— 越过了断点就推到后面，
+            // 这期永久补不上（以前就是 continue，静默丢期）。
+            // 只有"应投日已过 30 天"才认定是数据本身缺失，明示跳过继续。
+            final daysPast = DateTime(today.year, today.month, today.day)
+                .difference(DateTime(d.year, d.month, d.day))
+                .inDays;
             report.skippedNoPrice++;
+            if (daysPast <= 30) {
+              gapStop = dayKey(d);
+              break;
+            }
+            advancedTo = d; // 数据缺失：如实跳过，避免每轮都卡在同一期
             continue;
           }
           // 这一期已经有记录了（本计划补过的 / 同标的只有一条计划时手动记的那笔）
@@ -4559,6 +4599,10 @@ class AppState extends ChangeNotifier {
           report.feeTotal += fee;
           advancedTo = ref.date;
           touched = true;
+        }
+        if (gapStop != null) {
+          report.messages
+              .add('${asset.displayName}：$gapStop 那期净值还没公布，先补到它之前');
         }
         if (advancedTo != null) {
           await db.advanceDcaPlan(plan.id!, advancedTo);

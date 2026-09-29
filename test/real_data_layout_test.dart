@@ -673,6 +673,70 @@ void main() {
       expect(size.width, greaterThan(200), reason: '曲线要真画出来（实测宽 $size）');
       expect(size.height, greaterThan(80));
     });
+    // 用户 2026-09-30：「可以标记哪些定投记录是哪个定投计划产生的，
+    // 这样就好定位编辑删除了」
+    testWidgets('定投记录：标注属于哪条计划 + 卡片可跳「查看记录」（只看这条计划的）',
+        (tester) async {
+      final st = makeState();
+      final acc = st.accounts.first.id!;
+      final asset = st.assetList.first;
+      const planId = 9001; // 造一条计划（id 避开真实数据）
+      st.dcaPlans = [
+        DcaPlan(
+          id: planId,
+          accountId: acc,
+          assetId: asset.id!,
+          amount: 800,
+          frequency: DcaFrequency.monthly,
+          dayOfPeriod: 1,
+          startDate: DateTime(2026, 1, 1),
+        ),
+      ];
+      st.txns = [
+        ...st.txns,
+        // 这条是计划生成的（带标记）
+        Txn(
+          accountId: acc,
+          assetId: asset.id!,
+          type: TxnType.buy,
+          date: DateTime(2026, 9, 1),
+          amount: 800,
+          shares: 100,
+          price: 8,
+          note: '定投',
+          dcaPlanId: planId,
+        ),
+        // 这条是手记的定投（没有计划标记）
+        Txn(
+          accountId: acc,
+          assetId: asset.id!,
+          type: TxnType.buy,
+          date: DateTime(2026, 8, 3),
+          amount: 500,
+          shares: 60,
+          price: 8.3,
+          note: '定投 · 手记的那笔',
+        ),
+      ];
+
+      // 只看这条计划：手记那笔不该出现，且要写明"1 笔"
+      await pumpPage(tester, const AllTxnsPage(planId: planId), state: st);
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining('只看定投计划'), findsOneWidget);
+      expect(find.textContaining('（1 笔）'), findsOneWidget,
+          reason: '这条计划只产生了一笔，手记那笔不算它');
+      // 默认「按标的」是全折叠的，行要切到「按日期」才看得见
+      await tester.tap(find.text('按日期'));
+      await tester.pumpAndSettle();
+      // 行上的计划标记（每月1日·800）
+      expect(find.textContaining('每月1日'), findsWidgets);
+      expect(find.textContaining('手记的那笔'), findsNothing);
+
+      // 定投卡片上有「查看这条计划的记录」入口
+      await pumpPage(tester, const DcaManagePage(), state: st);
+      expect(tester.takeException(), isNull, reason: '多了一个按钮也不许溢出');
+      expect(find.byTooltip('查看这条计划的记录'), findsWidgets);
+    });
   });
 }
 
