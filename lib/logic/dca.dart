@@ -14,15 +14,21 @@ DateTime dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 /// - `monthly`：每月 `dayOfPeriod` 号（1–28，超出月份天数时钳制到月末）
 /// - `weekly`：从 start 起第一个星期几等于 `dayOfPeriod`（1=周一…7=周日）的日子，然后每 7 天
 /// - `biweekly`：start 起每 14 天
+///
+/// [end] 是计划的**终止日期**（含当天；用户 2026-09-29「定投设置起始和终止日期」）：
+/// 传了就取 `min(until, end)` 当上界，过期末不再生成。
 List<DateTime> dcaPeriods({
   required DateTime start,
   required DcaFrequency frequency,
   required int dayOfPeriod,
   required DateTime until,
+  DateTime? end,
   int hardLimit = 600,
 }) {
+  var u = dayOnly(until);
+  final e = end == null ? null : dayOnly(end);
+  if (e != null && e.isBefore(u)) u = e;
   final s = dayOnly(start);
-  final u = dayOnly(until);
   if (u.isBefore(s)) return const [];
 
   final out = <DateTime>[];
@@ -70,7 +76,7 @@ List<DateTime> dcaPeriods({
   return out;
 }
 
-/// 从 `lastRunDate` 之后到 `today` 的待补记日期。
+/// 从 `lastRunDate` 之后到 `today`（且不超过计划终止日期）的待补记日期。
 ///
 /// 超过 [maxNew] 期时只取**最近**的 [maxNew] 期（避免首次启用就补出上百笔）。
 List<DateTime> pendingDcaDates({
@@ -83,6 +89,8 @@ List<DateTime> pendingDcaDates({
     frequency: plan.frequency,
     dayOfPeriod: plan.dayOfPeriod,
     until: today,
+    // 终止日期之后不再补 —— 过了期末的计划不该继续生新期数
+    end: plan.endDate,
   );
   final last = plan.lastRunDate;
   final pending =
@@ -124,14 +132,19 @@ DcaPriceRef? resolveDcaPrice({
 }
 
 /// 计划的下一次扣款日（用于 UI 展示）。已停止或已到期返回 null。
+///
+/// 「已到期」= 终止日期在今天之前（用户 2026-09-29 加的终止日期）。
 DateTime? nextDcaDate(DcaPlan plan, DateTime today) {
   final t = dayOnly(today);
-  // 从今天开始往后找第一个应投日
+  if (plan.endedBy(t)) return null;
+  // 从今天开始往后找第一个应投日（上界：一年后 或 终止日期，取先到的那个）
+  final horizon = DateTime(t.year + 1, t.month, t.day);
   final future = dcaPeriods(
     start: t,
     frequency: plan.frequency,
     dayOfPeriod: plan.dayOfPeriod,
-    until: DateTime(t.year + 1, t.month, t.day),
+    until: horizon,
+    end: plan.endDate,
   );
   if (future.isEmpty) return null;
   return future.first;
@@ -164,6 +177,10 @@ double dcaFeeFor({required double amount, required double feeRatePct}) {
 /// 定投管理里的「已补记 N 笔」都认它），所以**你手动记的那笔定投也算数**。
 /// [days] 传「应投日」与「实际成交日」两天，任一天命中就算记过 ——
 /// 净值顺延时（比如应投日是周六、成交在周一）两者不是同一天。
+///
+/// ⚠️ 这是**账户+标的级**判定（不区分是哪条计划）。同一标的可以挂多条计划之后
+/// （用户 2026-09-29），补记要用 [dcaPeriodRecorded] —— 否则 A 计划的期数会把
+/// B 计划同一天的期数误判成"已记过"而漏补。
 bool dcaRecordedOn({
   required Iterable<Txn> txns,
   required int accountId,
@@ -175,6 +192,32 @@ bool dcaRecordedOn({
     if (t.accountId != accountId || t.assetId != assetId) continue;
     if (!t.note.contains('定投')) continue;
     if (keys.contains(dayKey(t.date))) return true;
+  }
+  return false;
+}
+
+/// 这一期是不是**这条计划**已经记过了（用户 2026-09-29：「补记功能只要期间没有」）
+///
+/// 判定顺序：
+/// 1. **认计划标记**：`txn.dcaPlanId == plan.id` —— App 自动补记写的，最准；
+/// 2. [legacyAssetWide] 为真时（这个「账户+标的」下**只有这一条计划**），再退回
+///    老口径「同账户同标的同一天 + 备注含定投」：既认历史数据（没有 dcaPlanId），
+///    也认**他手动记的那笔定投**（2026-09-25 定的口径）。
+///    多计划共存时这条**必须关掉**，否则一条计划的记录会把另一条计划的同一天期数吞掉。
+///
+/// [days] 传「应投日」与「实际成交日」两天，任一天命中就算记过（净值顺延时不是同一天）。
+bool dcaPeriodRecorded({
+  required Iterable<Txn> txns,
+  required DcaPlan plan,
+  required Iterable<DateTime> days,
+  required bool legacyAssetWide,
+}) {
+  final keys = {for (final d in days) dayKey(d)};
+  for (final t in txns) {
+    if (t.accountId != plan.accountId || t.assetId != plan.assetId) continue;
+    if (!keys.contains(dayKey(t.date))) continue;
+    if (plan.id != null && t.dcaPlanId == plan.id) return true;
+    if (legacyAssetWide && t.note.contains('定投')) return true;
   }
   return false;
 }

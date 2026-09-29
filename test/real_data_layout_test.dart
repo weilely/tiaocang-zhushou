@@ -16,6 +16,7 @@ import 'package:invest_tracker/logic/redeem_fee.dart';
 import 'package:invest_tracker/state/app_state.dart';
 import 'package:invest_tracker/ui/all_txns_page.dart';
 import 'package:invest_tracker/ui/cash_manage_page.dart';
+import 'package:invest_tracker/ui/dca_manage_page.dart';
 import 'package:invest_tracker/ui/holdings_page.dart';
 import 'package:invest_tracker/ui/index_insight_page.dart';
 import 'package:invest_tracker/ui/macro_chart_page.dart';
@@ -547,6 +548,42 @@ void main() {
       expect(dd.initialValue, '');
       expect(find.byTooltip('设简称'), findsNothing, reason: '没选基金时不显示设简称入口');
       expect(tester.takeException(), isNull);
+    });
+    // 用户 2026-09-29：「定投设置起始和终止日期，同一个标的可设置多个定投，
+    // 补记功能只要期间没有，如果定投日是非工作日，顺延第一工作日扣款」
+    testWidgets('定投：计划弹层有起止日期、同标的可再建一条、400dp 不溢出', (tester) async {
+      final st = makeState();
+      final acc = st.accounts.first.id!;
+      final held = [
+        for (final p in st.positionsOf(acc))
+          if (!p.isEmpty) p.asset,
+      ];
+      if (held.isEmpty) {
+        markTestSkipped('备份里没有持仓');
+        return;
+      }
+
+      await pumpPage(tester, const DcaManagePage(), state: st);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byTooltip('新增定投计划'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '选标的弹层不许溢出');
+
+      // 同标的可以再建一条：已有计划时提示「已有 N 条」，点进去是**新建**弹层
+      await tester.tap(find.text(held.first.name.isEmpty
+              ? held.first.code
+              : held.first.name)
+          .last);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '计划弹层不许溢出');
+
+      // 起止日期两个框都在，默认「不设终止」
+      expect(find.text('起始日期'), findsOneWidget);
+      expect(find.text('终止日期'), findsOneWidget);
+      expect(find.text('不设终止'), findsOneWidget);
+      expect(find.textContaining('顺延到之后第一个交易日'), findsWidgets);
+      // 新建时是「保存并补记」，不是编辑态的「保存」
+      expect(find.text('保存并补记'), findsOneWidget);
     });
   });
 }

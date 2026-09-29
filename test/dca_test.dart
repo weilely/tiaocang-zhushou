@@ -127,6 +127,49 @@ void main() {
       // 第一期应是 2024-10-01（2026-09 往回数 24 期）
       expect(dayKey(ds.first), '2024-10-01');
     });
+
+    // 用户 2026-09-29：「定投设置起始和终止日期」
+    test('终止日期之后的期数不再生成（含当天）', () {
+      final p = plan(start: DateTime(2026, 1, 1))
+          .copyWith(endDate: DateTime(2026, 3, 31));
+      final ds = pendingDcaDates(plan: p, today: DateTime(2026, 9, 14));
+      expect(ds.map((d) => dayKey(d)).toList(),
+          ['2026-01-01', '2026-02-01', '2026-03-01']);
+      expect(dayKey(ds.last), '2026-03-01', reason: '4/1 已经过期末了');
+    });
+
+    test('终止日期当月那天仍算在内（区间闭合）', () {
+      final p = plan(start: DateTime(2026, 1, 1), day: 1)
+          .copyWith(endDate: DateTime(2026, 4, 1));
+      final ds = pendingDcaDates(plan: p, today: DateTime(2026, 9, 14));
+      expect(dayKey(ds.last), '2026-04-01');
+    });
+
+    test('没设终止日期 → 一路算到今天（现状不变）', () {
+      final ds = pendingDcaDates(plan: plan(), today: DateTime(2026, 9, 14));
+      expect(ds.map((d) => dayKey(d)).toList(), ['2026-08-01', '2026-09-01']);
+      expect(plan().endDate, isNull);
+    });
+
+    test('nextDcaDate：到期后返回 null，未到期返回下一期', () {
+      final ended = plan(start: DateTime(2026, 1, 1))
+          .copyWith(endDate: DateTime(2026, 3, 31));
+      expect(nextDcaDate(ended, DateTime(2026, 9, 14)), isNull);
+      expect(ended.endedBy(DateTime(2026, 9, 14)), isTrue);
+
+      final ongoing = plan(start: DateTime(2026, 1, 1))
+          .copyWith(endDate: DateTime(2026, 12, 31));
+      expect(dayKey(nextDcaDate(ongoing, DateTime(2026, 9, 14))!),
+          '2026-10-01');
+      expect(ongoing.endedBy(DateTime(2026, 9, 14)), isFalse);
+    });
+
+    test('区间文案：有终止写起止，没有只写起', () {
+      final p = plan(start: DateTime(2026, 1, 5));
+      expect(p.rangeLabel, '2026-01-05 起');
+      expect(p.copyWith(endDate: DateTime(2026, 12, 31)).rangeLabel,
+          '2026-01-05 ~ 2026-12-31');
+    });
   });
 
   // ---------------- 补记前先看「当天是否已经记过定投」 ----------------
@@ -274,6 +317,93 @@ void main() {
       final r = DcaRunReport()..skippedRecorded = 2;
       expect(r.hasAnything, isTrue);
       expect(r.summary, contains('2 期当天已记过定投'));
+    });
+  });
+
+  // ---------------- 同一标的挂多条计划时的判定 ----------------
+  //
+  // 用户 2026-09-29：「同一个标的可设置多个定投，补记功能只要期间没有」
+
+  group('多计划：判定落到「哪条计划」上', () {
+    DcaPlan plan(int id) => DcaPlan(
+          id: id,
+          accountId: 1,
+          assetId: 2,
+          amount: id == 1 ? 1000 : 500,
+          frequency: DcaFrequency.monthly,
+          dayOfPeriod: 1,
+          startDate: DateTime(2026, 1, 1),
+        );
+
+    Txn made({int? byPlan, DateTime? date, String note = '定投'}) => Txn(
+          accountId: 1,
+          assetId: 2,
+          type: TxnType.buy,
+          date: date ?? DateTime(2026, 9, 1),
+          amount: 1000,
+          note: note,
+          dcaPlanId: byPlan,
+        );
+
+    test('计划 1 补过的那一期，不会让计划 2 的同一天期数被跳过', () {
+      final a = plan(1);
+      final b = plan(2);
+      final txns = [made(byPlan: 1)];
+      // 同标的有两条计划 → legacyAssetWide 关掉
+      expect(
+        dcaPeriodRecorded(
+            txns: txns,
+            plan: a,
+            days: [DateTime(2026, 9, 1)],
+            legacyAssetWide: false),
+        isTrue,
+        reason: '这是计划 1 自己补的',
+      );
+      expect(
+        dcaPeriodRecorded(
+            txns: txns,
+            plan: b,
+            days: [DateTime(2026, 9, 1)],
+            legacyAssetWide: false),
+        isFalse,
+        reason: '计划 2 的同一期还没记过，必须照补',
+      );
+    });
+
+    test('只有一条计划时仍认老口径：手动记的那笔定投算数', () {
+      final only = plan(1);
+      final manual = made(byPlan: null, note: '定投 · 9月');
+      expect(
+        dcaPeriodRecorded(
+            txns: [manual],
+            plan: only,
+            days: [DateTime(2026, 9, 1)],
+            legacyAssetWide: true),
+        isTrue,
+      );
+      // 多计划场景下同样的行不该算（避免吞掉另一条计划的期数）
+      expect(
+        dcaPeriodRecorded(
+            txns: [manual],
+            plan: only,
+            days: [DateTime(2026, 9, 1)],
+            legacyAssetWide: false),
+        isFalse,
+      );
+    });
+
+    test('顺延后的成交日也认（应投日与成交日命中任一天即可）', () {
+      final a = plan(1);
+      // 应投 09-05（周六）→ 实际成交 09-07（周一）
+      final t = made(byPlan: 1, date: DateTime(2026, 9, 7));
+      expect(
+        dcaPeriodRecorded(
+            txns: [t],
+            plan: a,
+            days: [DateTime(2026, 9, 5), DateTime(2026, 9, 7)],
+            legacyAssetWide: false),
+        isTrue,
+      );
     });
   });
 

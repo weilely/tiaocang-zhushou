@@ -148,6 +148,14 @@ class Txn {
   /// —— 所以持仓里看不到它（份额为 0 视为空仓），补上后自然出现。
   bool pending;
 
+  /// 这笔是哪个**定投计划**生成的（`dca_plans.id`；手动记的、老数据为 null）
+  ///
+  /// 用户 2026-09-29：「同一个标的可设置多个定投，补记功能只要期间没有」——
+  /// 一旦同一标的能挂多条计划，「这一天有没有记过定投」就不能只按
+  /// 账户+标的+日期 判了（会把另一条计划的期数误判成"已记过"而漏补），
+  /// 必须落到**具体哪条计划**上。
+  int? dcaPlanId;
+
   Txn({
     this.id,
     required this.accountId,
@@ -160,6 +168,7 @@ class Txn {
     this.fee = 0,
     this.note = '',
     this.pending = false,
+    this.dcaPlanId,
   });
 
   /// 现金净流（负=投入资金，正=收回资金）
@@ -207,6 +216,7 @@ class Txn {
         'fee': fee,
         'note': note,
         'pending': pending ? 1 : 0,
+        'dca_plan_id': dcaPlanId,
       };
 
   factory Txn.fromMap(Map<String, Object?> m) => Txn(
@@ -222,6 +232,8 @@ class Txn {
         note: (m['note'] as String?) ?? '',
         // 老库/老备份没有这一列 → false（已确认）
         pending: ((m['pending'] as num?)?.toInt() ?? 0) == 1,
+        // 老库/老备份没有这一列 → null（不是定投生成的）
+        dcaPlanId: (m['dca_plan_id'] as num?)?.toInt(),
       );
 
   Txn copyWith({
@@ -236,6 +248,7 @@ class Txn {
     double? fee,
     String? note,
     bool? pending,
+    int? dcaPlanId,
   }) =>
       Txn(
         id: id ?? this.id,
@@ -249,6 +262,7 @@ class Txn {
         fee: fee ?? this.fee,
         note: note ?? this.note,
         pending: pending ?? this.pending,
+        dcaPlanId: dcaPlanId ?? this.dcaPlanId,
       );
 }
 

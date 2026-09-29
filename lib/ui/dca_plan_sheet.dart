@@ -51,6 +51,9 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
   DcaFrequency _freq = DcaFrequency.monthly;
   int _day = 1;
   late DateTime _start;
+
+  /// 终止日期（null = 不设终止、一直投下去）
+  DateTime? _end;
   final _note = TextEditingController();
   bool _busy = false;
 
@@ -67,6 +70,7 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
       _freq = e.frequency;
       _day = e.dayOfPeriod;
       _start = e.startDate;
+      _end = e.endDate;
       _note.text = e.note;
       // 0 不预填成 "0"，留空更好填
       _feeRate.text = e.feeRate > 0 ? _trimNum(e.feeRate) : '';
@@ -198,16 +202,59 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
                   style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
             const SizedBox(height: 16),
 
-            InkWell(
-              onTap: _pickStart,
-              borderRadius: BorderRadius.circular(10),
-              child: InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: '首期日期',
-                  suffixIcon: Icon(Icons.calendar_today_outlined, size: 18),
+            // 起止日期（用户 2026-09-29：「定投设置起始和终止日期」）
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: _pickStart,
+                    borderRadius: BorderRadius.circular(10),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: '起始日期',
+                        suffixIcon:
+                            Icon(Icons.calendar_today_outlined, size: 18),
+                      ),
+                      child: Text(fmtDate(_start)),
+                    ),
+                  ),
                 ),
-                child: Text(fmtDateCn(_start)),
-              ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: InkWell(
+                    onTap: _pickEnd,
+                    borderRadius: BorderRadius.circular(10),
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: '终止日期',
+                        suffixIcon: _end == null
+                            ? const Icon(Icons.event_busy_outlined, size: 18)
+                            : IconButton(
+                                tooltip: '清除终止日期（一直投下去）',
+                                icon: const Icon(Icons.close, size: 16),
+                                onPressed: () => setState(() => _end = null),
+                              ),
+                      ),
+                      child: Text(
+                        // 用 `yyyy-MM-dd`：中文长日期在 400dp + 字体 1.3 下会折成两行
+                        _end == null ? '不设终止' : fmtDate(_end!),
+                        style: _end == null
+                            ? TextStyle(
+                                color: Theme.of(context).hintColor, fontSize: 14)
+                            : null,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              // 纯文本，别写 Markdown：App 不解析，`**` 会原样显示出来
+              '终止日期含当天：过期末不再生新期数（已补记的照旧留着）。'
+              '定投日恰逢周末/休市时，顺延到之后第一个交易日、按那天的净值成交。',
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
             ),
             const SizedBox(height: 16),
 
@@ -285,7 +332,23 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
       firstDate: DateTime(2000),
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
-    if (picked != null) setState(() => _start = picked);
+    if (picked == null) return;
+    setState(() {
+      _start = picked;
+      // 起始日挪到终止日之后 → 终止日跟着走，别留下一个不可能的区间
+      if (_end != null && _end!.isBefore(picked)) _end = null;
+    });
+  }
+
+  Future<void> _pickEnd() async {
+    final picked = await showCnDatePicker(
+      context: context,
+      initialDate: _end ?? _start.add(const Duration(days: 365)),
+      firstDate: _start,
+      lastDate: DateTime.now().add(const Duration(days: 3650)),
+      title: '选择终止日期',
+    );
+    if (picked != null) setState(() => _end = picked);
   }
 
   Future<void> _save() async {
@@ -310,6 +373,9 @@ class _DcaPlanEditorState extends State<_DcaPlanEditor> {
       frequency: _freq,
       dayOfPeriod: _day,
       startDate: _start,
+      // 终止日期可以"清空"，所以要用 clearEndDate 显式说（null 只表示"不改"）
+      endDate: _end,
+      clearEndDate: _end == null,
       note: _note.text.trim(),
       feeRate: (double.tryParse(_feeRate.text.trim()) ?? 0).clamp(0, 100),
     );

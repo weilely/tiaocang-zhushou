@@ -87,9 +87,13 @@ class DcaManagePage extends StatelessWidget {
     final account = state.accountsById[p.accountId];
     final next = nextDcaDate(p, DateTime.now());
     final fee = dcaFeeFor(amount: p.amount, feeRatePct: p.feeRate);
+    // 「已补记 N 笔」按**这条计划**数（同标的多计划时不能按标的数一遍，
+    // 否则两条计划会显示同一个数字）；老数据没有 dcaPlanId，退回按备注+同标的。
+    final legacyWide = state.dcaPlansFor(p.accountId, p.assetId).length == 1;
     final generated = state.txns
         .where((t) => t.accountId == p.accountId && t.assetId == p.assetId)
-        .where((t) => t.note.startsWith('定投'))
+        .where((t) => p.id != null && t.dcaPlanId == p.id ||
+            (legacyWide && t.note.startsWith('定投')))
         .length;
 
     return SectionCard(
@@ -115,7 +119,8 @@ class DcaManagePage extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             '${asset?.code ?? ''} · ${account?.name ?? ''}\n'
-            '下次扣款 ${next == null ? '--' : fmtDate(next)}'
+            '${p.rangeLabel}'
+            ' · ${next == null ? (p.endedBy(DateTime.now()) ? '已到期' : '下次扣款 --') : '下次扣款 ${fmtDate(next)}'}'
             ' · 已补记 $generated 笔'
             '${fee > 0 ? ' · 手续费 ¥${fee.toStringAsFixed(2)}/期' : ''}'
             '${p.note.isEmpty ? '' : ' · ${p.note}'}',
@@ -182,8 +187,11 @@ class DcaManagePage extends StatelessWidget {
   /// 新增定投计划：先选「账户 + 标的」，再打开计划弹层
   ///
   /// 只列该账户**当前持有**的标的 —— 没有持仓的标的建出来会被补记流程立刻自动停用
-  /// （`runDueDca` 里「标的已清仓的计划自动停用」）。该标的已有计划就进编辑，
-  /// 免得同一「账户 + 标的」攒出两条重复计划。
+  /// （`runDueDca` 里「标的已清仓的计划自动停用」）。
+  ///
+  /// 用户 2026-09-29：「同一个标的可设置多个定投」——所以**不再**因为该标的有计划就
+  /// 跳去编辑，而是新建一条；已有计划的数量在选标的时标出来（想改哪条就在列表里点
+  /// 那条的铅笔）。
   Future<void> _addPlan(BuildContext context, AppState state) async {
     if (state.accounts.isEmpty) return;
     final picked = await showModalBottomSheet<({int accountId, int assetId})>(
@@ -195,12 +203,10 @@ class DcaManagePage extends StatelessWidget {
       ),
     );
     if (picked == null || !context.mounted) return;
-    final existing = state.dcaPlansFor(picked.accountId, picked.assetId);
     await showDcaPlanSheet(
       context,
       accountId: picked.accountId,
       assetId: picked.assetId,
-      existing: existing.isEmpty ? null : existing.first,
     );
   }
 }
@@ -242,7 +248,8 @@ class _PlanTargetPickerState extends State<_PlanTargetPicker> {
             const SizedBox(height: 4),
             Text(
               '选一个该账户当前持有的标的（没有持仓的标的建了会被自动暂停）。'
-              '该标的已经有计划，就直接进编辑。',
+              '同一个标的可以建多条计划（比如每周小额定投 + 每月大额定投）；'
+              '想改哪条，回列表点那条的铅笔。',
               style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor, height: 1.5),
             ),
             const SizedBox(height: 14),
@@ -279,11 +286,15 @@ class _PlanTargetPickerState extends State<_PlanTargetPicker> {
                   subtitle: Text('${a.code} · ${a.kind.label}',
                       style: TextStyle(
                           fontSize: 11, color: Theme.of(context).hintColor)),
-                  trailing: st.dcaPlansFor(accountId, a.id!).isEmpty
-                      ? const Icon(Icons.chevron_right, size: 20)
-                      : Text('已有计划',
-                          style: TextStyle(
-                              fontSize: 11, color: Theme.of(context).hintColor)),
+                  trailing: switch (st.dcaPlansFor(accountId, a.id!).length) {
+                    // 同标的可以挂多条计划（用户 2026-09-29）→ 标出已有几条，
+                    // 点进去是**再建一条**；想改哪条回列表点那条的铅笔
+                    0 => const Icon(Icons.chevron_right, size: 20),
+                    final n => Text('已有 $n 条',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Theme.of(context).colorScheme.primary)),
+                  },
                   onTap: () => Navigator.of(context)
                       .pop((accountId: accountId, assetId: a.id!)),
                 ),

@@ -4461,6 +4461,9 @@ class AppState extends ChangeNotifier {
         final asset = assetsById[plan.assetId];
         if (asset == null || plan.id == null) continue;
 
+        // 过了终止日期的计划不再生新期数（用户 2026-09-29 加的终止日期）
+        if (plan.endedBy(today)) continue;
+
         final pos = positionOf(plan.accountId, plan.assetId);
         if (pos == null || pos.isEmpty) {
           await db.setDcaPlanEnabled(plan.id!, false);
@@ -4471,6 +4474,12 @@ class AppState extends ChangeNotifier {
 
         final due = pendingDcaDates(plan: plan, today: today);
         if (due.isEmpty) continue;
+
+        // 这个「账户+标的」下只有这一条计划吗？只有一条时才允许退回
+        // 「同标的同一天 + 备注含定投」的老口径（认手动记的那笔）；
+        // 多条计划共存时，判定必须落到**具体哪条计划**上，否则互相吞期数。
+        final legacyAssetWide =
+            dcaPlansFor(plan.accountId, plan.assetId).length == 1;
 
         final from = due.first.subtract(const Duration(days: 10));
         Map<String, double> prices;
@@ -4487,19 +4496,22 @@ class AppState extends ChangeNotifier {
 
         DateTime? advancedTo;
         for (final d in due) {
+          // 非工作日顺延：当天没有净值就用之后第一个有净值的交易日，
+          // 并以**那天的净值**成交（用户 2026-09-29：「定投日是非工作日，
+          // 顺延第一工作日扣款，以扣款日净值计算」——就是 resolveDcaPrice）
           final ref =
               resolveDcaPrice(due: d, today: today, priceByDay: prices);
           if (ref == null) {
             report.skippedNoPrice++;
             continue;
           }
-          // 这一期当天已经有定投记录了（手动记的那笔也算）→ 不再补一遍。
-          // 但断点照推：否则这期会每次都被重新捡起来、永远挂在"待补"上。
-          if (dcaRecordedOn(
+          // 这一期已经有记录了（本计划补过的 / 同标的只有一条计划时手动记的那笔）
+          // → 不再补一遍。但断点照推：否则这期会每次都被重新捡起来、永远挂在"待补"上。
+          if (dcaPeriodRecorded(
             txns: txns,
-            accountId: plan.accountId,
-            assetId: plan.assetId,
+            plan: plan,
             days: [d, ref.date],
+            legacyAssetWide: legacyAssetWide,
           )) {
             report.skippedRecorded++;
             advancedTo = ref.date;
@@ -4519,12 +4531,15 @@ class AppState extends ChangeNotifier {
             accountId: plan.accountId,
             assetId: plan.assetId,
             type: TxnType.buy,
+            // 成交日 = **实际扣款日**（顺延后的交易日），不是应投日
             date: ref.date,
             amount: plan.amount,
             shares: shares,
             price: ref.price,
             fee: fee,
             note: plan.note.isEmpty ? '定投' : '定投 · ${plan.note}',
+            // 记下是哪条计划生成的：同一标的多计划时的判定与「已补记 N 笔」都靠它
+            dcaPlanId: plan.id,
           ));
           report.created++;
           report.feeTotal += fee;

@@ -16,7 +16,9 @@ class AppDatabase {
   /// v8 调仓目标按账户分开（targets 加 account_id，唯一键改成 账户+标的），
   /// v9 给 dca_plans 加 fee_rate（每期申购费率 %，定投也要算手续费），
   /// v10 给 txns 加 pending（场外基金当天净值没公布时先记金额、份额待确认）
-  static const int _dbVersion = 10;
+  /// v11 给 dca_plans 加 end_date（定投终止日期）、给 txns 加 dca_plan_id
+  /// （这笔是哪条定投计划生成的 —— 同一标的可挂多条计划后判定要落到计划上）
+  static const int _dbVersion = 11;
 
   Database? _db;
 
@@ -70,7 +72,8 @@ class AppDatabase {
         price REAL NOT NULL DEFAULT 0,
         fee REAL NOT NULL DEFAULT 0,
         note TEXT NOT NULL DEFAULT '',
-        pending INTEGER NOT NULL DEFAULT 0
+        pending INTEGER NOT NULL DEFAULT 0,
+        dca_plan_id INTEGER
       )
     ''');
     await d.execute('CREATE INDEX idx_txns_account ON txns (account_id)');
@@ -165,6 +168,16 @@ class AppDatabase {
       // 「待确认」记账（用户 2026-09-28）：场外基金当天净值没公布时先只记金额，
       // 份额等净值公布后自动补；老流水默认 0 = 已确认
       await _addColumnIfMissing(d, 'txns', 'pending', 'INTEGER NOT NULL DEFAULT 0');
+    }
+    if (oldVersion < 11) {
+      // 定投起止日期 + 同一标的可挂多条计划（用户 2026-09-29）：
+      // ①`dca_plans.end_date` 终止日期，老计划默认 0 = 不设终止（一直投下去）
+      await _addColumnIfMissing(
+          d, 'dca_plans', 'end_date', 'INTEGER NOT NULL DEFAULT 0');
+      // ②`txns.dca_plan_id` 这笔是**哪条计划**生成的 —— 同一标的能挂多条计划后，
+      //   「这一天有没有记过定投」必须落到具体计划上，否则会把另一条计划的期数
+      //   误判成"已记过"而漏补。老流水默认 NULL（手动记的/历史数据）
+      await _addColumnIfMissing(d, 'txns', 'dca_plan_id', 'INTEGER');
     }
   }
 
@@ -330,7 +343,8 @@ class AppDatabase {
         enabled       INTEGER NOT NULL DEFAULT 1,
         note          TEXT    NOT NULL DEFAULT '',
         created_at    INTEGER NOT NULL,
-        fee_rate      REAL    NOT NULL DEFAULT 0
+        fee_rate      REAL    NOT NULL DEFAULT 0,
+        end_date      INTEGER NOT NULL DEFAULT 0
       )
     ''');
     await d.execute(

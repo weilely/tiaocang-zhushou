@@ -32,6 +32,12 @@ class DcaPlan {
   /// 首期日期
   DateTime startDate;
 
+  /// **终止日期**（含当天；null = 不设终止、一直投下去）
+  ///
+  /// 用户 2026-09-29：「定投设置起始和终止日期」。到期末之后
+  /// `pendingDcaDates` 不再生成新期数，`nextDcaDate` 返回 null（界面显示 `--`）。
+  DateTime? endDate;
+
   /// 已补记到哪一期（null = 从未补记）
   DateTime? lastRunDate;
 
@@ -54,6 +60,7 @@ class DcaPlan {
     required this.frequency,
     required this.dayOfPeriod,
     required this.startDate,
+    this.endDate,
     this.lastRunDate,
     this.enabled = true,
     this.note = '',
@@ -68,7 +75,27 @@ class DcaPlan {
         DcaFrequency.biweekly => '自首期起每 14 天',
       };
 
-  String get summary => '$dayLabel · 每期 ${amount.toStringAsFixed(2)} 元';
+  /// 起止区间（`2026-01-05 ~ 2026-12-31` / 无终止时只写起点）
+  String get rangeLabel {
+    final s = '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}'
+        '-${startDate.day.toString().padLeft(2, '0')}';
+    if (endDate == null) return '$s 起';
+    final e = '${endDate!.year}-${endDate!.month.toString().padLeft(2, '0')}'
+        '-${endDate!.day.toString().padLeft(2, '0')}';
+    return '$s ~ $e';
+  }
+
+  /// 今天是否已过期（过了终止日期）
+  bool endedBy(DateTime today) {
+    final e = endDate;
+    if (e == null) return false;
+    final t = DateTime(today.year, today.month, today.day);
+    final ee = DateTime(e.year, e.month, e.day);
+    return t.isAfter(ee);
+  }
+
+  String get summary =>
+      '$dayLabel · 每期 ${amount.toStringAsFixed(2)} 元 · $rangeLabel';
 
   Map<String, Object?> toMap() => {
         'id': id,
@@ -78,6 +105,8 @@ class DcaPlan {
         'frequency': frequency.name,
         'day_of_period': dayOfPeriod,
         'start_date': startDate.millisecondsSinceEpoch,
+        'end_date':
+            endDate == null ? 0 : endDate!.millisecondsSinceEpoch,
         'last_run_date':
             lastRunDate == null ? 0 : lastRunDate!.millisecondsSinceEpoch,
         'enabled': enabled ? 1 : 0,
@@ -88,6 +117,7 @@ class DcaPlan {
 
   factory DcaPlan.fromMap(Map<String, Object?> m) {
     final last = (m['last_run_date'] as num?)?.toInt() ?? 0;
+    final end = (m['end_date'] as num?)?.toInt() ?? 0;
     return DcaPlan(
       id: m['id'] as int?,
       accountId: (m['account_id'] as num).toInt(),
@@ -97,6 +127,8 @@ class DcaPlan {
       dayOfPeriod: (m['day_of_period'] as num?)?.toInt() ?? 1,
       startDate:
           DateTime.fromMillisecondsSinceEpoch((m['start_date'] as num).toInt()),
+      // 老库/老备份没有这一列 → 不设终止
+      endDate: end <= 0 ? null : DateTime.fromMillisecondsSinceEpoch(end),
       lastRunDate:
           last <= 0 ? null : DateTime.fromMillisecondsSinceEpoch(last),
       enabled: ((m['enabled'] as num?)?.toInt() ?? 1) == 1,
@@ -117,6 +149,8 @@ class DcaPlan {
     DcaFrequency? frequency,
     int? dayOfPeriod,
     DateTime? startDate,
+    DateTime? endDate,
+    bool clearEndDate = false,
     DateTime? lastRunDate,
     bool? enabled,
     String? note,
@@ -130,6 +164,8 @@ class DcaPlan {
         frequency: frequency ?? this.frequency,
         dayOfPeriod: dayOfPeriod ?? this.dayOfPeriod,
         startDate: startDate ?? this.startDate,
+        // `endDate: null` 与"不改"是同一种传参，所以要清空得显式说 clearEndDate
+        endDate: clearEndDate ? null : (endDate ?? this.endDate),
         lastRunDate: lastRunDate ?? this.lastRunDate,
         enabled: enabled ?? this.enabled,
         note: note ?? this.note,
