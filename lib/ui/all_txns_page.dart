@@ -31,8 +31,11 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
             state.accountFilter == null || t.accountId == state.accountFilter)
         .toList();
 
+    // 买入合计**不含不动现金的那些**（红利再投 / 成本调整）：与资金流卡的
+    // 「投入金额」同一口径（用户 2026-09-29：「统一口径」）—— 再投是用分红
+    // 换来的份额，把它算成"买入"就和投入金额对不上了。
     final bought = list
-        .where((t) => t.type == TxnType.buy)
+        .where((t) => t.type == TxnType.buy && !t.isCashless)
         .fold<double>(0, (a, t) => a + t.amount);
     final sold = list
         .where((t) => t.type == TxnType.sell)
@@ -202,8 +205,9 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
     String name,
   ) {
     final asset = state.assetsById[assetId];
+    // 同上：买入小计也不含红利再投 / 成本调整
     final bought = txns
-        .where((t) => t.type == TxnType.buy)
+        .where((t) => t.type == TxnType.buy && !t.isCashless)
         .fold<double>(0, (a, t) => a + t.amount);
     final sold = txns
         .where((t) => t.type == TxnType.sell)

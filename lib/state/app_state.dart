@@ -845,39 +845,17 @@ class AppState extends ChangeNotifier {
     return n;
   }
 
-  /// 给历史上那些「红利再投」交易补一条 0 元的「再投」现金流水。
+  /// 联动现金流水的**动作词**：定投 / 再投 / 买入 / 卖出 / 分红。
   ///
-  /// **只补不删、不动余额**：金额恒为 0，交易、余额、统计都不受影响；
-  /// 幂等（已经有了就跳过）。做成维护按钮：早期版本的再投交易没有这条
-  /// 0 元行，列表里就看不见「再投」。
-  Future<int> backfillReinvestCash() async {
-    var n = 0;
-    for (final t in txns) {
-      if (!t.isReinvest || t.id == null) continue;
-      if (cashTxns.any((c) => c.srcTxnId == t.id)) continue;
-      final c = linkedCashTxnFor(t, t.id, note: _cashNoteFor(t));
-      if (c == null) continue;
-      await db.saveCashTxn(c);
-      n++;
-    }
-    if (n > 0) {
-      cashTxns = await db.cashTxns();
-      _recompute();
-      notifyListeners();
-    }
-    return n;
-  }
-
-  /// 还没有「再投」现金行的再投交易笔数（维护按钮的副标题用）
-  int get reinvestCashMissing {
-    var n = 0;
-    for (final t in txns) {
-      if (!t.isReinvest || t.id == null) continue;
-      if (cashTxns.any((c) => c.srcTxnId == t.id)) continue;
-      n++;
-    }
-    return n;
-  }
+  /// 全项目只有这一处（`_cashNoteFor` 与「改简称时重写备注」共用）——
+  /// 用户 2026-09-29：「统一口径」，别再各写一套。
+  String _cashActionFor(Txn t) => switch (t.type) {
+        TxnType.buy => t.isReinvest
+            ? '再投'
+            : (t.note.contains('定投') ? '定投' : '买入'),
+        TxnType.sell => '卖出',
+        TxnType.dividend => '分红',
+      };
 
   /// 买入/卖出/分红 → 现金流水（买入扣钱、卖出和分红进钱）
   /// 现金流水的备注：标的简称 + 动作词。
@@ -886,13 +864,7 @@ class AppState extends ChangeNotifier {
   String _cashNoteFor(Txn t) {
     final code = assetsById[t.assetId]?.code ?? '';
     final short = code.isEmpty ? '' : displayShortOf(code);
-    final action = switch (t.type) {
-      TxnType.buy => t.isReinvest
-          ? '再投'
-          : (t.note.contains('定投') ? '定投' : '买入'),
-      TxnType.sell => '卖出',
-      TxnType.dividend => '分红',
-    };
+    final action = _cashActionFor(t);
     return short.isEmpty ? action : '$short · $action';
   }
 
@@ -2461,7 +2433,8 @@ class AppState extends ChangeNotifier {
       if (src.isEmpty) continue;
       final ac = assetsById[src.first.assetId]?.code ?? '';
       if (ac != code) continue;
-      final label = src.first.type.label;
+      // 动作词走同一处（红利再投要写「再投」，别退回「买入」）
+      final label = _cashActionFor(src.first);
       final want = s.isEmpty ? label : '$s · $label';
       if (c.note == want) continue;
       c.note = want;

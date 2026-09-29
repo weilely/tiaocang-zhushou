@@ -567,44 +567,6 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  /// 补记历史「红利再投」的 0 元现金流水
-  ///
-  /// 只补不删：金额恒为 0，现金余额与收益统计都不变；幂等（已有就跳过）。
-  /// 早期版本的再投交易没有这条行，现金流水里就看不到「再投」。
-  Future<void> _confirmBackfillReinvest(AppState st) async {
-    final n = st.reinvestCashMissing;
-    if (n <= 0) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('补记「再投」现金流水？'),
-        content: Text(
-          '给 $n 笔历史「红利再投」补一条「金额 0 元」的「再投」行。\n\n'
-          '不动余额、不动交易、不动收益 —— 只是让现金流水里能看见「这笔分红折成了份额」。'
-          '已经有流水的不会被重复补。',
-          style: const TextStyle(fontSize: 13, height: 1.6),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('补记')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    final done = await st.backfillReinvestCash();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(done > 0 ? '已补记 $done 条「再投」现金流水（0 元）' : '没有需要补的'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
-
   Widget _dataSection(BuildContext context, AppState st) {
     final lastBackup = st.lastBackupAt == null
         ? '尚未备份过'
@@ -635,23 +597,6 @@ class _SettingsPageState extends State<SettingsPage> {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const AllTxnsPage()),
             ),
-          ),
-          const Divider(height: 16),
-          _groupHeader(context, '现金流水'),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            enabled: st.reinvestCashMissing > 0,
-            leading: const Icon(Icons.replay_outlined, size: 20),
-            title: const Text('补记「再投」现金流水', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              st.reinvestCashMissing > 0
-                  ? '有 ${st.reinvestCashMissing} 笔红利再投还没有对应流水；补的是 0 元行，不动余额'
-                  : '红利再投的「再投」流水都齐了',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
-            trailing: const Icon(Icons.chevron_right, size: 20),
-            onTap: () => _confirmBackfillReinvest(st),
           ),
           const Divider(height: 16),
           _groupHeader(context, '历史净值'),

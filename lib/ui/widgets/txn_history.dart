@@ -151,6 +151,10 @@ Widget txnTile(
   final asset = state.assetsById[t.assetId];
   final accountName = state.accountsById[t.accountId]?.name ?? '';
   final isDca = highlightNote != null && t.note.startsWith(highlightNote);
+  // 红利再投：不动现金的那种买入（备注 `红利再投 …` / `再投`）。
+  // 口径直接取 `Txn.isReinvest` —— 编辑页、现金流水页、统计都认同一处，
+  // 别处不再各写一套判断（用户 2026-09-29：「统一口径」）。
+  final isReinvest = t.isReinvest;
 
   final color = switch (t.type) {
     TxnType.buy => const Color(0xFFD93A3A),
@@ -214,6 +218,18 @@ Widget txnTile(
               borderRadius: BorderRadius.circular(10),
             ),
             child: const Text('定投',
+                style: TextStyle(fontSize: 10, color: Color(0xFF1F6FEB))),
+          ),
+        // 「再投」：红利再投那笔买入 —— 用户 2026-09-29「再投就是再投」
+        if (isReinvest)
+          Container(
+            margin: EdgeInsets.only(left: isDca ? 4 : 0),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1F6FEB).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Text('再投',
                 style: TextStyle(fontSize: 10, color: Color(0xFF1F6FEB))),
           ),
         // 「待确认」：场外基金当天净值没公布时先记的金额，份额等公布后自动补

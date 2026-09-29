@@ -7,6 +7,7 @@ import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/data/dca_models.dart';
 import 'package:invest_tracker/data/nav_models.dart';
 import 'package:invest_tracker/logic/backup.dart';
+import 'package:invest_tracker/logic/cash_flow.dart';
 import 'package:invest_tracker/logic/csv_io.dart';
 import 'package:invest_tracker/logic/portfolio.dart';
 
@@ -321,6 +322,50 @@ void main() {
       final parsed = parseTxnCsv(content);
       expect(parsed.rows.length, 1);
       expect(parsed.errors.length, 2);
+    });
+
+    // 用户 2026-09-29：「再确认一下 CSV 导入记录对再投的处理涵盖了没有，
+    // 如果有了就把数据中心的现金流水再投补记去掉」。
+    // 导入的每一行都走 `importTxns` → `saveTxnAndLinkedCash` → `_linkCashFor`
+    // → **`linkedCashTxnFor`** 这一条路，所以这里直接拿同一函数复算：
+    // 「红利再投 / 再投」的买入不扣现金、只留一条 0 元「再投」行。
+    test('导入的「红利再投 / 再投」不动现金（同一口径已覆盖）', () {
+      const content = '账户,标的类型,代码,名称,交易类型,日期,份额,价格,金额,手续费,备注\r\n'
+          '默认账户,场外基金,004814,中欧红利优享混合A,买入,2026-01-13,25.56,2.3087,59.03,0,红利再投 2026-01-13\r\n'
+          '默认账户,场外基金,004814,中欧红利优享混合A,买入,2026-01-12,0,1.2816,0,0,再投\r\n'
+          '默认账户,场外基金,004814,中欧红利优享混合A,买入,2026-05-26,964.04,2.0746,2000,0,\r\n'
+          '默认账户,场外基金,004814,中欧红利优享混合A,卖出,2026-08-13,11000,2.19,24098.06,121.1,\r\n';
+      final parsed = parseTxnCsv(content);
+      expect(parsed.errors, isEmpty);
+      expect(parsed.rows.length, 4);
+
+      CashTxn? cashOf(int i) {
+        final r = parsed.rows[i];
+        return linkedCashTxnFor(
+          Txn(
+            accountId: 1,
+            assetId: 1,
+            type: r.type,
+            date: r.date,
+            amount: r.amount,
+            shares: r.shares,
+            price: r.price,
+            fee: r.fee,
+            note: r.note,
+          ),
+          1,
+          note: '测试',
+        );
+      }
+
+      expect(cashOf(0)!.type, CashType.reinvest, reason: '红利再投不动现金');
+      expect(cashOf(0)!.amount, 0, reason: '只留 0 元痕迹，余额不受影响');
+      expect(cashOf(1)!.type, CashType.reinvest, reason: '备注直接写「再投」也认');
+      expect(cashOf(1)!.amount, 0);
+      expect(cashOf(2)!.type, CashType.invest, reason: '普通买入照扣');
+      expect(cashOf(2)!.amount, closeTo(-2000, 1e-9));
+      expect(cashOf(3)!.type, CashType.redeem, reason: '卖出扣掉手续费入账');
+      expect(cashOf(3)!.amount, closeTo(24098.06 - 121.1, 1e-6));
     });
   });
 
