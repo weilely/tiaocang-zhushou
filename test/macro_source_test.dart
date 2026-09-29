@@ -101,8 +101,8 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 40)));
 
     test('东财能取到10年国债收益率，且落在合理区间', () async {
-      if (!await push2Available()) {
-        markTestSkipped('push2 网关当前不可用（实测会整站 502），跳过');
+      if (!await push2BondAvailable()) {
+        markTestSkipped('东财国债那一路（171.CN10Y）当前不可用，跳过');
         return;
       }
       final b = await fetchCn10y();
@@ -113,8 +113,9 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 40)));
 
     test('合成一次股债利差，各段关系自洽', () async {
-      if (!await push2Available()) {
-        markTestSkipped('push2 网关当前不可用，跳过');
+      // 这一段要同时取到中证 PE 与东财国债，两腿都得探
+      if (!await push2BondAvailable()) {
+        markTestSkipped('东财国债那一路（171.CN10Y）当前不可用，跳过');
         return;
       }
       final p = await fetchMacroPoint();
