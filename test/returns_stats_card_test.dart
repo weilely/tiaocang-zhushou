@@ -22,6 +22,9 @@ void main() {
     double dividend = 320.5,
     double cashIncome = 46.2,
     double cashAdjust = 0,
+    double feeBuy = 0,
+    double feeSell = 0,
+    double feeDividend = 0,
   }) =>
       CashFlowStatement(
         range: DateRange(DateTime(2026, 9, 1), DateTime(2026, 9, 30)),
@@ -36,6 +39,9 @@ void main() {
         dividend: dividend,
         cashIncome: cashIncome,
         cashAdjust: cashAdjust,
+        feeBuy: feeBuy,
+        feeSell: feeSell,
+        feeDividend: feeDividend,
       );
 
   Widget host(Widget child) => MaterialApp(
@@ -45,13 +51,16 @@ void main() {
       );
 
   group('资金流导图', () {
-    testWidgets('七个节点齐全，且金额保留 2 位小数、带千分位', (tester) async {
-      await tester.pumpWidget(host(CashFlowMap(s: statement())));
+    testWidgets('八个节点齐全，且金额保留 2 位小数、带千分位', (tester) async {
+      await tester.pumpWidget(host(CashFlowMap(
+        s: statement(feeBuy: 3.0, feeSell: 4.5, feeDividend: 0.6),
+      )));
 
       for (final label in [
         '期初资产',
         '投入金额',
         '赎回金额',
+        '交易费用',
         '净流入',
         '账户盈亏',
         '现金分红',
@@ -67,10 +76,15 @@ void main() {
       // 净流入 = 20000 − 5000
       expect(find.text('+¥15,000.00'), findsOneWidget);
       expect(find.text('¥320.50'), findsOneWidget, reason: '现金分红 2 位小数');
+      // 交易费用 = 3 + 4.5 + 0.6
+      expect(find.text('¥8.10'), findsOneWidget, reason: '三个桶要合起来显示');
       // 算式也要展示出来，让人一眼看出数字怎么来的
       expect(find.textContaining('充值 ¥20,000.00 − 提现 ¥5,000.00'), findsOneWidget);
-      expect(find.textContaining('期间买入含手续费'), findsOneWidget);
-      expect(find.textContaining('期间卖出净额'), findsOneWidget);
+      expect(find.textContaining('买入 ¥29,997.00 + 手续费 ¥3.00'), findsOneWidget,
+          reason: '投入金额要拆出「买入 + 手续费」（费用本来就在里面）');
+      expect(find.textContaining('卖出 ¥8,004.50 − 手续费 ¥4.50'), findsOneWidget,
+          reason: '赎回金额要拆出「卖出 − 手续费」');
+      expect(find.textContaining('买入 ¥3.00 · 卖出 ¥4.50 · 分红 ¥0.60'), findsOneWidget);
       expect(find.textContaining('已计入期末资产'), findsOneWidget);
     });
 
@@ -89,7 +103,9 @@ void main() {
       double y(String t) => tester.getTopLeft(find.text(t)).dy;
       expect(y('期初资产'), lessThan(y('投入金额')));
       expect(y('投入金额'), lessThan(y('赎回金额')));
-      expect(y('赎回金额'), lessThan(y('净流入')));
+      // 交易费用紧跟在买卖两行后面（它和那两行同源：费用就在那两个数里）
+      expect(y('赎回金额'), lessThan(y('交易费用')));
+      expect(y('交易费用'), lessThan(y('净流入')));
       expect(y('净流入'), lessThan(y('现金分红')));
       expect(y('现金分红'), lessThan(y('期末资产')));
       // 账户盈亏是主恒等式的残差，排在**期末资产之后**收尾

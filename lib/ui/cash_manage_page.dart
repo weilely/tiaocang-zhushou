@@ -212,6 +212,12 @@ class _CashManagePageState extends State<CashManagePage> {
                 Expanded(
                   child: _incomeTile(context, '累计分红', st.cashTotalDividend),
                 ),
+                Expanded(
+                  child: _incomeTile(context, '累计手续费', st.cashTotalFee,
+                      // 手续费是**花出去的钱**，不能跟着「正数=红（涨）」上色，
+                      // 否则看着像一笔收益
+                      neutral: true),
+                ),
               ],
             ),
             const SizedBox(height: 4),
@@ -226,7 +232,9 @@ class _CashManagePageState extends State<CashManagePage> {
     );
   }
 
-  Widget _incomeTile(BuildContext context, String label, double v) => Column(
+  Widget _incomeTile(BuildContext context, String label, double v,
+          {bool neutral = false}) =>
+      Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label,
@@ -236,9 +244,11 @@ class _CashManagePageState extends State<CashManagePage> {
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w600,
-                color: v > 0
-                    ? const Color(0xFFD93A3A)
-                    : (v < 0 ? const Color(0xFF1A9C5B) : null),
+                color: neutral
+                    ? null
+                    : (v > 0
+                        ? const Color(0xFFD93A3A)
+                        : (v < 0 ? const Color(0xFF1A9C5B) : null)),
               )),
         ],
       );
@@ -291,7 +301,7 @@ class _CashManagePageState extends State<CashManagePage> {
 
     return [
       for (final y in years) ...[
-        _yearHeader(context, y, byYear[y]!),
+        _yearHeader(context, st, y, byYear[y]!),
         if (_openYears.contains(y))
           for (final m in (byYear[y]!.keys.toList()..sort((a, b) => b.compareTo(a))))
             _monthBlock(context, st, y, m, byYear[y]![m]!, isAll),
@@ -299,11 +309,14 @@ class _CashManagePageState extends State<CashManagePage> {
     ];
   }
 
-  Widget _yearHeader(BuildContext context, int year, Map<int, List<CashTxn>> months) {
+  Widget _yearHeader(
+      BuildContext context, AppState st, int year, Map<int, List<CashTxn>> months) {
     final all = months.values.expand((e) => e).toList();
     final income = all.where((t) => t.isIncome).fold<double>(0, (a, t) => a + t.amount);
     final dividend =
         all.where((t) => t.type == CashType.dividend).fold<double>(0, (a, t) => a + t.amount);
+    // 手续费不在现金流水里（并进了买入扣款/卖出入账的金额），要从交易侧汇总
+    final fee = st.cashFeeInYear(year);
     final open = _openYears.contains(year);
     return InkWell(
       onTap: () => setState(() {
@@ -325,15 +338,29 @@ class _CashManagePageState extends State<CashManagePage> {
             const SizedBox(width: 8),
             Text('${all.length} 笔',
                 style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor)),
-            const Spacer(),
-            if (income > 0)
-              Text('收益 ${fmtCompact(income)}',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFFB4770A))),
-            if (dividend > 0) ...[
-              if (income > 0) const SizedBox(width: 8),
-              Text('分红 ${fmtCompact(dividend)}',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFFD93A3A))),
-            ],
+            // 三个统计改成 Wrap + Expanded：400dp 窄屏 + 字体 1.3 下
+            // 「收益 … 分红 … 费 …」一行排不下会横溢（体检用例逮到过 14px），
+            // 排不下就自己换行，不再靠 Spacer 顶
+            Expanded(
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                children: [
+                  if (income > 0)
+                    Text('收益 ${fmtCompact(income)}',
+                        style: const TextStyle(
+                            fontSize: 11, color: Color(0xFFB4770A))),
+                  if (dividend > 0)
+                    Text('分红 ${fmtCompact(dividend)}',
+                        style: const TextStyle(
+                            fontSize: 11, color: Color(0xFFD93A3A))),
+                  if (fee > 0)
+                    Text('费 ${fmtCompact(fee)}',
+                        style: TextStyle(
+                            fontSize: 11, color: Theme.of(context).hintColor)),
+                ],
+              ),
+            ),
           ],
         ),
       ),

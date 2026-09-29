@@ -7,10 +7,16 @@ import 'common.dart';
 /// 资金流「直线思维导图」
 ///
 /// 竖直主干 + 节点挂在右侧，自上而下：
-/// `期初资产 → 投入金额 / 赎回金额 → 净流入或净流出 → 账户盈亏 → 现金分红 → 期末资产`
+/// `期初资产 → 投入金额 / 赎回金额 / 交易费用 → 净流入或净流出 → 账户盈亏
+/// → 现金分红 → 期末资产`
 ///
 /// 每个节点下面都写清**这个数是怎么来的**（充值−提现 / 买入含费 / 期末−期初−净流入），
 /// 这样一眼看到的是各项统计的**总量与来源**，而不是一串流水。
+///
+/// **「交易费用」为什么挂在分支上、不进主干**：手续费已经含在「投入金额」
+/// （`买入金额 + 手续费`）与「赎回金额」（`卖出金额 − 手续费`）里，再当成一笔钱
+/// 参与主链加减会重复扣一次、让主恒等式凭空失败（用户 2026-09-29 要"并入主线"，
+/// 做法是让它显形）。
 class CashFlowMap extends StatelessWidget {
   final CashFlowStatement s;
 
@@ -37,17 +43,30 @@ class CashFlowMap extends StatelessWidget {
         ),
 
         // 投入 / 赎回（期间交易活动，不参与主链加减）
+        // 小字把**手续费**拆出来：它本来就在这两个数里（买入含费、卖出扣费），
+        // 用户 2026-09-29 要「看到交易产生的费用」，所以让它显形而不是另算一遍
         _branchNode(
           context,
           label: '投入金额',
           value: fmtYuan(s.investAmount),
-          formula: '期间买入含手续费',
+          formula: '买入 ${fmtYuan(s.investAmount - s.feeBuy)}'
+              ' + 手续费 ${fmtYuan(s.feeBuy)}',
         ),
         _branchNode(
           context,
           label: '赎回金额',
           value: fmtYuan(s.redeemAmount),
-          formula: '期间卖出净额',
+          formula: '卖出 ${fmtYuan(s.redeemAmount + s.feeSell)}'
+              ' − 手续费 ${fmtYuan(s.feeSell)}',
+        ),
+        // 费用合计：单独一个数字，回答「这段时间光是手续费花了多少」
+        _branchNode(
+          context,
+          label: '交易费用',
+          value: fmtYuan(s.tradeFee),
+          formula: '买入 ${fmtYuan(s.feeBuy)}'
+              ' · 卖出 ${fmtYuan(s.feeSell)}'
+              ' · 分红 ${fmtYuan(s.feeDividend)}',
         ),
 
         // 净流入 / 净流出

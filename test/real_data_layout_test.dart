@@ -133,6 +133,18 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// 单张卡片（如首页「收益统计」卡）：真机上它在 dashboard 的滚动列表里，
+  /// 所以这里也套一层滚动容器 —— 否则卡片比一屏高时会报一个真机上不存在的
+  /// 纵向溢出（资金流加了「交易费用」节点后就是这么被误报的）。
+  Future<void> pumpCard(WidgetTester tester, Widget card,
+      {AppState? state}) async {
+    await pumpPage(
+      tester,
+      Scaffold(body: SingleChildScrollView(child: card)),
+      state: state,
+    );
+  }
+
   group('真数据布局体检（400dp + 字体 1.3，数据来自他的备份）', () {
     testWidgets('持仓页（${back.assets.length} 只标的的真实名字与金额）不溢出', (tester) async {
       await pumpPage(tester, const HoldingsPage());
@@ -210,6 +222,34 @@ void main() {
           .fold<double>(0, (a, c) => a + c.amount);
       expect(st.cashTotalIncome, closeTo(income, 1e-6));
       expect(st.cashTotalDividend, closeTo(dividend, 1e-6));
+      // 用户 2026-09-29：「在现金管理页面也统计手续费，像分红一样」
+      final fee = back.txns
+          .where((t) => !t.isCashless)
+          .fold<double>(0, (a, t) => a + t.fee);
+      expect(st.cashTotalFee, closeTo(fee, 1e-6));
+      await tester.scrollUntilVisible(find.text('累计手续费'), 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.pumpAndSettle();
+      expect(find.text('累计手续费'), findsOneWidget);
+      expect(find.text(fmtMoneySigned(fee)), findsWidgets,
+          reason: '现金页要看到手续费的数');
+    });
+
+    // 用户 2026-09-29：「我想把所有交易产生的各种费用并入资金流主线」
+    testWidgets('资金流：交易费用显形（买入含费 / 卖出扣费 / 费用合计）', (tester) async {
+      final st = makeState()..setStatsView(StatsView.flow);
+      await pumpCard(tester, const ReturnsStatsCard(), state: st);
+      expect(tester.takeException(), isNull);
+
+      final s = st.flowStatement;
+      expect(s.tradeFee, closeTo(s.feeBuy + s.feeSell + s.feeDividend, 1e-9));
+      await tester.scrollUntilVisible(find.text('交易费用'), 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.pumpAndSettle();
+      expect(find.text('交易费用'), findsOneWidget);
+      expect(find.text(fmtYuan(s.tradeFee)), findsWidgets);
+      // 费用已经含在投入/赎回里：主恒等式仍然是 0 残差（没被减第二遍）
+      expect(s.identityGap, closeTo(0, 1e-9));
     });
 
     testWidgets('编辑一条真实记录：顶部只有它自己那一个操作行为，保存置灰', (tester) async {
@@ -255,7 +295,7 @@ void main() {
     // 用户 2026-09-29：「首页收益统计的资金流最好显示区间日期」
     testWidgets('收益统计 → 资金流：把区间日期写出来', (tester) async {
       final st = makeState()..setStatsView(StatsView.flow);
-      await pumpPage(tester, const ReturnsStatsCard(), state: st);
+      await pumpCard(tester, const ReturnsStatsCard(), state: st);
       expect(tester.takeException(), isNull);
 
       final r = st.flowRange;

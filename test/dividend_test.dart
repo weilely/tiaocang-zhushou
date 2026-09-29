@@ -68,6 +68,9 @@ void main() {
       double redeem,
       double dividend,
       double redeemLedger,
+      double feeBuy,
+      double feeSell,
+      double feeDividend,
     }) totals(List<Txn> list) =>
         flowTotals(txns: list, start: day, end: day);
 

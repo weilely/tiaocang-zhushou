@@ -74,6 +74,15 @@ class CashFlowStatement {
   /// 期末持仓里缺历史净值、退回成本单价估值的标的代码
   final List<String> endMissingNav;
 
+  /// 期间**买入**的手续费合计（已含在 [investAmount] 里，不参加主链加减）
+  final double feeBuy;
+
+  /// 期间**卖出**的手续费合计（已经从 [redeemAmount] 里扣掉）
+  final double feeSell;
+
+  /// 期间**分红**的渠道扣费合计（已经从 [dividend] 里扣掉）
+  final double feeDividend;
+
   const CashFlowStatement({
     required this.range,
     required this.beginHolding,
@@ -92,7 +101,18 @@ class CashFlowStatement {
     this.redeemLedger = 0,
     this.beginMissingNav = const [],
     this.endMissingNav = const [],
+    this.feeBuy = 0,
+    this.feeSell = 0,
+    this.feeDividend = 0,
   });
+
+  /// 期间交易费用合计（买入 + 卖出 + 分红的渠道费）
+  ///
+  /// **只是一个显示用的数**：它已经含在 [investAmount] / [redeemAmount] /
+  /// [dividend] 里了，所以**绝不能再作为一笔钱参加主恒等式的加减**
+  /// （再减一次 = 期末资产凭空少这么多，用户 2026-09-29 要"并入主线"，
+  /// 做法是让它显形、不是再算一遍）。
+  double get tradeFee => feeBuy + feeSell + feeDividend;
 
   /// 期间的买入没有在现金账本里扣款 → 现金流水不完整
   ///
@@ -363,5 +383,35 @@ CashFlowStatement buildCashFlowStatement({
     redeemLedger: flows.redeemLedger,
     beginMissingNav: beginSnap.missingNav,
     endMissingNav: endSnap.missingNav,
+    feeBuy: flows.feeBuy,
+    feeSell: flows.feeSell,
+    feeDividend: flows.feeDividend,
   );
+}
+
+/// 交易手续费合计（**不是现金流水**，只是 `txns.fee` 的汇总）
+///
+/// 为什么不能像分红那样从现金账本统计：手续费在 `cash_txns` 里**没有自己的行**
+/// —— 它被并进了买入扣款（`−(金额+费)`）与卖出入账（`金额−费`）的金额里
+/// （用户 2026-09-29 实测：账本里只有 invest/redeem/deposit/income 四种行）。
+/// 所以「现金管理页也统计手续费」要从交易侧汇总，口径与资金流页同一条：
+/// 同一区间、按账户过滤、**不做超卖折算**（真花掉的钱）。
+double tradeFeeTotal(
+  List<Txn> txns, {
+  int? accountId,
+  DateTime? start,
+  DateTime? end,
+}) {
+  final lo = start == null ? null : DateTime(start.year, start.month, start.day);
+  final hi = end == null ? null : DateTime(end.year, end.month, end.day);
+  var sum = 0.0;
+  for (final t in txns) {
+    if (accountId != null && t.accountId != accountId) continue;
+    if (t.isCashless) continue;
+    final d = DateTime(t.date.year, t.date.month, t.date.day);
+    if (lo != null && d.isBefore(lo)) continue;
+    if (hi != null && d.isAfter(hi)) continue;
+    sum += t.fee;
+  }
+  return sum;
 }

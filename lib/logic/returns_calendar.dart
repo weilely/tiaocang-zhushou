@@ -407,8 +407,21 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
 ///
 /// 额外返回 [redeemLedger]：**不做超卖折算**的卖出净额，专供与现金账本对账
 /// （现金行是全额，用折算过的数去比会误报"现金流水不完整"）。
-({double invest, double redeem, double dividend, double redeemLedger})
-    flowTotals({
+///
+/// 另外返回**手续费三个桶** [feeBuy] / [feeSell] / [feeDividend]（合计即
+/// `feeBuy + feeSell + feeDividend`）：手续费本来就已经含在 [invest]
+/// （`金额 + 费`）与 [redeem]（`金额 − 费`）里 —— 这三个桶只是把**已经含进去的
+/// 那部分**单独露出来给界面显示，**不是**另一笔要参与加减的钱
+/// （用户 2026-09-29：「把所有交易产生的各种费用并入资金流主线」）。
+/// 口径与 [invest]/[redeem] 完全一致：同一区间、同一条 `isCashless` 过滤；
+/// 与它们不同的是手续费**不做超卖折算**（钱是真花出去的，折算会少算）。
+({double invest,
+  double redeem,
+  double dividend,
+  double redeemLedger,
+  double feeBuy,
+  double feeSell,
+  double feeDividend}) flowTotals({
   required List<Txn> txns,
   int? accountId,
   required DateTime start,
@@ -428,6 +441,9 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
   var redeem = 0.0;
   var dividend = 0.0;
   var redeemLedger = 0.0;
+  var feeBuy = 0.0;
+  var feeSell = 0.0;
+  var feeDividend = 0.0;
   for (final list in grouped.values) {
     list.sort((a, b) => a.date.compareTo(b.date));
     var shares = 0.0;
@@ -438,7 +454,10 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
         case TxnType.buy:
           // 不动现金的买入（成本调整 / 红利再投）不计入「投入金额」，
           // 否则会和现金账本对不上、误报「买入没有对应的现金扣款」
-          if (inWindow && !t.isCashless) invest += t.amount + t.fee;
+          if (inWindow && !t.isCashless) {
+            invest += t.amount + t.fee;
+            feeBuy += t.fee;
+          }
           shares += t.shares;
           break;
         case TxnType.sell:
@@ -448,11 +467,18 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
             redeem += (t.amount - t.fee) * ratio;
             // 联动现金行记的是全额 amount−fee，对账要用这个
             redeemLedger += t.amount - t.fee;
+            // 手续费不折算：卖多少份额就是多少笔费用，全额记
+            feeSell += t.fee;
           }
           shares -= sold;
           break;
         case TxnType.dividend:
-          if (inWindow) dividend += t.amount;
+          if (inWindow) {
+            // 分红那格手续费是渠道扣费：现金账本记的是 `金额 − 费`
+            // （`linkedCashTxnFor`），节点口径跟着它走，两边相加才对得上
+            dividend += t.amount - t.fee;
+            feeDividend += t.fee;
+          }
           break;
       }
     }
@@ -462,5 +488,8 @@ DailyPoint? lastPoint(List<DailyPoint> series) =>
     redeem: redeem,
     dividend: dividend,
     redeemLedger: redeemLedger,
+    feeBuy: feeBuy,
+    feeSell: feeSell,
+    feeDividend: feeDividend,
   );
 }

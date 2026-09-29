@@ -710,4 +710,139 @@ void main() {
       expect(s.cashIncome, closeTo(0, 1e-9), reason: '分红不是现金生息');
     });
   });
+
+  // 用户 2026-09-29：「我想把所有交易产生的各种费用并入资金流主线」
+  group('交易费用：已经在投入/赎回里，显形但不参与加减', () {
+    Txn t(TxnType type, double amount, double fee,
+            {double shares = 0, int account = 1, DateTime? date, String? note}) =>
+        Txn(
+          accountId: account,
+          assetId: 1,
+          type: type,
+          date: date ?? DateTime(2026, 9, 10),
+          amount: amount,
+          shares: shares,
+          fee: fee,
+          note: note ?? '',
+        );
+
+    test('三个桶各归各位：买入 / 卖出 / 分红', () {
+      final s = buildCashFlowStatement(
+        assets: const [],
+        txns: [
+          t(TxnType.buy, 1000, 1.5, shares: 100),
+          t(TxnType.sell, 300, 2.5, shares: 30),
+          t(TxnType.dividend, 50, 0.6),
+        ],
+        cashTxns: const [],
+        range: DateRange(DateTime(2026, 9, 1), DateTime(2026, 9, 30)),
+      );
+      expect(s.feeBuy, closeTo(1.5, 1e-9));
+      expect(s.feeSell, closeTo(2.5, 1e-9));
+      expect(s.feeDividend, closeTo(0.6, 1e-9));
+      expect(s.tradeFee, closeTo(4.6, 1e-9));
+      // 买入含费、卖出扣费：费用已经从这两个数里进出过一次
+      expect(s.investAmount, closeTo(1001.5, 1e-9));
+      expect(s.redeemAmount, closeTo(297.5, 1e-9));
+      // 分红节点也扣了渠道费（与现金账本 `金额 − 费` 对齐）
+      expect(s.dividend, closeTo(49.4, 1e-9));
+    });
+
+    test('主恒等式不受影响：费用显形 ≠ 再减一次', () {
+      final day = DateTime(2026, 9, 10);
+      final s = buildCashFlowStatement(
+        assets: const [],
+        txns: [
+          t(TxnType.buy, 1000, 1.5, shares: 100, date: DateTime(2026, 8, 1)),
+          t(TxnType.sell, 500, 3.0, shares: 50, date: day),
+        ],
+        cashTxns: [
+          CashTxn(
+              accountId: 1,
+              type: CashType.deposit,
+              amount: 5000,
+              date: DateTime(2026, 8, 1)),
+          CashTxn(
+              accountId: 1,
+              type: CashType.invest,
+              amount: -1001.5,
+              date: DateTime(2026, 8, 1)),
+          CashTxn(
+              accountId: 1, type: CashType.redeem, amount: 497, date: day),
+        ],
+        range: DateRange(DateTime(2026, 9, 1), DateTime(2026, 9, 30)),
+      );
+      expect(s.tradeFee, closeTo(3.0, 1e-9));
+      expect(s.identityGap, closeTo(0, 1e-9));
+      expect(s.pnlCrossCheck, closeTo(s.pnl, 1e-9));
+    });
+
+    test('恒等式：投入金额 = 买入金额 + 买入费（界面小字就是按这个拆的）', () {
+      final s = buildCashFlowStatement(
+        assets: const [],
+        txns: [
+          t(TxnType.buy, 1000, 1.5, shares: 100),
+          t(TxnType.buy, 2000, 0, shares: 200),
+        ],
+        cashTxns: const [],
+        range: DateRange(DateTime(2026, 9, 1), DateTime(2026, 9, 30)),
+      );
+      const buyAmount = 3000.0;
+      expect(s.investAmount - s.feeBuy, closeTo(buyAmount, 1e-9));
+    });
+
+    test('不动现金的流水（成本调整/红利再投）既不计投入也不计费', () {
+      final s = buildCashFlowStatement(
+        assets: const [],
+        txns: [
+          t(TxnType.buy, 45, 9.9, shares: 0, note: Txn.costAdjustNote),
+          t(TxnType.buy, 100, 8.8, shares: 30, note: '${Txn.reinvestNote} 2026-09-10'),
+        ],
+        cashTxns: const [],
+        range: DateRange(DateTime(2026, 9, 1), DateTime(2026, 9, 30)),
+      );
+      expect(s.tradeFee, closeTo(0, 1e-9));
+      expect(s.investAmount, closeTo(0, 1e-9));
+    });
+
+    test('区间边界：区间外的费用不算', () {
+      final s = buildCashFlowStatement(
+        assets: const [],
+        txns: [
+          t(TxnType.sell, 100, 1.0, shares: 10, date: DateTime(2026, 8, 31)),
+          t(TxnType.sell, 100, 2.0, shares: 10, date: DateTime(2026, 9, 1)),
+        ],
+        cashTxns: const [],
+        range: DateRange(DateTime(2026, 9, 1), DateTime(2026, 9, 30)),
+      );
+      expect(s.feeSell, closeTo(2.0, 1e-9));
+    });
+
+    test('tradeFeeTotal（现金管理页用）：按账户、按区间、排除不动现金', () {
+      final list = [
+        t(TxnType.buy, 1000, 1.5, shares: 100, account: 1),
+        t(TxnType.sell, 300, 2.5, shares: 30, account: 2),
+        t(TxnType.buy, 45, 9.9, shares: 0, account: 1, note: Txn.costAdjustNote),
+        t(TxnType.buy, 500, 4.0,
+            shares: 50, account: 1, date: DateTime(2026, 3, 3)),
+      ];
+      expect(tradeFeeTotal(list), closeTo(8.0, 1e-9));
+      expect(tradeFeeTotal(list, accountId: 1), closeTo(5.5, 1e-9));
+      expect(tradeFeeTotal(list, accountId: 2), closeTo(2.5, 1e-9));
+      expect(
+        tradeFeeTotal(list,
+            start: DateTime(2026, 9, 1), end: DateTime(2026, 9, 30)),
+        closeTo(4.0, 1e-9),
+        reason: '3 月那笔被区间剔掉，账户 2 那笔还在',
+      );
+      expect(
+        tradeFeeTotal(list,
+            accountId: 1,
+            start: DateTime(2026, 9, 1),
+            end: DateTime(2026, 9, 30)),
+        closeTo(1.5, 1e-9),
+        reason: '账户 + 区间两个过滤一起生效',
+      );
+    });
+  });
 }

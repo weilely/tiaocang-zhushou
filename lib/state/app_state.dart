@@ -2885,6 +2885,23 @@ class AppState extends ChangeNotifier {
   double get cashTotalDividend =>
       cashDividendTotal(cashTxns, accountId: accountFilter);
 
+  /// **累计交易手续费**（买入 + 卖出 + 分红的渠道费），按当前账户过滤。
+  ///
+  /// 数据取自 `txns.fee` 而**不是**现金账本：手续费在 `cash_txns` 里没有自己的行
+  /// （已并进买入扣款与卖出入账的金额里），所以它只是这一页的一个统计数字，
+  /// 点不出「费用流水」（用户 2026-09-29：「在现金管理页面也统计手续费，
+  /// 像分红一样」）。
+  double get cashTotalFee =>
+      tradeFeeTotal(txns, accountId: accountFilter);
+
+  /// 某一年的交易手续费合计（现金页按年折叠的头部用），口径同上
+  double cashFeeInYear(int year) => tradeFeeTotal(
+        txns,
+        accountId: accountFilter,
+        start: DateTime(year, 1, 1),
+        end: DateTime(year, 12, 31),
+      );
+
   // ============================================================
   // 现金流水 CSV / 交易 CSV
   // ============================================================
