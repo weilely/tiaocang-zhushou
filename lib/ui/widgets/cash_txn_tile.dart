@@ -3,13 +3,20 @@ import 'package:flutter/material.dart';
 import '../../core/format.dart';
 import '../../data/models.dart';
 import '../../data/nav_models.dart';
+import '../../logic/cash_flow.dart';
 
 /// 现金流水的一行
+///
+/// **抬头口径（用户 2026-09-29）**：只有 `充值 / 提现 / 收益 / 买入 / 卖出 /
+/// 分红 / 定投 / 再投` 这几种。其中「定投」是买入里带定投标记的那些、
+/// 「再投」是红利再投的那条 **0 元**行 —— 判定全在 `cashRowKind()` 一处，
+/// 列表抬头与筛选条共用，免得两边各认一套。
 ///
 /// **联动生成的那条不允许在这里删除**：它是买入/卖出/分红/定投的影子，
 /// 单独删掉会让现金余额与交易对不上。
 /// 这里做成「结构与行为上的不可能」——[onDelete] 为 null 时**根本不构造**
 /// `Dismissible`，而不是构造了再判断，避免以后有人改错条件又把删入口放出来。
+/// （要改要删就去改那笔交易：[onTap] 会把他领过去。）
 class CashTxnTile extends StatelessWidget {
   final CashTxn txn;
 
@@ -28,6 +35,10 @@ class CashTxnTile extends StatelessWidget {
   /// 左滑删除的回调；**联动流水传 null**，表示不可删
   final VoidCallback? onDelete;
 
+  /// 点击这一行的回调：手记的（[onDelete] 非空）进编辑页；
+  /// 联动的给一句「这条是自动生成的，去改那笔交易」。
+  final VoidCallback? onTap;
+
   const CashTxnTile({
     super.key,
     required this.txn,
@@ -35,31 +46,36 @@ class CashTxnTile extends StatelessWidget {
     this.shortName = '',
     this.accountName = '',
     this.onDelete,
+    this.onTap,
   });
 
   /// 是否由交易联动生成
   bool get isAuto => txn.srcTxnId != null;
 
+  /// 这一行的种类：买入 / 卖出 / 分红 / **定投** / 再投 / 充值 / 提现 / 收益
+  String get kind => cashRowKind(txn, linkedTxn);
+
   /// 定投联动生成的买入：现金流水里标题直接写「定投」，与交易记录里的标签一致。
   ///
   /// 判断依据优先用**影子交易的备注**：现金行自己的备注常常没有「定投」
   /// （老数据尤其如此），只认它的话定投会显示成普通买入。
-  bool get isDca =>
-      txn.type == CashType.invest &&
-      (linkedTxn?.note ?? txn.note).contains('定投');
+  bool get isDca => kind == 'dca';
+
+  /// 红利再投：金额恒为 0（份额照加、钱没进出）
+  bool get isReinvest => kind == CashType.reinvest;
 
   bool get deletable => onDelete != null && !isAuto;
 
-  /// 标题：定投走「定投」，其余用类型名
-  String get _title => isDca ? '定投' : txn.typeLabel;
+  /// 标题就是种类名
+  String get _title => cashKindLabel(kind);
 
   /// 联动流水备注里的动作词。
   ///
-  /// 注意：备注里的动作词来自**交易**类型（`TxnType.label`：买入 / 卖出 / 分红），
-  /// 而本行的标题用的是**现金**类型（`CashType.label`：买入/卖出/分红），
-  /// 两者字面不同 —— 早先拿 `txn.typeLabel` 去比永远匹配不上，
-  /// 结果「价值100 · 买入」里的动作词滤不掉。
-  static const Set<String> _actionWords = {'买入', '卖出', '分红', '定投'};
+  /// 注意：备注里的动作词来自**交易**类型（`TxnType.label`：买入 / 卖出 / 分红）
+  /// 或现金备注的动作词（买入/卖出/分红/定投/再投），
+  /// 而本行的标题用的是现金种类名，两者字面不同 —— 早先拿 `txn.typeLabel`
+  /// 去比永远匹配不上，结果「价值100 · 买入」里的动作词滤不掉。
+  static const Set<String> _actionWords = {'买入', '卖出', '分红', '定投', '再投'};
 
   /// 副标题里的标的。
   ///
@@ -82,29 +98,42 @@ class CashTxnTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final reinvest = isReinvest;
     final positive = txn.amount >= 0;
-    final color = txn.isIncome
-        ? const Color(0xFFB4770A)
-        : (positive ? const Color(0xFFD93A3A) : const Color(0xFF1A9C5B));
+    final color = reinvest
+        ? theme.hintColor
+        : (txn.isIncome
+            ? const Color(0xFFB4770A)
+            : (positive ? const Color(0xFFD93A3A) : const Color(0xFF1A9C5B)));
     final note = _note;
+
+    // 再投那行金额是 0（钱没进出），但「这笔分红有多少折成了份额」是这行
+    // 唯一有信息量的东西 —— 放进副标题，别让它看着像一行 0 元的空记录。
+    final folded = reinvest ? (linkedTxn?.amount ?? 0) : 0.0;
+    final tail = folded > 0 ? '（${fmtMoney(folded)} 已折份额）' : '';
 
     final tile = ListTile(
       dense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+      onTap: onTap,
       title: Text(_title,
           style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
       subtitle: Text(
         // 日期只留 mm-dd：现金流水一年内看得最多的是最近的，
         // 年份只在翻到往年时才有意义，天天显示反而挤掉备注
         '${fmtMonthDay(txn.date)}${accountName.isEmpty ? '' : ' · $accountName'}'
-        '${note.isEmpty ? '' : ' · $note'}',
+        '${note.isEmpty ? '' : ' · $note'}$tail',
         style: TextStyle(fontSize: 11, color: theme.hintColor),
       ),
-      trailing: Text(
-        '${positive ? '+' : '-'}${fmtMoney(txn.amount.abs())}',
-        style: TextStyle(
-            fontSize: 14, fontWeight: FontWeight.w600, color: color),
-      ),
+      trailing: reinvest
+          ? Text('¥0.00',
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600, color: theme.hintColor))
+          : Text(
+              '${positive ? '+' : '-'}${fmtMoney(txn.amount.abs())}',
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600, color: color),
+            ),
     );
 
     // 联动流水：直接返回普通行，连 Dismissible 都不造

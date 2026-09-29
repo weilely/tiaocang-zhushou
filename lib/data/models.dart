@@ -178,15 +178,22 @@ class Txn {
   /// 红利再投流水的备注前缀（自动分红把红利折成份额时用）
   static const String reinvestNote = '红利再投';
 
+  /// 是不是「红利再投」：分红直接折成份额，钱没经过现金
+  ///
+  /// **两种备注都要认**：App 自己写的是 `红利再投 <日期>`，而对账单复刻的 CSV
+  /// 里写的是 `再投`。以前只认前者，CSV 导入这类买入会照样扣现金（用户
+  /// 2026-09-29 查出来的错账：948 行里 23 行、合计 1,215.12）。
+  bool get isReinvest =>
+      note.startsWith(reinvestNote) || note.startsWith('再投');
+
   /// 这笔交易**不产生现金流水**（只动成本或份额，钱没进出）
   ///
   /// - `成本调整`：编辑页改单位成本，差值是账面调整、不是真花钱
-  /// - `红利再投 xxx`：分红直接折成份额，没经过现金
+  /// - `红利再投 xxx` / `再投`：分红直接折成份额，没经过现金
   ///
   /// 判现金流缺口（`investGap`）时必须把它们排除，否则会误报
   /// 「买入没有对应的现金扣款」。
-  bool get isCashless =>
-      note == costAdjustNote || note.startsWith(reinvestNote);
+  bool get isCashless => note == costAdjustNote || isReinvest;
 
   Map<String, Object?> toMap() => {
         'id': id,

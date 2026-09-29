@@ -229,28 +229,6 @@ extension NavRepo on AppDatabase {
     await d.delete('cash_txns', where: 'account_id = ?', whereArgs: [accountId]);
   }
 
-  /// 按账户的 [当月收益, 累计收益]
-  Future<Map<int, List<double>>> cashIncomeByAccount() async {
-    final d = await database;
-    final now = DateTime.now();
-    final monthStart =
-        DateTime(now.year, now.month, 1).millisecondsSinceEpoch;
-    final rows = await d.rawQuery(
-      "SELECT account_id AS a, "
-      "SUM(CASE WHEN date >= ? THEN amount ELSE 0 END) AS m, "
-      "SUM(amount) AS t "
-      "FROM cash_txns WHERE type = ? GROUP BY account_id",
-      [monthStart, CashType.income],
-    );
-    return {
-      for (final r in rows)
-        (r['a'] as num).toInt(): [
-          (r['m'] as num?)?.toDouble() ?? 0,
-          (r['t'] as num?)?.toDouble() ?? 0,
-        ],
-    };
-  }
-
   /// 删除某笔交易联动生成的现金流水（编辑/删除交易时用）
   Future<void> deleteCashBySrcTxn(int txnId) async {
     final d = await database;

@@ -160,11 +160,31 @@ class CashFlowStatement {
 /// 分红那一格手续费是"渠道扣费之类"（见记一笔页面），以前这里把它漏掉了，
 /// 与真正写库的 `_linkCashFor`（它按 `金额 − 费` 写）口径不一致 —— 已对齐。
 ///
-/// 金额为 0 时返回 `null`（不写一条没有意义的流水）。
+/// **不动现金的流水**（`Txn.isCashless`）：
+/// - 「红利再投 / 再投」→ 回一条**金额 0 的 `reinvest` 行**（用户 2026-09-29 选的），
+///   份额照加、余额不变，但流水里看得见这笔分红去哪了；
+/// - 「成本调整」→ 回 `null`（纯账面调整）。
 ///
-/// **所有产生交易的路径都要用它**（手工录入、定投补记、CSV 导入），
-/// 否则那笔交易的钱就不会体现在现金余额里。
-CashTxn? linkedCashTxnFor(Txn t, int txnId) {
+/// 金额为 0 时返回 `null`（不写一条没有意义的流水）—— 唯一的例外是「再投」：
+/// 它本来就是 0 元行（金额不算，留着是为了让流水说得清这笔分红去哪了）。
+///
+/// **所有产生交易的路径都要用它**（手工录入、定投补记、CSV 导入、重建），
+/// 否则那笔交易的钱就不会体现在现金余额里 —— 反过来，谁绕开它自己拼一条
+/// 现金流水，谁就会把上面这些口径再写错一遍（CSV 导入漏判 `isCashless`
+/// 就是这么来的）。
+CashTxn? linkedCashTxnFor(Txn t, int? txnId, {String? note}) {
+  final n = note ?? '来自${t.type.label}';
+  if (t.isCashless) {
+    if (!t.isReinvest) return null; // 成本调整：纯账面，不写现金
+    return CashTxn(
+      accountId: t.accountId,
+      type: CashType.reinvest,
+      amount: 0,
+      date: t.date,
+      note: n,
+      srcTxnId: txnId,
+    );
+  }
   final (type, amount) = switch (t.type) {
     TxnType.buy => (CashType.invest, -(t.amount + t.fee)),
     TxnType.sell => (CashType.redeem, t.amount - t.fee),
@@ -176,9 +196,56 @@ CashTxn? linkedCashTxnFor(Txn t, int txnId) {
     type: type,
     amount: amount,
     date: t.date,
-    note: '来自${t.type.label}',
+    note: n,
     srcTxnId: txnId,
   );
+}
+
+/// 现金流水行的**种类**：列表抬头与筛选共用这一处判定。
+///
+/// 只有「定投」是算出来的：它是买入里带定投标记的那些（看影子交易的备注，
+/// 老数据的现金行备注常常没有「定投」）。其余一律就是存库的 `type`。
+String cashRowKind(CashTxn c, Txn? linked) {
+  if (c.type == CashType.invest && (linked?.note ?? c.note).contains('定投')) {
+    return 'dca';
+  }
+  return c.type;
+}
+
+/// 种类的显示名（「全部」在筛选条里用，别处用不到）
+String cashKindLabel(String kind) => switch (kind) {
+      'all' => '全部',
+      'dca' => '定投',
+      _ => CashType.label(kind),
+    };
+
+/// 现金**收益**：账户 → [当月, 累计]
+///
+/// **只算 `income`**（货币基金/国债逆回购的利息）。
+/// 现金分红是「分红入账」、不是收益 —— 用户 2026-09-29 的原话：
+/// 「现金分红应该记为分红入账」。以前这里把 `dividend` 也算进收益，
+/// 同一页的年份抬头却只算 `income`，一页里两个「收益」口径都不一样。
+Map<int, List<double>> cashIncomeOf(List<CashTxn> list, {DateTime? now}) {
+  final at = now ?? DateTime.now();
+  final out = <int, List<double>>{};
+  for (final t in list) {
+    if (t.type != CashType.income) continue;
+    final v = out.putIfAbsent(t.accountId, () => [0, 0]);
+    v[1] += t.amount;
+    if (t.date.year == at.year && t.date.month == at.month) v[0] += t.amount;
+  }
+  return out;
+}
+
+/// 现金分红合计（只算 `dividend`，不含「再投」那条 0 元行）
+double cashDividendTotal(List<CashTxn> list, {int? accountId}) {
+  var sum = 0.0;
+  for (final t in list) {
+    if (t.type != CashType.dividend) continue;
+    if (accountId != null && t.accountId != accountId) continue;
+    sum += t.amount;
+  }
+  return sum;
 }
 
 /// 构建资金流清单
@@ -243,6 +310,15 @@ CashFlowStatement buildCashFlowStatement({
         cashInvest += c.amount.abs();
       case CashType.redeem:
         cashRedeem += c.amount;
+      case CashType.dividend:
+        // 现金分红**不并进 `cashIncome`**（那只算货币基金/逆回购的利息，
+        // 用户 2026-09-29 定），也**不并进 `dividend`** —— 那个字段取的是
+        // 交易侧（`flowTotals`），并进来会算两遍。分红已经含在下面的
+        // `endCash` 里，而余额是恒等式①的一部分。
+        break;
+      case CashType.reinvest:
+        // 红利再投金额恒为 0：只在流水里留个痕迹，余额与统计都不受影响。
+        break;
     }
     endCash += c.amount;
   }

@@ -97,11 +97,16 @@ void main() {
       expect(totals([t, sold]).redeem, closeTo(300, 1e-9));
     });
 
-    test('isCashless 只认这两种备注', () {
+    test('isCashless 认这三种备注（成本调整 + 两种「再投」写法）', () {
       expect(buy(note: '').isCashless, isFalse);
       expect(buy(note: '定投').isCashless, isFalse);
       expect(buy(note: Txn.costAdjustNote).isCashless, isTrue);
       expect(buy(note: '${Txn.reinvestNote} 2026-06-30').isCashless, isTrue);
+      // 对账单复刻的 CSV 里写的是「再投」——以前只认「红利再投」，
+      // 这类买入导入时会被当成普通买入扣一笔现金（用户 2026-09-29 查出来的错账）
+      expect(buy(note: '再投').isCashless, isTrue);
+      expect(buy(note: '再投').isReinvest, isTrue);
+      expect(buy(note: '定投').isReinvest, isFalse);
     });
   });
 

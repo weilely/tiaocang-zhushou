@@ -561,4 +561,153 @@ void main() {
       ).netCash, closeTo(2997.5, 1e-9));
     });
   });
+
+  // 用户 2026-09-29 查出来的错账：对账单复刻的 CSV 里，「红利再投 / 再投」的买入
+  // 导入时**照样扣了现金**（948 行里 23 行、合计 1,215.12），与 App 内部
+  // 「再投不动现金」的口径打架。根因是 `_linkCashFor` 自己抄了一份实现、
+  // 没判 `isCashless`；现在只有 `linkedCashTxnFor` 一处口径，这里把它守死。
+  group('不动现金的流水（红利再投 / 再投 / 成本调整）', () {
+    Txn buy({String note = '', double amount = 362.57, double shares = 30}) =>
+        Txn(
+          accountId: 7,
+          assetId: 3,
+          type: TxnType.buy,
+          date: DateTime(2026, 5, 18),
+          amount: amount,
+          shares: shares,
+          price: 12.09,
+          note: note,
+        );
+
+    test('「红利再投」：不扣现金，改记一条金额 0 的「再投」行', () {
+      final c = linkedCashTxnFor(buy(note: '红利再投 2026-05-18'), 42)!;
+      expect(c.type, CashType.reinvest);
+      expect(c.amount, 0, reason: '钱没进出：余额不能被它影响');
+      expect(c.srcTxnId, 42, reason: '仍然是那笔交易的影子，删交易要一起走');
+      expect(c.note, '来自买入');
+    });
+
+    test('备注直接写「再投」（对账单复刻的写法）走同一口径', () {
+      final c = linkedCashTxnFor(buy(note: '再投'), 42)!;
+      expect(c.type, CashType.reinvest);
+      expect(c.amount, 0);
+    });
+
+    test('成本调整：一条现金流水都不写', () {
+      expect(linkedCashTxnFor(buy(note: Txn.costAdjustNote), 42), isNull);
+    });
+
+    test('普通买入照旧扣款（别把 0 元行修成所有买入都不扣钱）', () {
+      final c = linkedCashTxnFor(buy(note: '定投'), 42)!;
+      expect(c.type, CashType.invest);
+      expect(c.amount, closeTo(-362.57, 1e-9));
+    });
+
+    test('抬头/筛选用的种类：定投是算出来的、再投是存库类型', () {
+      final dca = CashTxn(
+          accountId: 1,
+          type: CashType.invest,
+          amount: -500,
+          date: DateTime(2026, 9, 1),
+          note: '来自买入',
+          srcTxnId: 9);
+      final plain = CashTxn(
+          accountId: 1,
+          type: CashType.invest,
+          amount: -500,
+          date: DateTime(2026, 9, 1),
+          note: '来自买入',
+          srcTxnId: 9);
+      expect(cashRowKind(dca, buy(note: '定投')), 'dca');
+      expect(cashRowKind(plain, buy(note: '')), CashType.invest);
+      expect(cashRowKind(
+          CashTxn(accountId: 1, type: CashType.reinvest, amount: 0, date: DateTime(2026, 9, 1)),
+          null), CashType.reinvest);
+      expect(cashKindLabel('dca'), '定投');
+      expect(cashKindLabel(CashType.reinvest), '再投');
+      expect(cashKindLabel('all'), '全部');
+    });
+  });
+
+  // 用户 2026-09-29：「现金分红怎么记为现金账户的收益，应该记为分红入账」
+  // —— 收益只算货币基金/逆回购的利息，分红单列。
+  group('现金「收益」只算利息，分红单列', () {
+    CashTxn c(String type, double amount, {int month = 9, int account = 1}) =>
+        CashTxn(
+            accountId: account,
+            type: type,
+            amount: amount,
+            date: DateTime(2026, month, 10));
+
+    test('income 进收益，dividend 不进', () {
+      final list = [
+        c(CashType.income, 249.03),
+        c(CashType.dividend, 20.59),
+        c(CashType.reinvest, 0),
+        c(CashType.deposit, 10000),
+      ];
+      final m = cashIncomeOf(list, now: DateTime(2026, 9, 20));
+      expect(m[1]![0], closeTo(249.03, 1e-9), reason: '当月');
+      expect(m[1]![1], closeTo(249.03, 1e-9), reason: '累计');
+      expect(cashDividendTotal(list), closeTo(20.59, 1e-9));
+    });
+
+    test('跨月：当月只算本月，累计算全部', () {
+      final list = [
+        c(CashType.income, 100, month: 8),
+        c(CashType.income, 50, month: 9),
+      ];
+      final m = cashIncomeOf(list, now: DateTime(2026, 9, 20));
+      expect(m[1]![0], closeTo(50, 1e-9));
+      expect(m[1]![1], closeTo(150, 1e-9));
+    });
+
+    test('分红可按账户过滤（现金页要的是当前账户）', () {
+      final list = [
+        c(CashType.dividend, 20.59, account: 1),
+        c(CashType.dividend, 88, account: 2),
+      ];
+      expect(cashDividendTotal(list, accountId: 1), closeTo(20.59, 1e-9));
+      expect(cashDividendTotal(list), closeTo(108.59, 1e-9));
+    });
+
+    test('分红只进现金余额、不被算成两遍（主恒等式仍为 0 残差）', () {
+      final day = DateTime(2026, 9, 10);
+      final s = buildCashFlowStatement(
+        assets: const [],
+        txns: [
+          Txn(
+            accountId: 1,
+            assetId: 1,
+            type: TxnType.dividend,
+            date: day,
+            amount: 20.59,
+          ),
+        ],
+        cashTxns: [
+          CashTxn(
+              accountId: 1,
+              type: CashType.deposit,
+              amount: 1000,
+              date: DateTime(2026, 9, 1)),
+          CashTxn(
+              accountId: 1,
+              type: CashType.dividend,
+              amount: 20.59,
+              date: day),
+          // 再投的 0 元行：endCash 一点都不该动
+          CashTxn(
+              accountId: 1,
+              type: CashType.reinvest,
+              amount: 0,
+              date: day),
+        ],
+        range: DateRange(DateTime(2026, 9, 1), DateTime(2026, 9, 30)),
+      );
+      expect(s.identityGap, closeTo(0, 1e-9));
+      expect(s.pnlCrossCheck, closeTo(s.pnl, 1e-9),
+          reason: '分红算交易侧一次，别被现金行再加一遍');
+      expect(s.cashIncome, closeTo(0, 1e-9), reason: '分红不是现金生息');
+    });
+  });
 }

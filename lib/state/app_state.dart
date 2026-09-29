@@ -830,21 +830,10 @@ class AppState extends ChangeNotifier {
     if (cashTxns.isNotEmpty || txns.isEmpty) return 0;
     var n = 0;
     for (final t in txns) {
-      final sign = t.type == TxnType.buy ? -1.0 : 1.0;
-      final amount =
-          t.type == TxnType.buy ? t.amount + t.fee : t.amount - t.fee;
-      if (amount == 0) continue;
-      await db.saveCashTxn(CashTxn(
-        accountId: t.accountId,
-        type: t.type == TxnType.buy
-            ? CashType.invest
-            : (t.type == TxnType.sell ? CashType.redeem : CashType.dividend),
-        amount: sign * amount,
-        date: t.date,
-      note: _cashNoteFor(t),
-        createdAt: DateTime.now(),
-        srcTxnId: t.id,
-      ));
+      // 走同一处口径：手续费、以及「不动现金」的流水（红利再投/成本调整）都在里面
+      final c = linkedCashTxnFor(t, t.id, note: _cashNoteFor(t));
+      if (c == null) continue;
+      await db.saveCashTxn(c);
       n++;
     }
     cashTxns = await db.cashTxns();
@@ -856,39 +845,66 @@ class AppState extends ChangeNotifier {
     return n;
   }
 
+  /// 给历史上那些「红利再投」交易补一条 0 元的「再投」现金流水。
+  ///
+  /// **只补不删、不动余额**：金额恒为 0，交易、余额、统计都不受影响；
+  /// 幂等（已经有了就跳过）。做成维护按钮：早期版本的再投交易没有这条
+  /// 0 元行，列表里就看不见「再投」。
+  Future<int> backfillReinvestCash() async {
+    var n = 0;
+    for (final t in txns) {
+      if (!t.isReinvest || t.id == null) continue;
+      if (cashTxns.any((c) => c.srcTxnId == t.id)) continue;
+      final c = linkedCashTxnFor(t, t.id, note: _cashNoteFor(t));
+      if (c == null) continue;
+      await db.saveCashTxn(c);
+      n++;
+    }
+    if (n > 0) {
+      cashTxns = await db.cashTxns();
+      _recompute();
+      notifyListeners();
+    }
+    return n;
+  }
+
+  /// 还没有「再投」现金行的再投交易笔数（维护按钮的副标题用）
+  int get reinvestCashMissing {
+    var n = 0;
+    for (final t in txns) {
+      if (!t.isReinvest || t.id == null) continue;
+      if (cashTxns.any((c) => c.srcTxnId == t.id)) continue;
+      n++;
+    }
+    return n;
+  }
+
   /// 买入/卖出/分红 → 现金流水（买入扣钱、卖出和分红进钱）
   /// 现金流水的备注：标的简称 + 动作词。
-  /// 定投生成的买入记「定投」（不是「买入」），普通买入「买入」，卖出「卖出」，分红「分红」。
+  /// 定投生成的买入记「定投」、红利再投记「再投」，普通买入「买入」，卖出「卖出」，分红「分红」。
   /// 没有简称就只显示动作词。
   String _cashNoteFor(Txn t) {
     final code = assetsById[t.assetId]?.code ?? '';
     final short = code.isEmpty ? '' : displayShortOf(code);
     final action = switch (t.type) {
-      TxnType.buy => t.note.contains('定投') ? '定投' : '买入',
+      TxnType.buy => t.isReinvest
+          ? '再投'
+          : (t.note.contains('定投') ? '定投' : '买入'),
       TxnType.sell => '卖出',
       TxnType.dividend => '分红',
     };
     return short.isEmpty ? action : '$short · $action';
   }
 
+  /// 把交易联动成现金流水。
+  ///
+  /// **一律交给 `linkedCashTxnFor`**：手续费怎么并、不动现金的流水（红利再投 /
+  /// 成本调整）怎么办，全项目只有那一处口径。以前这里是手抄的第二份实现，
+  /// 漏了 `isCashless` 判定 —— CSV 导入「红利再投」照样扣现金就是这么来的。
   Future<void> _linkCashFor(Txn t) async {
-    final sign = switch (t.type) {
-      TxnType.buy => -1.0,
-      _ => 1.0,
-    };
-    final amount = t.type == TxnType.buy ? t.amount + t.fee : t.amount - t.fee;
-    if (amount == 0) return;
-    await db.saveCashTxn(CashTxn(
-      accountId: t.accountId,
-      type: t.type == TxnType.buy
-          ? CashType.invest
-          : (t.type == TxnType.sell ? CashType.redeem : CashType.dividend),
-      amount: sign * amount,
-      date: t.date,
-      note: _cashNoteFor(t),
-      createdAt: DateTime.now(),
-      srcTxnId: t.id,
-    ));
+    final c = linkedCashTxnFor(t, t.id, note: _cashNoteFor(t));
+    if (c == null) return;
+    await db.saveCashTxn(c);
   }
 
   // ============================================================
@@ -2796,6 +2812,20 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 编辑一条**手记的**现金流水。
+  ///
+  /// 联动生成的（`srcTxnId != null`）改不了：它是买入/卖出/分红的影子，
+  /// 单独改会让现金余额与交易对不上 —— 要改就去改那笔交易。
+  /// 返回 false 表示拒绝（调用方给提示）。
+  Future<bool> updateCashTxn(CashTxn t) async {
+    if (t.id == null || t.srcTxnId != null) return false;
+    await db.saveCashTxn(t);
+    cashTxns = await db.cashTxns();
+    _recompute();
+    notifyListeners();
+    return true;
+  }
+
   Future<void> removeCashTxn(int id) async {
     await db.deleteCashTxn(id);
     cashTxns = await db.cashTxns();
@@ -2879,6 +2909,11 @@ class AppState extends ChangeNotifier {
     }
     return sum;
   }
+
+  /// 累计现金分红（**不计入上面的「收益」**：收益只算货币基金/逆回购的利息）。
+  /// 「再投」那条 0 元行不算分红。
+  double get cashTotalDividend =>
+      cashDividendTotal(cashTxns, accountId: accountFilter);
 
   // ============================================================
   // 现金流水 CSV / 交易 CSV
@@ -3484,17 +3519,12 @@ class AppState extends ChangeNotifier {
   }
 
   /// 现金收益：账户 → [当月收益, 累计收益]
-  Map<int, List<double>> _cashIncomeOf(List<CashTxn> list) {
-    final now = DateTime.now();
-    final out = <int, List<double>>{};
-    for (final t in list) {
-      if (t.type != CashType.income && t.type != CashType.dividend) continue;
-      final v = out.putIfAbsent(t.accountId, () => [0, 0]);
-      v[1] += t.amount;
-      if (t.date.year == now.year && t.date.month == now.month) v[0] += t.amount;
-    }
-    return out;
-  }
+  ///
+  /// **只算货币基金/国债逆回购的利息**（`CashType.income`）。现金分红是
+  /// 「分红入账」、不是收益（用户 2026-09-29 定的口径）—— 实现在纯函数
+  /// `cashIncomeOf()` 里，可单测。以前这里把 `dividend` 也算进来，
+  /// 而同一页的年份抬头只算 `income`，一页里两个「收益」口径都不一样。
+  Map<int, List<double>> _cashIncomeOf(List<CashTxn> list) => cashIncomeOf(list);
 
   // ============================================================
   // 收益统计：区间与曲线（用真实的逻辑层签名）

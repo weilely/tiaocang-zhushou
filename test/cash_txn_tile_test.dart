@@ -125,6 +125,82 @@ void main() {
       )));
       expect(find.textContaining('默认账户'), findsOneWidget);
     });
+
+    // 用户 2026-09-29 定的：红利再投记一条「金额 0 的「再投」行」
+    // —— 抬头要是「再投」、金额要老实显示 0，但副标题得说清有多少钱折成了份额，
+    // 否则这行看着就是一条莫名其妙的 0 元记录。
+    testWidgets('再投行：标题「再投」、金额 ¥0.00、副标题写清折了多少份额', (tester) async {
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(type: CashType.reinvest, amount: 0, note: '黄金 · 再投'),
+        linkedTxn: Txn(
+          id: 42,
+          accountId: 1,
+          assetId: 7,
+          type: TxnType.buy,
+          date: DateTime(2026, 5, 18),
+          amount: 362.57,
+          shares: 30,
+          price: 12.09,
+          note: '红利再投 2026-05-18',
+        ),
+        shortName: '黄金',
+        onDelete: null,
+      )));
+      expect(find.text('再投'), findsOneWidget);
+      expect(find.text('¥0.00'), findsOneWidget, reason: '钱没进出，别显示 ±0.00 骗人');
+      expect(find.text('+0.00'), findsNothing);
+      expect(find.textContaining('362.57 已折份额'), findsOneWidget);
+      // 备注里的动作词「再投」由标题表达，副标题只留简称
+      expect(find.textContaining('黄金 · 再投'), findsNothing);
+    });
+
+    test('kind：定投是算出来的（看影子交易），再投是存库类型', () {
+      expect(
+        CashTxnTile(
+          txn: linked(note: '价值100 · 买入'),
+          linkedTxn: Txn(
+            accountId: 1,
+            assetId: 7,
+            type: TxnType.buy,
+            date: DateTime(2026, 9, 11),
+            note: '定投',
+          ),
+        ).kind,
+        'dca',
+      );
+      expect(
+        CashTxnTile(txn: linked(type: CashType.reinvest, amount: 0)).kind,
+        CashType.reinvest,
+      );
+      expect(CashTxnTile(txn: linked()).kind, CashType.invest);
+    });
+  });
+
+  // 手记的点一下进编辑、联动的点一下给「去改那笔交易」——这一步靠 onTap 往上抛
+  group('点击', () {
+    testWidgets('手记流水：点一下触发 onTap（页面据此进编辑）', (tester) async {
+      var taps = 0;
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: manual(),
+        onDelete: () {},
+        onTap: () => taps++,
+      )));
+      await tester.tap(find.byType(CashTxnTile));
+      await tester.pumpAndSettle();
+      expect(taps, 1);
+    });
+
+    testWidgets('联动流水：点一下也能触发（页面据此给「去改那笔交易」）', (tester) async {
+      var taps = 0;
+      await tester.pumpWidget(host(CashTxnTile(
+        txn: linked(),
+        onDelete: null,
+        onTap: () => taps++,
+      )));
+      await tester.tap(find.byType(CashTxnTile));
+      await tester.pumpAndSettle();
+      expect(taps, 1);
+    });
   });
 
   group('可删性', () {

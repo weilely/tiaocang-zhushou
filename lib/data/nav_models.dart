@@ -112,12 +112,24 @@ class NavPoint {
 }
 
 /// 现金流水类型
+///
+/// **口径（用户 2026-09-29 定）**：现金流水的抬头只有这 8 个字 ——
+/// `充值 / 提现 / 收益 / 买入 / 卖出 / 分红 / 定投 / 再投`。
+/// 其中「定投」不是一种存库类型，而是**买入里带定投标记的那些**
+/// （`cashRowKind()` 现取影子交易的备注判定），所以这里没有它的常量。
 class CashType {
   static const deposit = 'deposit';
   static const withdraw = 'withdraw';
+
+  /// 旧数据里的「调整」（手工校正现金）。
+  ///
+  /// 用户 2026-09-29 把**手工入口去掉了**（他给的口径里没有它），类型本身留着：
+  /// 老库/老备份里可能已经有这种流水，读出来还得显示得出来。
   static const adjust = 'adjust';
 
-  /// 收益（货币基金/国债逆回购的利息），记为正数入账
+  /// 收益（货币基金/国债逆回购的利息），记为正数入账。
+  ///
+  /// **现金分红不算收益**（那是「分红」），别并进来 —— 见 `cashIncomeOf`。
   static const income = 'income';
 
   /// 买入扣款（由交易联动生成）
@@ -129,8 +141,24 @@ class CashType {
   /// 分红入账（由交易联动生成）
   static const dividend = 'dividend';
 
+  /// 红利再投：**不动现金**（金额恒为 0），只为让流水里看得见
+  /// 「这笔分红折成了份额」（用户 2026-09-29 选的：记一条金额 0 的「再投」行）
+  static const reinvest = 'reinvest';
+
   /// 手动可记的类型（其余由交易联动生成，不放进手动入口）
-  static const manualTypes = [deposit, withdraw, adjust, income];
+  static const manualTypes = [deposit, withdraw, income];
+
+  /// 筛选与抬头用的顺序（＝用户给的口径）
+  static const filterOrder = [
+    invest,
+    redeem,
+    dividend,
+    'dca', // 定投（买入的显示分类，不是存库类型）
+    reinvest,
+    deposit,
+    withdraw,
+    income,
+  ];
 
   static String label(String t) => switch (t) {
         deposit => '充值',
@@ -142,6 +170,7 @@ class CashType {
         invest => '买入',
         redeem => '卖出',
         dividend => '分红',
+        reinvest => '再投',
         _ => t,
       };
 }
