@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:invest_tracker/core/format.dart';
 import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/data/nav_models.dart';
 import 'package:invest_tracker/logic/portfolio.dart';
@@ -168,26 +169,57 @@ void main() {
         '净值日期',
         '当日收益',
         '持仓收益',
-        '持仓收益率',
         '累计收益',
+        '持仓份额',
         '资产占比',
       ]) {
         expect(find.text(k), findsOneWidget, reason: '内嵌块里要有「$k」');
       }
 
-      // 旧版式的字段不再出现在卡片上（份额/成本在「持仓详情」里看）
+      // 用户 2026-09-29：「持仓收益率用括号包住显示在持仓收益金额后面，
+      // 持仓收益率的位置改为持仓份额，与累计收益位置交换」
+      expect(find.text('持仓收益率'), findsNothing, reason: '不再单占一行');
+
+      // 旧版式的字段名不再出现在卡片上（份额那行现在叫「持仓份额」，
+      // 成本与「持有份」这类明细仍在「持仓详情」里看）
       expect(find.text('市值'), findsNothing);
       expect(find.text('占比'), findsNothing);
-      expect(find.text('份额'), findsNothing);
       expect(find.text('成本'), findsNothing);
 
       // 净值日期 + 金额格式
       expect(find.text('2026-09-11'), findsOneWidget);
       expect(find.textContaining(RegExp(r'^\d{1,3}(,\d{3})*\.\d\d$')),
           findsWidgets);
-      // 最新净值带涨跌幅：(+0.51%) 之类
+      // 括号百分比现在有两处：最新净值那格的涨跌幅、持仓收益那格的收益率
       expect(find.textContaining(RegExp(r'^\([-+]?\d+\.\d\d%\)$')),
-          findsOneWidget);
+          findsWidgets);
+    });
+
+    testWidgets('持仓收益：收益率用括号跟在金额后面（用户 2026-09-29 的字面要求）',
+        (tester) async {
+      final d = dataFor(pos());
+      await tester.pumpWidget(host(HoldingCard(data: d)));
+
+      final amount = fmtMoneySigned(d.holdingPnl!);
+      final pct = '(${fmtPct(d.holdingPct!)})';
+      final row =
+          find.ancestor(of: find.text(amount), matching: find.byType(Row)).first;
+      expect(find.descendant(of: row, matching: find.text(pct)), findsOneWidget,
+          reason: '金额与收益率要在同一行、收益率带括号');
+    });
+
+    testWidgets('右上角入口写「卖出费率」，没有百分号图标', (tester) async {
+      var tapped = 0;
+      await tester.pumpWidget(host(HoldingCard(
+        data: dataFor(pos()),
+        onRedeemFee: () => tapped++,
+      )));
+
+      expect(find.text('卖出费率'), findsOneWidget);
+      expect(find.text('费率'), findsNothing);
+      expect(find.byIcon(Icons.percent), findsNothing, reason: '用户：不要%号');
+      await tester.tap(find.text('卖出费率'));
+      expect(tapped, 1);
     });
 
     testWidgets('右上角状态标签：已公布净值且不落后于历史 → 收益已更新', (tester) async {
@@ -270,9 +302,10 @@ void main() {
           host(HoldingCard(data: dataFor(pos(withQuote: false)))));
 
       expect(find.text('无行情'), findsOneWidget);
-      // 内嵌块里降级为 -- 的共 8 处：资产、最新净值、净值日期、
-      // 当日收益、持仓收益、持仓收益率、累计收益、资产占比
-      expect(find.text('--'), findsNWidgets(8));
+      // 内嵌块里降级为 -- 的共 7 处：资产、最新净值、净值日期、当日收益、
+      // 持仓收益（含收益率那一格整体 --）、累计收益、资产占比
+      // —— 「持仓份额」永远是实打实的数，不参与降级
+      expect(find.text('--'), findsNWidgets(7));
     });
 
     testWidgets('传入账户名时显示灰色标签', (tester) async {
@@ -320,6 +353,40 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull,
           reason: '用户手机是窄屏 + 大字体，这里不许 RenderFlex overflow');
+    });
+
+    // 用户真机 = 400dp 宽 + 字体 1.3（荣耀X70）→ 内嵌块只有 320dp。
+    // 旧阈值 250×1.3 = 325 刚好把曲线挡在门外：**他的持仓列表一直没有收益图**，
+    // 他 2026-09-29 问「为什么持仓页面列表里没有收益图了」。这条守死它。
+    testWidgets('真机尺寸 400dp + 字体 1.3：迷你曲线照样画出来', (tester) async {
+      tester.view.physicalSize = const Size(400, 880);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final navs = [
+        NavPoint(code: '022459', date: '2025-12-31', nav: 1.10),
+        NavPoint(code: '022459', date: '2026-06-30', nav: 1.20),
+        NavPoint(code: '022459', date: '2026-09-11', nav: 1.2319),
+      ];
+      await tester.pumpWidget(MaterialApp(
+        builder: (ctx, child) => MediaQuery(
+          data: MediaQuery.of(ctx)
+              .copyWith(textScaler: const TextScaler.linear(1.3)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: HoldingCard(
+              data: HoldingCardData.from(pos(),
+                  totalMarketValue: 100000, navs: navs),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('今年以来收益率'), findsOneWidget,
+          reason: '真机（400dp + 字体大）以前看不到这条曲线');
+      expect(tester.takeException(), isNull, reason: '挤了曲线也不能溢出');
     });
   });
 

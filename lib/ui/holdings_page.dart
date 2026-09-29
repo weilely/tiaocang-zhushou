@@ -662,18 +662,12 @@ class HoldingCard extends StatelessWidget {
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 4, vertical: 2),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.percent,
-                                size: 15, color: theme.colorScheme.primary),
-                            const SizedBox(width: 2),
-                            Text('费率',
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    color: theme.colorScheme.primary)),
-                          ],
-                        ),
+                        // 用户 2026-09-29：「%费率改成卖出费率，不要%号」
+                        // —— 去掉百分号图标，文字直接写清是哪种费率
+                        child: Text('卖出费率',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: theme.colorScheme.primary)),
                       ),
                     ),
                   const SizedBox(width: 2),
@@ -746,12 +740,20 @@ class HoldingCard extends StatelessWidget {
                             Text(d.infoDate.isNotEmpty ? d.infoDate : '--',
                                 style: const TextStyle(fontSize: 12.5))),
                         _kv(context, '当日收益', _money(context, d.dayPnl)),
-                        _kv(context, '持仓收益', _money(context, d.holdingPnl)),
+                        // 用户 2026-09-29：「持仓收益率用括号包住显示在持仓收益金额后面，
+                        // 持仓收益率的位置改为持仓份额，与累计收益位置交换」
+                        // → 收益率并进持仓收益那一格，腾出的行改「持仓份额」，
+                        //   并跟累计收益对调（读起来就是 持仓收益 → 累计收益 → 份额）
+                        _kv(context, '持仓收益',
+                            _moneyWithPct(context, d.holdingPnl, d.holdingPct)),
+                        _kv(context, '累计收益', _money(context, d.cumulativePnl)),
                         _kv(
                             context,
-                            '持仓收益率',
-                            _pctText(context, d.holdingPct)),
-                        _kv(context, '累计收益', _money(context, d.cumulativePnl)),
+                            '持仓份额',
+                            Text(
+                                fmtSharesOf(d.shares,
+                                    isFund: d.traits.unitIsFund),
+                                style: const TextStyle(fontSize: 12.5))),
                         _kv(
                             context,
                             '资产占比',
@@ -764,9 +766,15 @@ class HoldingCard extends StatelessWidget {
                     );
                     // 太窄就不画曲线（大字体 + 窄屏时优先保住数字）；
                     // 阈值跟着字体缩放走 —— 字体放大后文字本身就要更多横向空间。
-                    if (ytd == null || c.maxWidth < 250 * scale) return metrics;
-                    final w = (110.0 * scale)
-                        .clamp(84.0, c.maxWidth * 0.45)
+                    //
+                    // 用户真机（400dp 宽 + 字体 1.3）内嵌块只有 **320dp**，
+                    // 而旧阈值 250×1.3 = 325 刚好把它挡在门外 —— 他的持仓列表
+                    // 一直没有这条曲线（他 2026-09-29 问「为什么没有收益图了」）；
+                    // 模拟器默认（450dp + 字体 1.0）够宽，所以只在真机上暴露。
+                    // 现在阈值降到 240×scale，宽度按可用宽度给比例、不再顶死。
+                    if (ytd == null || c.maxWidth < 240 * scale) return metrics;
+                    final w = (c.maxWidth * 0.34)
+                        .clamp(78.0, 110.0 * scale)
                         .toDouble();
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -821,15 +829,29 @@ class HoldingCard extends StatelessWidget {
         ),
       );
 
-  /// 百分比，按盈亏染色；null → `--`
-  Widget _pctText(BuildContext context, double? v) => Text(
-        v == null ? '--' : fmtPct(v),
-        style: TextStyle(
-          fontSize: 12.5,
-          fontWeight: FontWeight.w600,
-          color: v == null ? Theme.of(context).hintColor : pnlColor(v),
-        ),
-      );
+  /// 金额 +（收益率）：收益率用括号**紧跟在金额后面**（用户 2026-09-29 要求），
+  /// 整格同一个盈亏色；金额缺失时整格 `--`（不单独冒出一个没头没尾的百分比）。
+  Widget _moneyWithPct(BuildContext context, double? amount, double? pct) {
+    if (amount == null) {
+      return Text('--',
+          style: TextStyle(
+              fontSize: 12.5, color: Theme.of(context).hintColor));
+    }
+    final color = pnlColor(amount);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(fmtMoneySigned(amount),
+            style: TextStyle(
+                fontSize: 12.5, fontWeight: FontWeight.w600, color: color)),
+        if (pct != null) ...[
+          const SizedBox(width: 3),
+          Text('(${fmtPct(pct)})',
+              style: TextStyle(fontSize: 12, color: color)),
+        ],
+      ],
+    );
+  }
 
   /// 「最新净值 1.0776(+0.16%)」——涨跌幅带颜色
   Widget _navValue(BuildContext context, HoldingCardData d) {
