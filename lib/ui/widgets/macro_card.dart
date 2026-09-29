@@ -389,6 +389,30 @@ class ErpChart extends StatefulWidget {
   State<ErpChart> createState() => _ErpChartState();
 }
 
+/// 横轴 = **利差日期 ∪ 指数日线日期**，顺带把两条线各自在轴上的取值算好
+///
+/// 用户 2026-09-29：「市场估值历史曲线图沪深300收益补的数据没有显示完全」。
+/// 以前横轴只取利差那 2958 天（2016-08-15 起），而沪深300 的日线已经补到
+/// **2005-04-08**（5219 条）—— 补进来的 2761 条早于利差起点的数据**没有位置可画**，
+/// 所以那条线看起来永远"缺一段"。
+///
+/// 合并成并集后：利差线在**自己有数据的日期**照常画，没有的日期留 `null`（断线，
+/// 不插值不补零）；指数线则能一路画到 2005。两条线仍然严格按日期对齐 ——
+/// 这跟"同一天才有值、对不上就是 null"是同一条口径。
+({List<String> dates, List<double?> erp, List<double?> idx}) erpChartAxis(
+  List<MacroRow> rows,
+  List<NavPoint> indexSeries,
+) {
+  final erpBy = {for (final r in rows) r.date: r.erp};
+  final idxBy = {for (final p in indexSeries) p.date: p.nav};
+  final dates = <String>{...erpBy.keys, ...idxBy.keys}.toList()..sort();
+  return (
+    dates: dates,
+    erp: [for (final d in dates) erpBy[d]],
+    idx: [for (final d in dates) idxBy[d]],
+  );
+}
+
 class _ErpChartState extends State<ErpChart> {
   double _prevScale = 1;
   double _focal = 0.5;
@@ -408,41 +432,35 @@ class _ErpChartState extends State<ErpChart> {
     super.dispose();
   }
 
-  /// 指数日线按**同一天**对齐到利差序列：对不上就是 null（不插值、不补零）
-  List<double?> _aligned() {
-    if (widget.indexSeries.isEmpty) return const [];
-    final byDate = {for (final p in widget.indexSeries) p.date: p.nav};
-    return [for (final r in widget.rows) byDate[r.date]];
-  }
-
+  /// 指数日线按**同一天**对齐到横轴：对不上就是 null（不插值、不补零）
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final rows = widget.rows;
-    if (rows.length < 2) {
+    // 轴 = 利差 ∪ 指数（见 [erpChartAxis]）：补进来的早年日线也要有位置画
+    final axis = erpChartAxis(widget.rows, widget.indexSeries);
+    final erpCount = axis.erp.where((v) => v != null).length;
+    final idxCount = axis.idx.where((v) => v != null).length;
+    if (axis.dates.length < 2 || (erpCount < 2 && idxCount < 2)) {
       return Center(
         child: Text('再攒几天就能画曲线了',
             style: TextStyle(fontSize: 11, color: theme.hintColor)),
       );
     }
-    final aligned = _aligned();
     return ListenableBuilder(
       listenable: _ctrl,
       builder: (ctx, _) {
         final win = widget.controller?.window ?? _own!.window;
-        final (i0, i1) = win.slice(rows.length);
-        final slice = rows.sublist(i0, i1 + 1);
-        final idxSlice =
-            aligned.isEmpty ? const <double?>[] : aligned.sublist(i0, i1 + 1);
+        final (i0, i1) = win.slice(axis.dates.length);
+        final dateSlice = axis.dates.sublist(i0, i1 + 1);
         final chart = CustomPaint(
           size: Size.infinite,
           painter: _ErpPainter(
-            values: [for (final r in slice) r.erp],
-            indexValues: idxSlice,
+            values: axis.erp.sublist(i0, i1 + 1),
+            indexValues: axis.idx.sublist(i0, i1 + 1),
             // 横轴**带年份**（用户 2026-09-29 要求）：只写 `08-15` 看不出是哪一年，
             // 十年窗口下那两个标签会被读成"一个多月"
-            firstLabel: slice.first.date,
-            lastLabel: slice.last.date,
+            firstLabel: dateSlice.first,
+            lastLabel: dateSlice.last,
             line: theme.colorScheme.primary,
             ref: theme.hintColor.withValues(alpha: 0.5),
             hint: theme.hintColor,
@@ -500,7 +518,11 @@ class _ErpPainter extends CustomPainter {
     required this.grid,
   });
 
-  final List<double> values;
+  /// 与 [indexValues] 等长、按日期对齐的**股债利差**；null = 那天没有利差数据
+  ///
+  /// 会为 null 是因为横轴是**两条序列的并集**：沪深300 的日线补到了 2005，
+  /// 而利差（PE + 10 年国债）只有 2016-08-15 起 —— 2016 之前这段只有指数线。
+  final List<double?> values;
 
   /// 与 [values] 等长、按日期对齐的指数点位；null = 那天没有指数数据
   final List<double?> indexValues;
@@ -521,38 +543,45 @@ class _ErpPainter extends CustomPainter {
     final h = size.height - padT - padB;
     if (w <= 0 || h <= 0 || values.length < 2) return;
 
-    // ── 左轴：股债利差 ─────────────────────────────────────────────────
-    var lo = values.reduce((a, b) => a < b ? a : b);
-    var hi = values.reduce((a, b) => a > b ? a : b);
-    if (hi - lo < 0.5) {
-      final mid = (hi + lo) / 2; // 样本太集中时撑开一点，否则曲线贴边看不出形状
-      lo = mid - 0.25;
-      hi = mid + 0.25;
-    }
-    final span = hi - lo;
+    // 利差自己的取值范围（跳过轴上的空洞）；一个值都没有就只画指数线
+    final erpNums = [for (final v in values) ?v];
+    final hasErp = erpNums.length >= 2;
+    var lo = 0.0, hi = 0.0, span = 1.0;
+
     double yOf(double v) => padT + (1 - (v - lo) / span) * h;
     double xOf(int i) => kErpPadL + w * i / (values.length - 1);
 
-    // 横向网格 + 左刻度（最高/中/最低）
-    final gp = Paint()
-      ..color = grid
-      ..strokeWidth = 0.7;
-    for (final v in [hi, (hi + lo) / 2, lo]) {
-      final y = yOf(v);
-      canvas.drawLine(Offset(kErpPadL, y), Offset(kErpPadL + w, y), gp);
-      _text(canvas, '${v.toStringAsFixed(1)}%', Offset(0, y - 5),
-          fontSize: 9, color: hint);
-    }
+    if (hasErp) {
+      lo = erpNums.reduce((a, b) => a < b ? a : b);
+      hi = erpNums.reduce((a, b) => a > b ? a : b);
+      if (hi - lo < 0.5) {
+        final mid = (hi + lo) / 2; // 样本太集中时撑开一点，否则曲线贴边看不出形状
+        lo = mid - 0.25;
+        hi = mid + 0.25;
+      }
+      span = hi - lo;
 
-    // 中位数参考线（虚线）
-    final sorted = [...values]..sort();
-    final median = sorted[sorted.length ~/ 2];
-    final my = yOf(median);
-    final dash = Paint()
-      ..color = ref
-      ..strokeWidth = 0.9;
-    for (var x = kErpPadL; x < kErpPadL + w; x += 6) {
-      canvas.drawLine(Offset(x, my), Offset(x + 3, my), dash);
+      // 横向网格 + 左刻度（最高/中/最低）
+      final gp = Paint()
+        ..color = grid
+        ..strokeWidth = 0.7;
+      for (final v in [hi, (hi + lo) / 2, lo]) {
+        final y = yOf(v);
+        canvas.drawLine(Offset(kErpPadL, y), Offset(kErpPadL + w, y), gp);
+        _text(canvas, '${v.toStringAsFixed(1)}%', Offset(0, y - 5),
+            fontSize: 9, color: hint);
+      }
+
+      // 中位数参考线（虚线）
+      final sorted = [...erpNums]..sort();
+      final median = sorted[sorted.length ~/ 2];
+      final my = yOf(median);
+      final dash = Paint()
+        ..color = ref
+        ..strokeWidth = 0.9;
+      for (var x = kErpPadL; x < kErpPadL + w; x += 6) {
+        canvas.drawLine(Offset(x, my), Offset(x + 3, my), dash);
+      }
     }
 
     // ── 右轴：沪深300 区间收益（以可见窗口第一个有值的点为基准）──────────
@@ -612,22 +641,40 @@ class _ErpPainter extends CustomPainter {
       }
     }
 
-    // ── 主序列：股债利差 ───────────────────────────────────────────────
-    final path = Path()..moveTo(xOf(0), yOf(values[0]));
-    for (var i = 1; i < values.length; i++) {
-      path.lineTo(xOf(i), yOf(values[i]));
+    // ── 主序列：股债利差（轴上空洞处断开，不插值）─────────────────────────
+    if (hasErp) {
+      final path = Path();
+      var started = false;
+      for (var i = 0; i < values.length; i++) {
+        final v = values[i];
+        if (v == null) {
+          started = false;
+          continue;
+        }
+        if (!started) {
+          path.moveTo(xOf(i), yOf(v));
+          started = true;
+        } else {
+          path.lineTo(xOf(i), yOf(v));
+        }
+      }
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = line
+          ..strokeWidth = 1.6
+          ..style = PaintingStyle.stroke
+          ..strokeJoin = StrokeJoin.round,
+      );
+      // 末端圆点落在**最后一个有利差的日期**上
+      for (var i = values.length - 1; i >= 0; i--) {
+        final v = values[i];
+        if (v != null) {
+          canvas.drawCircle(Offset(xOf(i), yOf(v)), 2.6, Paint()..color = line);
+          break;
+        }
+      }
     }
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = line
-        ..strokeWidth = 1.6
-        ..style = PaintingStyle.stroke
-        ..strokeJoin = StrokeJoin.round,
-    );
-    canvas.drawCircle(
-        Offset(xOf(values.length - 1), yOf(values.last)), 2.6,
-        Paint()..color = line);
 
     // 横轴首尾日期（带年份；缩放后这俩跟着窗口变，等于告诉用户"现在在看哪一段"）
     _text(canvas, firstLabel, Offset(kErpPadL, size.height - 11),

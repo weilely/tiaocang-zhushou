@@ -225,4 +225,86 @@ void main() {
       expect(find.textContaining('再攒几天'), findsOneWidget);
     });
   });
+
+  // 用户 2026-09-29：「市场估值历史曲线图沪深300收益补的数据没有显示完全」
+  group('横轴 = 利差 ∪ 指数日线（补的早年数据也要有位置画）', () {
+    List<MacroRow> erpRows() => [
+          // 利差只有 2016-08 之后（本地回填的起点）
+          MacroRow(date: '2016-08-15', hs300Pe: 12, cn10y: 2.7, erp: 5.63),
+          MacroRow(date: '2016-08-16', hs300Pe: 12.1, cn10y: 2.7, erp: 5.56),
+          MacroRow(date: '2026-09-29', hs300Pe: 13.09, cn10y: 1.67, erp: 5.97),
+        ];
+
+    test('指数日线早于利差起点时，轴要往前扩（否则补的数据没位置画）', () {
+      final axis = erpChartAxis(erpRows(), const [
+        NavPoint(code: 'sh000300', date: '2005-04-08', nav: 982.79),
+        NavPoint(code: 'sh000300', date: '2016-08-15', nav: 3393.42),
+      ]);
+      expect(axis.dates.first, '2005-04-08', reason: '轴必须覆盖最早的指数日线');
+      expect(axis.dates.last, '2026-09-29');
+      expect(axis.dates, ['2005-04-08', '2016-08-15', '2016-08-16', '2026-09-29']);
+      // 2005 那天只有指数、没有利差 → 利差为 null（断线，不插值）
+      expect(axis.erp.first, isNull);
+      expect(axis.idx.first, closeTo(982.79, 1e-9));
+      expect(axis.erp[1], closeTo(5.63, 1e-9), reason: '2016-08-15 两条都有');
+    });
+
+    test('没有叠加指数时轴就是利差自己的日期（关注页那张小卡）', () {
+      final axis = erpChartAxis(erpRows(), const []);
+      expect(axis.dates, ['2016-08-15', '2016-08-16', '2026-09-29']);
+      expect(axis.erp.every((v) => v != null), isTrue);
+      expect(axis.idx, everyElement(isNull));
+    });
+
+    test('两条序列的日期交错时合并成一条有序轴，各取各的值', () {
+      final axis = erpChartAxis(
+        [
+          const MacroRow(date: '2026-01-02', hs300Pe: 12, cn10y: 2, erp: 6.33),
+          const MacroRow(date: '2026-01-05', hs300Pe: 12, cn10y: 2, erp: 6.33),
+        ],
+        const [
+          NavPoint(code: 'sh000300', date: '2026-01-03', nav: 4000),
+          NavPoint(code: 'sh000300', date: '2026-01-05', nav: 4100),
+        ],
+      );
+      expect(axis.dates, ['2026-01-02', '2026-01-03', '2026-01-05']);
+      expect(axis.erp[1], isNull, reason: '01-03 那天利差没数据');
+      expect(axis.idx[0], isNull, reason: '01-02 那天指数没数据');
+      expect(axis.idx[2], closeTo(4100, 1e-9));
+    });
+
+    testWidgets('补了早年的指数日线也照常渲染、不崩', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 200,
+            width: 320,
+            child: ErpChart(
+              rows: [
+                for (var m = 1; m <= 12; m++)
+                  MacroRow(
+                    date: '2026-${m.toString().padLeft(2, '0')}-15',
+                    hs300Pe: 12,
+                    cn10y: 2,
+                    erp: 6.33,
+                  ),
+              ],
+              // 指数从 2005 起，利差只到 2026 —— 轴会长很多
+              indexSeries: [
+                for (var y = 2005; y <= 2026; y++)
+                  NavPoint(
+                    code: 'sh000300',
+                    date: '$y-06-15',
+                    nav: 1000 + (y - 2005) * 150,
+                  ),
+              ],
+              interactive: true,
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  });
 }

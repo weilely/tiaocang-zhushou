@@ -3359,19 +3359,16 @@ class AppState extends ChangeNotifier {
       return;
     }
     try {
-      // 从库里读基准指数的历史（和 loadNavSamples 同一套样本：最早一条 + 近 5 年），
-      // 读不进来就沿用旧值 —— 界面只画组合单线，不编造基准值。
-      final from = _dayKey(DateTime.now().subtract(const Duration(days: 1835)));
-      final samples = await db.navSamplesFor([code], earliestDate: from);
-      final earliest = await db.navEarliestFor([code]);
-      var list = samples[code] ?? <NavPoint>[];
-      for (final e in earliest.entries) {
-        if (e.key != code) continue;
-        if (list.isEmpty || list.first.date != e.value.date) {
-          list = [e.value, ...list];
-        }
-      }
-      indexNavs[code] = list;
+      // **读全量**（不是「近 5 年 + 最早一条」）：市场估值那张历史曲线要把补进来的
+      // 早年日线画出来。用户 2026-09-29 报「沪深300收益补的数据没有显示完全」——
+      // 实测就是这个窗口造成的：库里 `sh000300` 有 5219 条（2005-04-08 起），
+      // 可只读近 5 年时进内存的只有 1216 条，曲线上那条线其实只从 **2021-09-22**
+      // 起（图注却按最早一条写「从 2005-04-08 起」，两边对不上）。
+      // 一个指数全量 ~5200 条，内存与查询都不心疼。
+      // 收益统计那几条参考线不受影响：它们都按 `rangeStart` 取对齐起点
+      // （`alignedStart` 只看 `navs.first`，本来就已经是 2005-04-08）。
+      final all = await db.navSamplesFor([code], earliestDate: '0001-01-01');
+      indexNavs[code] = all[code] ?? <NavPoint>[];
     } catch (_) {
       indexNavs[code] = indexNavs[code] ?? const [];
     }
