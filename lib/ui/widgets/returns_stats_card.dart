@@ -9,11 +9,11 @@ import '../../logic/returns_calendar.dart';
 import '../../state/app_state.dart';
 import 'cash_flow_map.dart';
 import 'cn_date_picker.dart';
-import 'cn_month_picker.dart';
 import 'common.dart';
 import 'pnl_calendar.dart';
 import 'returns_line_chart.dart';
 import 'segmented_pills.dart';
+import 'year_month_nav.dart';
 
 /// 收益统计卡片：日历图 / 趋势图 / 资金流 三个页签
 ///
@@ -147,62 +147,35 @@ class _CalendarView extends StatelessWidget {
     );
   }
 
+  /// 年月导航：**外层箭头控年、内侧箭头控月**（用户 2026-09-29 定的口径）
+  ///
+  /// 日粒度（一屏一个月）→ 两对箭头都给；月粒度（一屏一年）→ 只留年那对，
+  /// 因为按月挪动在这个视图里没有意义。
   Widget _periodNav(
       BuildContext context, AppState st, ({int year, int month}) c) {
     final isDay = st.calendarGranularity == ReturnGranularity.day;
-    final label = isDay ? '${c.year}年${c.month}月' : '${c.year}年';
-    return Row(
-      children: [
-        // 设计稿两侧是圆角方形浅灰按钮
-        SquareIconButton(
-          icon: Icons.chevron_left,
-          tooltip: isDay ? '上个月' : '上一年',
-          onPressed:
-              st.canShiftCalendarBack ? () => st.shiftCalendar(-1) : null,
-        ),
-        Expanded(
-          child: InkWell(
-            onTap: () => _pickPeriod(context, st, c),
-            borderRadius: BorderRadius.circular(10),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(label,
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 4),
-                  Icon(Icons.expand_more,
-                      size: 16, color: Theme.of(context).hintColor),
-                ],
-              ),
-            ),
-          ),
-        ),
-        // 设计稿两侧是圆角方形浅灰按钮
-        SquareIconButton(
-          icon: Icons.chevron_right,
-          tooltip: isDay ? '下个月' : '下一年',
-          onPressed:
-              st.canShiftCalendarForward ? () => st.shiftCalendar(1) : null,
-        ),
-      ],
-    );
-  }
-  Future<void> _pickPeriod(
-      BuildContext context, AppState st, ({int year, int month}) c) async {
     final earliest = st.earliestRecordDay;
     final latest = st.latestRecordDay;
-    final picked = await showCnMonthPicker(
-      context: context,
-      initialYear: c.year,
-      initialMonth: c.month,
+    final now = DateTime.now();
+    return YearMonthNav(
+      year: c.year,
+      month: c.month,
+      showMonth: isDay,
       minYear: earliest?.year ?? 2000,
-      maxYear: latest?.year ?? DateTime.now().year,
+      maxYear: latest?.year ?? now.year,
+      minMonth: isDay ? (earliest?.month ?? 1) : 1,
+      maxMonth: isDay ? (latest?.month ?? 12) : 12,
+      onPrevYear: () => st.setCalendarCursor(c.year - 1, c.month),
+      onNextYear: () => st.setCalendarCursor(c.year + 1, c.month),
+      onPrevMonth: () {
+        final d = DateTime(c.year, c.month - 1, 1);
+        st.setCalendarCursor(d.year, d.month);
+      },
+      onNextMonth: () {
+        final d = DateTime(c.year, c.month + 1, 1);
+        st.setCalendarCursor(d.year, d.month);
+      },
     );
-    if (picked == null) return;
-    st.setCalendarCursor(picked.year, picked.month);
   }
 }
 
@@ -759,6 +732,13 @@ class _FlowView extends StatelessWidget {
           onCustom: () => _pickCustomRange(context, st),
         ),
         const SizedBox(height: 4),
+        // 区间日期写清楚：光看「当月 / 全部」不知道到底统计了哪一段
+        // （用户 2026-09-29：「首页收益统计的资金流最好显示区间日期」）
+        Text(
+          '${st.flowPreset.label}：'
+          '${fmtDate(s.range.start)} ~ ${fmtDate(s.range.end)}',
+          style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+        ),
         Text(
           '所选区间的各项总量，不是流水明细',
           style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),

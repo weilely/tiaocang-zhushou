@@ -85,50 +85,81 @@ void main() {
     });
   });
 
-  group('年 / 月快速选择', () {
-    testWidgets('点标题进入年月快选，出现年份与 12 个月', (tester) async {
-      await open(tester);
-      expect(find.text('1月'), findsNothing);
+  // 用户 2026-09-29：「所有日期控件把选择年和月改为箭头选择。外层箭头控制年，
+  // 内侧箭头（比外侧小一点）控制月」—— 原来那种「点标题弹年月快选面板」已去掉。
+  group('年月导航（外层箭头控年、内侧箭头控月）', () {
+    testWidgets('内侧箭头换月、外层箭头换年，标题跟着走', (tester) async {
+      // 区间放宽到 2027 年底：不然「下个月」会撞上 lastDate 被置灰
+      await open(tester,
+          initial: DateTime(2026, 9, 11),
+          first: DateTime(2000),
+          last: DateTime(2027, 12, 31));
+      expect(find.text('2026年9月'), findsOneWidget);
 
-      await tester.tap(find.text('2026年9月'));
+      // 内侧：上个月 → 8 月
+      await tester.tap(find.byIcon(Icons.chevron_left));
       await tester.pumpAndSettle();
+      expect(find.text('2026年8月'), findsOneWidget);
 
-      for (var m = 1; m <= 12; m++) {
-        expect(find.text('$m月'), findsOneWidget, reason: '缺少「$m月」');
+      // 内侧：下个月 ×2 → 10 月
+      for (var i = 0; i < 2; i++) {
+        await tester.tap(find.byIcon(Icons.chevron_right));
+        await tester.pumpAndSettle();
       }
-      expect(find.text('2026年'), findsOneWidget);
-      expect(find.text('2025年'), findsOneWidget);
-      expect(find.text('2024年'), findsOneWidget);
+      expect(find.text('2026年10月'), findsOneWidget);
+
+      // 外层：上一年 → 2025 年 10 月（月份不动）
+      await tester.tap(find.byIcon(Icons.keyboard_double_arrow_left));
+      await tester.pumpAndSettle();
+      expect(find.text('2025年10月'), findsOneWidget);
+
+      // 外层：下一年 → 回到 2026 年 10 月
+      await tester.tap(find.byIcon(Icons.keyboard_double_arrow_right));
+      await tester.pumpAndSettle();
+      expect(find.text('2026年10月'), findsOneWidget);
+
+      // 一个「年月快选面板」的格子都不该再出现
+      expect(find.text('1月'), findsNothing);
     });
 
-    testWidgets('选 2025 年 → 选 3 月 → 自动回到该月日历', (tester) async {
+    testWidgets('翻年月只改视图，不偷偷改已选日期', (tester) async {
+      final f = await open(tester);
+      await tester.tap(find.byIcon(Icons.keyboard_double_arrow_left));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.chevron_left));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确定'));
+      await tester.pumpAndSettle();
+      expect(await f, DateTime(2026, 9, 11), reason: '翻年月不该改选中的日期');
+    });
+
+    testWidgets('换到别的月后日历跟着换（3 月有 31 天）', (tester) async {
       await open(tester);
-      await tester.tap(find.text('2026年9月'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('2025年'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('3月'));
-      await tester.pumpAndSettle();
-
-      // 回到日历模式：标题变成 2025年3月，且 1..31 都在（3 月 31 天）
-      expect(find.text('2025年3月'), findsOneWidget);
-      expect(find.text('1月'), findsNothing, reason: '应当已退出年月快选');
+      for (var i = 0; i < 6; i++) {
+        await tester.tap(find.byIcon(Icons.chevron_left));
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('2026年3月'), findsOneWidget);
       expect(find.text('31'), findsOneWidget);
     });
 
-    testWidgets('两步就能跳到几个月之外（不必逐月翻页）', (tester) async {
-      await open(tester);
-      await tester.tap(find.text('2026年9月'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('2024年'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('1月'));
-      await tester.pumpAndSettle();
+    testWidgets('越界的箭头置灰：区间外的年 / 月挪不过去', (tester) async {
+      await open(
+        tester,
+        initial: DateTime(2026, 9, 11),
+        first: DateTime(2026, 1, 1),
+        last: DateTime(2026, 9, 11),
+      );
 
-      expect(find.text('2024年1月'), findsOneWidget);
-      expect(find.text('29'), findsOneWidget, reason: '2024 年 1 月有 29 日');
+      IconButton byIcon(IconData i) =>
+          tester.widget<IconButton>(find.widgetWithIcon(IconButton, i));
+
+      // 9 月已经是区间上限 → 下个月 / 下一年都点不动
+      expect(byIcon(Icons.chevron_right).onPressed, isNull);
+      expect(byIcon(Icons.keyboard_double_arrow_right).onPressed, isNull);
+      // 往前：换月还能走（2026-08 在区间里），换年不行（2025-09 在区间外）
+      expect(byIcon(Icons.chevron_left).onPressed, isNotNull);
+      expect(byIcon(Icons.keyboard_double_arrow_left).onPressed, isNull);
     });
   });
 
@@ -235,22 +266,29 @@ void main() {
       expect(await f, only);
     });
 
-    testWidgets('区间外月份不可点：lastDate 当月之后的月份被禁用', (tester) async {
+    testWidgets('区间外的月份挪不过去（换月箭头置灰）', (tester) async {
       final f = await open(
         tester,
         initial: DateTime(2026, 9, 11),
         first: DateTime(2026, 9, 1),
         last: DateTime(2026, 9, 11),
       );
-      await tester.tap(find.text('2026年9月'));
-      await tester.pumpAndSettle();
+      // 区间只有 9 月这一个月：往前、往后都点不动
+      expect(
+        tester
+            .widget<IconButton>(
+                find.widgetWithIcon(IconButton, Icons.chevron_left))
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<IconButton>(
+                find.widgetWithIcon(IconButton, Icons.chevron_right))
+            .onPressed,
+        isNull,
+      );
 
-      // 10 月/11 月/12 月的格子存在但不可点
-      await tester.tap(find.text('10月'));
-      await tester.pumpAndSettle();
-
-      // 仍停留在快选面板（点击被忽略），且确定后返回原选中值
-      expect(find.text('1月'), findsOneWidget);
       await tester.tap(find.text('确定'));
       await tester.pumpAndSettle();
       expect(await f, DateTime(2026, 9, 11));

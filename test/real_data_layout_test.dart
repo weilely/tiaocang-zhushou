@@ -2,17 +2,20 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:invest_tracker/core/format.dart';
 import 'package:invest_tracker/data/asset_traits.dart';
 import 'package:invest_tracker/data/models.dart';
 import 'package:invest_tracker/data/nav_models.dart';
 import 'package:invest_tracker/logic/backup.dart';
 import 'package:invest_tracker/logic/cash_flow.dart';
+import 'package:invest_tracker/logic/range_preset.dart';
 import 'package:invest_tracker/state/app_state.dart';
 import 'package:invest_tracker/ui/all_txns_page.dart';
 import 'package:invest_tracker/ui/cash_manage_page.dart';
 import 'package:invest_tracker/ui/holdings_page.dart';
 import 'package:invest_tracker/ui/settings_page.dart';
 import 'package:invest_tracker/ui/txn_edit_page.dart';
+import 'package:invest_tracker/ui/widgets/returns_stats_card.dart';
 import 'package:invest_tracker/ui/widgets/segmented_pills.dart';
 import 'package:provider/provider.dart';
 
@@ -110,12 +113,13 @@ void main() {
   }
 
   /// 真机视口 + 字体 1.3
-  Future<void> pumpPage(WidgetTester tester, Widget page) async {
+  Future<void> pumpPage(WidgetTester tester, Widget page,
+      {AppState? state}) async {
     tester.view.physicalSize = const Size(400, 880);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(ChangeNotifierProvider<AppState>.value(
-      value: makeState(),
+      value: state ?? makeState(),
       child: MaterialApp(
         builder: (ctx, child) => MediaQuery(
           data: MediaQuery.of(ctx)
@@ -245,6 +249,21 @@ void main() {
       expect(find.textContaining('行情兜底的第三路'), findsOneWidget,
           reason: '说明要能在弹框里看到');
       expect(tester.takeException(), isNull);
+    });
+
+    // 用户 2026-09-29：「首页收益统计的资金流最好显示区间日期」
+    testWidgets('收益统计 → 资金流：把区间日期写出来', (tester) async {
+      final st = makeState()..setStatsView(StatsView.flow);
+      await pumpPage(tester, const ReturnsStatsCard(), state: st);
+      expect(tester.takeException(), isNull);
+
+      final r = st.flowRange;
+      expect(find.textContaining(fmtDate(r.start)), findsWidgets,
+          reason: '区间起始日');
+      expect(find.textContaining(fmtDate(r.end)), findsWidgets,
+          reason: '区间结束日');
+      expect(find.textContaining(st.flowPreset.label), findsWidgets,
+          reason: '连预设名一起写，才知道这是哪一段');
     });
   });
 }

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../logic/calendar_grid.dart';
-import 'cn_month_picker.dart';
+import 'year_month_nav.dart';
 
 /// 星期表头（周日起始）
 const List<String> _weekdayLabels = ['日', '一', '二', '三', '四', '五', '六'];
@@ -12,15 +12,15 @@ const double _panelHeight = 248;
 /// 一个日期格子的边长
 const double _dayCellExtent = 36;
 
-/// 中文日期选择器：日历网格 + 「年 / 月」快速选择。
+/// 中文日期选择器：日历网格 + **箭头换年月**。
 ///
 /// 为什么不用 `showDatePicker`：
 /// 本项目没有接入 `flutter_localizations`，Material 的日期选择器会**整屏英文**
 /// （`Select date` / `CANCEL` / `OK` / `S M T W T F S`）；
 /// 而且换年月要先点标题进年份列表、再逐月翻页，跳几个月很啰嗦。
 ///
-/// 这个实现全程中文，并把「年 / 月」做成两步直选：点标题 → 左侧年份列 +
-/// 右侧月份网格 → 点月份即回到该月日历。
+/// 年月怎么翻（用户 2026-09-29 定）：「**外层箭头控年、内侧箭头（比外侧小一点）控月**」
+/// —— 见 [YearMonthNav]。以前那种「点标题弹年月快选面板」的做法已经去掉。
 ///
 /// 返回**归一化到年月日**（时分秒为 0）的日期；取消或点外部关闭返回 `null`。
 Future<DateTime?> showCnDatePicker({
@@ -77,9 +77,6 @@ class _CnDatePickerDialogState extends State<_CnDatePickerDialog> {
   late int _cursorYear;
   late int _cursorMonth;
 
-  /// 是否展开「年 / 月」快速选择面板
-  bool _quick = false;
-
   @override
   void initState() {
     super.initState();
@@ -90,20 +87,10 @@ class _CnDatePickerDialogState extends State<_CnDatePickerDialog> {
 
   // ---------------- 范围与可用性 ----------------
 
-  int get _minYear => widget.first.year;
-  int get _maxYear => widget.last.year;
-
   /// 日是否可点：整体落在 [first, last] 区间内
   bool _dayEnabled(int day) {
     final d = DateTime(_cursorYear, _cursorMonth, day);
     return !d.isBefore(widget.first) && !d.isAfter(widget.last);
-  }
-
-  /// 月是否可点：该月内至少有一天落在区间内
-  bool _monthEnabled(int year, int month) {
-    final firstDay = DateTime(year, month, 1);
-    final lastDay = DateTime(year, month, daysInMonth(year, month));
-    return !lastDay.isBefore(widget.first) && !firstDay.isAfter(widget.last);
   }
 
   DateTime get _today => _dateOnly(DateTime.now());
@@ -111,28 +98,14 @@ class _CnDatePickerDialogState extends State<_CnDatePickerDialog> {
   bool get _todayEnabled =>
       !_today.isBefore(widget.first) && !_today.isAfter(widget.last);
 
-  /// 上一 / 下一个月是否还在可选月份范围内
-  bool get _canPrev {
-    final y = _cursorMonth == 1 ? _cursorYear - 1 : _cursorYear;
-    final m = _cursorMonth == 1 ? 12 : _cursorMonth - 1;
-    if (y < _minYear) return false;
-    return !DateTime(y, m, 1)
-        .isBefore(DateTime(widget.first.year, widget.first.month, 1));
-  }
-
-  bool get _canNext {
-    final y = _cursorMonth == 12 ? _cursorYear + 1 : _cursorYear;
-    final m = _cursorMonth == 12 ? 1 : _cursorMonth + 1;
-    if (y > _maxYear) return false;
-    return !DateTime(y, m, 1)
-        .isAfter(DateTime(widget.last.year, widget.last.month, 1));
-  }
-
   // ---------------- 交互 ----------------
 
+  /// 只动年（±1）或只动月（±1）—— 箭头由 [YearMonthNav] 的边界判定拦住越界
+  void _shiftYear(int delta) => setState(() {
+        _cursorYear += delta;
+      });
+
   void _shiftMonth(int delta) {
-    if (delta < 0 && !_canPrev) return;
-    if (delta > 0 && !_canNext) return;
     var y = _cursorYear;
     var m = _cursorMonth + delta;
     while (m < 1) {
@@ -149,23 +122,6 @@ class _CnDatePickerDialogState extends State<_CnDatePickerDialog> {
     });
   }
 
-  void _pickYear(int year) {
-    setState(() => _cursorYear = year);
-  }
-
-  /// 选定月份：把选中日期搬进该月（保留「日」，越界则收敛），并回到日历
-  void _pickMonth(int month) {
-    setState(() {
-      _cursorMonth = month;
-      _selected = DateTime(
-        _cursorYear,
-        month,
-        clampDay(_cursorYear, month, _selected.day),
-      );
-      _quick = false;
-    });
-  }
-
   void _pickDay(int day) {
     setState(() => _selected = DateTime(_cursorYear, _cursorMonth, day));
   }
@@ -175,7 +131,6 @@ class _CnDatePickerDialogState extends State<_CnDatePickerDialog> {
       _selected = _today;
       _cursorYear = _selected.year;
       _cursorMonth = _selected.month;
-      _quick = false;
     });
   }
 
@@ -210,11 +165,11 @@ class _CnDatePickerDialogState extends State<_CnDatePickerDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _navRow(theme),
+              _navRow(),
               const SizedBox(height: 4),
               SizedBox(
                 height: _panelHeight,
-                child: _quick ? _quickPanel(theme) : _dayPanel(theme),
+                child: _dayPanel(theme),
               ),
               const SizedBox(height: 4),
               _footer(theme),
@@ -225,47 +180,21 @@ class _CnDatePickerDialogState extends State<_CnDatePickerDialog> {
     );
   }
 
-  /// 月份导航行：`‹  2026年9月 ▾  ›`，标题本身是日历 ↔ 年月快选的开关
-  Widget _navRow(ThemeData theme) {
-    return Row(
-      children: [
-        IconButton(
-          tooltip: '上个月',
-          visualDensity: VisualDensity.compact,
-          onPressed: _canPrev ? () => _shiftMonth(-1) : null,
-          icon: const Icon(Icons.chevron_left),
-        ),
-        Expanded(
-          child: InkWell(
-            onTap: () => setState(() => _quick = !_quick),
-            borderRadius: BorderRadius.circular(10),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    '$_cursorYear年$_cursorMonth月',
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    _quick ? Icons.expand_less : Icons.expand_more,
-                    size: 18,
-                    color: theme.hintColor,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        IconButton(
-          tooltip: '下个月',
-          visualDensity: VisualDensity.compact,
-          onPressed: _canNext ? () => _shiftMonth(1) : null,
-          icon: const Icon(Icons.chevron_right),
-        ),
-      ],
+  /// 年月导航行：`[«] [‹] 2026年9月 [›] [»]` —— 外层箭头控年、内侧控月
+  /// （用户 2026-09-29：「所有日期控件把选择年和月改为箭头选择」）
+  Widget _navRow() {
+    return YearMonthNav(
+      year: _cursorYear,
+      month: _cursorMonth,
+      minYear: widget.first.year,
+      maxYear: widget.last.year,
+      minMonth: widget.first.month,
+      maxMonth: widget.last.month,
+      labelSize: 16,
+      onPrevYear: () => _shiftYear(-1),
+      onNextYear: () => _shiftYear(1),
+      onPrevMonth: () => _shiftMonth(-1),
+      onNextMonth: () => _shiftMonth(1),
     );
   }
 
@@ -353,23 +282,6 @@ class _CnDatePickerDialogState extends State<_CnDatePickerDialog> {
           ),
         ),
       ),
-    );
-  }
-
-  // ---------------- 年 / 月快速选择 ----------------
-
-  /// 与月份选择器共用 [YearMonthPanel]，两处年月交互完全一致
-  Widget _quickPanel(ThemeData theme) {
-    return YearMonthPanel(
-      year: _cursorYear,
-      month: _cursorMonth,
-      minYear: _minYear,
-      maxYear: _maxYear,
-      monthEnabled: _monthEnabled,
-      // 年份也要对得上才算选中，否则在别的年份里会把选中的那个月也高亮
-      monthSelected: (y, m) => y == _selected.year && m == _selected.month,
-      onYearChanged: _pickYear,
-      onMonthSelected: _pickMonth,
     );
   }
 
