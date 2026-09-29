@@ -79,26 +79,41 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
         bottom: list.isEmpty
             ? null
             : PreferredSize(
-                preferredSize: const Size.fromHeight(38),
+                // 真机（400dp 宽 + 字体 1.3）下「共 N 笔 · M 只」与
+                // 「买入/卖出/费」三个合计**一行放不下**（真数据体检用例逮到
+                // 横向溢出 238px）→ 拆成两行，第二行再窄也能缩。
+                preferredSize: const Size.fromHeight(54),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                  child: Row(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('共 ${list.length} 笔 · ${ids.length} 只',
                           style: TextStyle(
                               fontSize: 12, color: Theme.of(context).hintColor)),
-                      const Spacer(),
-                      Text('买入 ${fmtCompact(bought)}',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFFD93A3A))),
-                      const SizedBox(width: 10),
-                      Text('卖出 ${fmtCompact(sold)}',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF1A9C5B))),
-                      const SizedBox(width: 10),
-                      Text('费 ${fmtCompact(fee)}',
-                          style: TextStyle(
-                              fontSize: 12, color: Theme.of(context).hintColor)),
+                      const SizedBox(height: 2),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('买入 ${fmtCompact(bought)}',
+                                style: const TextStyle(
+                                    fontSize: 12, color: Color(0xFFD93A3A))),
+                            const SizedBox(width: 10),
+                            Text('卖出 ${fmtCompact(sold)}',
+                                style: const TextStyle(
+                                    fontSize: 12, color: Color(0xFF1A9C5B))),
+                            const SizedBox(width: 10),
+                            Text('费 ${fmtCompact(fee)}',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(context).hintColor)),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),

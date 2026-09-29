@@ -257,18 +257,25 @@ Widget txnTile(
         style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
       ),
     ),
-    trailing: Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Text(
-          '${t.type == TxnType.buy ? '-' : '+'}${fmtMoney(t.amount)}',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: color),
-        ),
-        if (t.fee > 0)
-          Text('费 ${fmtMoney(t.fee)}',
-              style: TextStyle(fontSize: 10, color: Theme.of(context).hintColor)),
-      ],
+    // 金额 +（有手续费时）费：大字体下这两行比 dense 行高还高（真数据体检用例
+    // 逮到纵向溢出 12px）→ 挂个 scaleDown，只有放不下时才缩一点。
+    trailing: FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerRight,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            '${t.type == TxnType.buy ? '-' : '+'}${fmtMoney(t.amount)}',
+            style:
+                TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: color),
+          ),
+          if (t.fee > 0)
+            Text('费 ${fmtMoney(t.fee)}',
+                style: TextStyle(fontSize: 10, color: Theme.of(context).hintColor)),
+        ],
+      ),
     ),
   );
 
