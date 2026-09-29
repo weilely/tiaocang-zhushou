@@ -413,12 +413,15 @@ void main() {
     // 打开后多余的就不显示了」
     testWidgets('历史曲线：对齐开关（真数据 + 400dp 窄屏不溢出）', (tester) async {
       final st = makeState();
-      // 他的库就是这样：沪深300 补到了 2005-04-08，利差只有 2016-08-15 起
-      st.indexNavs['sh000300'] = const [
-        NavPoint(code: 'sh000300', date: '2005-04-08', nav: 982.79),
-        NavPoint(code: 'sh000300', date: '2016-08-15', nav: 3393.42),
-        NavPoint(code: 'sh000300', date: '2026-09-28', nav: 4600),
-      ];
+      // 用备份里**真实的 sh000300 日线**（不是造几个点）——这样"有没有断点"
+      // 才是真的在验他的数据。备份是补早年数据**之前**的，所以再补一条 2005-04-08
+      // （设备上今晚补齐后就是从这天起），模拟设备现状。
+      final hs300 = <NavPoint>[
+        const NavPoint(code: 'sh000300', date: '2005-04-08', nav: 982.79),
+        for (final row in back.navHistory)
+          if (NavPoint.fromMap(row).code == 'sh000300') NavPoint.fromMap(row),
+      ]..sort((a, b) => a.date.compareTo(b.date));
+      st.indexNavs['sh000300'] = hs300;
       st.benchmark = st.benchmark.copyWith(
           kind: BenchmarkKind.marketIndex, indexCode: 'sh000300', indexName: '沪深300');
       // 利差历史：`makeState()` 不灌这一项，直接用备份里的真实行（2631 行，2016-08-15 起）。
@@ -444,9 +447,40 @@ void main() {
       final full = erpChartAxis(st.macroHistory, st.benchmarkNavs);
       final aligned =
           erpChartAxis(st.macroHistory, st.benchmarkNavs, alignToErp: true);
-      expect(full.dates.first, '2005-04-08', reason: '关着的时候补的数据要看得到');
+      expect(full.dates.first, '2005-04-08',
+          reason: '关着的时候补的早年数据要看得到（并集轴覆盖更早那条）');
       expect(aligned.dates.first, st.macroHistory.first.date,
           reason: '打开对齐后多余的早年段不占轴（实测库里利差从 ${st.macroHistory.first.date} 起）');
+
+      // 用户 2026-09-29：「为什么沪深300收益曲线放大后不连续」
+      // 实测库里 2958 个利差日里有 500 天对不上沪深300 日线（461 天是周末/假期）
+      // → 必须靠**前向填充**补齐。断言：指数序列开始之后不该再有一个 null 洞。
+      final idxDates = {for (final p in st.benchmarkNavs) p.date};
+      final idxStart = st.benchmarkNavs.first.date;
+      final tail = <({String d, double? v})>[
+        for (var i = 0; i < aligned.dates.length; i++)
+          if (aligned.dates[i].compareTo(idxStart) >= 0)
+            (d: aligned.dates[i], v: aligned.idx[i]),
+      ];
+      // 先证明"洞"确实存在（不然这条断言就是空谈）
+      final gaps = tail.where((e) => !idxDates.contains(e.d)).toList();
+      expect(gaps, isNotEmpty,
+          reason: '他的数据里利差有、沪深300 当天没有的日子确实存在（大多周末/假期）');
+      // 再看填充后：只允许"距上一个已知值 > $kErpFillMaxDays 天"的空洞留 null
+      String? lastKnown;
+      final unexplained = <String>[];
+      for (final e in tail) {
+        if (e.v != null) {
+          lastKnown = e.d;
+          continue;
+        }
+        final far = lastKnown == null ||
+            DateTime.parse(e.d).difference(DateTime.parse(lastKnown)).inDays >
+                kErpFillMaxDays;
+        if (!far) unexplained.add(e.d);
+      }
+      expect(unexplained, isEmpty,
+          reason: '周末/假期这段必须被前向填充掉，不许留断点');
 
       // 界面：开关能点、状态跟着走、窄屏不溢出。
       // **直接泵 MacroDetailView**（市场估值那块内容）：走 IndexInsightPage 的话

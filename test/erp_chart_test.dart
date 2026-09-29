@@ -289,9 +289,66 @@ void main() {
         ],
       );
       expect(axis.dates, ['2026-01-02', '2026-01-03', '2026-01-05']);
-      expect(axis.erp[1], isNull, reason: '01-03 那天利差没数据');
-      expect(axis.idx[0], isNull, reason: '01-02 那天指数没数据');
+      expect(axis.erp[1], closeTo(6.33, 1e-9),
+          reason: '01-03 利差没数据 → 前向填充 01-02 的值（不留洞）');
+      expect(axis.idx[0], isNull,
+          reason: '01-02 早于指数序列的第一天（01-03）→ 还没出生，不给值');
+      expect(axis.idx[1], closeTo(4000, 1e-9));
       expect(axis.idx[2], closeTo(4100, 1e-9));
+    });
+
+    // 用户 2026-09-29：「为什么沪深300收益曲线放大后不连续」
+    // 实测他的库里：2958 个利差日里有 500 天对不上沪深300 日线（461 天是周末，
+    // 其余是中秋/国庆这类休市日）→ 只按同一天精确命中就会画出满地断点。
+    test('周末 / 假期不留洞：某天没有新数据就沿用最近一个（前向填充）', () {
+      // 周五、周六、周日（利差每天都有；指数只有周五）
+      final axis = erpChartAxis(
+        const [
+          MacroRow(date: '2026-09-25', hs300Pe: 13, cn10y: 1.67, erp: 6.02),
+          MacroRow(date: '2026-09-26', hs300Pe: 13, cn10y: 1.66, erp: 6.03),
+          MacroRow(date: '2026-09-27', hs300Pe: 13, cn10y: 1.66, erp: 6.04),
+          MacroRow(date: '2026-09-28', hs300Pe: 13, cn10y: 1.67, erp: 6.02),
+        ],
+        const [
+          NavPoint(code: 'sh000300', date: '2026-09-25', nav: 4600),
+          NavPoint(code: 'sh000300', date: '2026-09-28', nav: 4560),
+        ],
+      );
+      expect(axis.idx, everyElement(isNotNull),
+          reason: '周末要沿用周五收盘，不能留 null（否则曲线一段段断掉）');
+      expect(axis.idx[0], closeTo(4600, 1e-9));
+      expect(axis.idx[1], closeTo(4600, 1e-9), reason: '周六 = 周五的值');
+      expect(axis.idx[2], closeTo(4600, 1e-9), reason: '周日 = 周五的值');
+      expect(axis.idx[3], closeTo(4560, 1e-9), reason: '周一有新数据就用新的');
+    });
+
+    test('前向填充不做过头：各自序列开始之前仍然是 null', () {
+      final axis = erpChartAxis(
+        const [MacroRow(date: '2016-08-15', hs300Pe: 12, cn10y: 2.7, erp: 5.6)],
+        const [
+          NavPoint(code: 'sh000300', date: '2005-04-08', nav: 982.79),
+          NavPoint(code: 'sh000300', date: '2016-08-15', nav: 3393.42),
+        ],
+      );
+      expect(axis.dates.first, '2005-04-08');
+      expect(axis.erp.first, isNull, reason: '利差 2016 才开始，2005 那天不能填出值');
+      expect(axis.idx.first, closeTo(982.79, 1e-9));
+    });
+
+    test('缺口超过 $kErpFillMaxDays 天就不补：那是真缺数据，不能画成一条平线', () {
+      final axis = erpChartAxis(
+        const [
+          MacroRow(date: '2026-01-05', hs300Pe: 12, cn10y: 2, erp: 6.33),
+          // 指数从 2025-01-05 一口气断到 2026-01-05 才有下一条
+          MacroRow(date: '2026-01-06', hs300Pe: 12, cn10y: 2, erp: 6.33),
+        ],
+        const [
+          NavPoint(code: 'sh000300', date: '2025-01-05', nav: 3800),
+        ],
+      );
+      // 轴上有 2025-01-05（并集），但 2026-01-05 距上一个值 365 天 → 不补
+      expect(axis.idx.last, isNull, reason: '365 天的空洞要如实断开');
+      expect(axis.idx.first, closeTo(3800, 1e-9));
     });
 
     testWidgets('补了早年的指数日线也照常渲染、不崩', (tester) async {

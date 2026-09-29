@@ -400,6 +400,13 @@ class ErpChart extends StatefulWidget {
   State<ErpChart> createState() => _ErpChartState();
 }
 
+/// 前向填充最多补多少天（日历日）
+///
+/// 覆盖得住的：周末（1~2 天）、中秋/国庆/春节这类连续休市（最长约 9 天）。
+/// 覆盖不住的（>15 天）**故意不补** —— 那是数据本身缺了一段，拿旧值一路糊过去
+/// 会画出一条假的水平线（比断线更误导人）。
+const int kErpFillMaxDays = 15;
+
 /// 横轴 = **利差日期 ∪ 指数日线日期**，顺带把两条线各自在轴上的取值算好
 ///
 /// 用户 2026-09-29：「市场估值历史曲线图沪深300收益补的数据没有显示完全」。
@@ -410,6 +417,17 @@ class ErpChart extends StatefulWidget {
 /// 合并成并集后：利差线在**自己有数据的日期**照常画，没有的日期留 `null`（断线，
 /// 不插值不补零）；指数线则能一路画到 2005。两条线仍然严格按日期对齐 ——
 /// 这跟"同一天才有值、对不上就是 null"是同一条口径。
+///
+/// ## 取值用**前向填充**（2026-09-29 修「放大后不连续」）
+///
+/// 只按"同一天精确命中"会画出满地断点：利差序列**每天都有**（国债收益率周末也发布），
+/// 而沪深300 只有**交易日**有日线 —— 实测他的库里 2958 个利差日里有 **500 天**对不上
+/// （461 天是周六周日，其余是中秋/国庆这类休市日），放大后就是一段一段断掉 ✗。
+///
+/// 所以：**某天没有新数据就沿用"该日或之前最近一个"的值**（前向填充）——
+/// 这与本项目既有口径一致（`macro_source` 对齐 PE 与国债是"该日或之前最近"，
+/// 趋势图参考线的 `_closeOn` 也是这么做的）。
+/// **只在各自序列开始之前保持 `null`**（那条线还没出生，不该画）。
 ({List<String> dates, List<double?> erp, List<double?> idx}) erpChartAxis(
   List<MacroRow> rows,
   List<NavPoint> indexSeries, {
@@ -423,11 +441,59 @@ class ErpChart extends StatefulWidget {
   final dates = alignToErp
       ? (erpBy.keys.toList()..sort())
       : (<String>{...erpBy.keys, ...idxBy.keys}.toList()..sort());
-  return (
-    dates: dates,
-    erp: [for (final d in dates) erpBy[d]],
-    idx: [for (final d in dates) idxBy[d]],
-  );
+
+  // 各自序列最早那天（`String` 日期按字典序即时间序）
+  final erpStart = rows.isEmpty
+      ? null
+      : rows
+          .map((r) => r.date)
+          .reduce((a, b) => a.compareTo(b) <= 0 ? a : b);
+  final idxStart = indexSeries.isEmpty
+      ? null
+      : indexSeries
+          .map((p) => p.date)
+          .reduce((a, b) => a.compareTo(b) <= 0 ? a : b);
+
+  final erp = <double?>[];
+  final idx = <double?>[];
+  double? lastErp;
+  double? lastIdx;
+  String? lastErpDate;
+  String? lastIdxDate;
+
+  /// 上一个已知值离 [d] 有多远（日历日）；超过 [kErpFillMaxDays] 就不补（那是真缺数据）
+  bool fillable(String? from, String d) {
+    if (from == null) return false;
+    final a = DateTime.tryParse(from);
+    final b = DateTime.tryParse(d);
+    if (a == null || b == null) return false;
+    return b.difference(a).inDays <= kErpFillMaxDays;
+  }
+
+  for (final d in dates) {
+    final e = erpBy[d];
+    if (e != null) {
+      lastErp = e;
+      lastErpDate = d;
+    }
+    final i = idxBy[d];
+    if (i != null) {
+      lastIdx = i;
+      lastIdxDate = d;
+    }
+    // 序列开始之前不给值（那条线还没出生）；开始之后、缺口不超过上限就沿用最近一个
+    erp.add(erpStart != null &&
+            d.compareTo(erpStart) >= 0 &&
+            fillable(lastErpDate, d)
+        ? lastErp
+        : null);
+    idx.add(idxStart != null &&
+            d.compareTo(idxStart) >= 0 &&
+            fillable(lastIdxDate, d)
+        ? lastIdx
+        : null);
+  }
+  return (dates: dates, erp: erp, idx: idx);
 }
 
 class _ErpChartState extends State<ErpChart> {
