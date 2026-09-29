@@ -506,6 +506,48 @@ void main() {
           reason: '图注要跟着开关改口，不能说还是 2005 起');
       expect(tester.takeException(), isNull);
     });
+    // 用户 2026-09-29：「现金充值和提现关联的货币基金每次都要选，设置一次以后就默认，
+    // 而且还没有简称」
+    testWidgets('充值弹框：关联基金默认带出上次选的、显示简称+代码、可就地设简称', (tester) async {
+      final st = makeState();
+      final acc = st.accounts.first.id!;
+      // 上次给这个账户选过 004814（中欧红利优享混合A），并且已设简称「红利优享」
+      st.cashLinkAssets[acc] = '004814';
+      st.assetShorts['004814'] = '红利优享';
+      expect(st.cashLinkAssetOf(acc), '004814');
+
+      await pumpPage(tester, const CashManagePage(), state: st);
+      expect(tester.takeException(), isNull);
+
+      // 打开「充值」（页面上「充值」这个词有三处：筛选条、类型标签、按钮 —— 按图标点）
+      await tester.tap(find.ancestor(
+          of: find.byIcon(Icons.add), matching: find.byType(InkWell)));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '弹框在 400dp 窄屏不许溢出');
+
+      final dd = tester.widget<DropdownButtonFormField<String>>(
+          find.byType(DropdownButtonFormField<String>));
+      expect(dd.initialValue, '004814', reason: '要默认带出上次选的那只，不该每次重选');
+      expect(find.text('红利优享'), findsWidgets, reason: '下拉里显示简称');
+      expect(find.text('004814'), findsWidgets, reason: '行尾带代码，便于区分');
+      expect(find.byTooltip('设简称'), findsOneWidget, reason: '选了基金就该能就地设简称');
+    });
+
+    testWidgets('充值弹框：这个账户没选过关联基金时默认「不关联」', (tester) async {
+      final st = makeState();
+      final acc = st.accounts.first.id!;
+      expect(st.cashLinkAssetOf(acc), '', reason: '没设过 → 默认不关联（现状行为）');
+
+      await pumpPage(tester, const CashManagePage(), state: st);
+      await tester.tap(find.ancestor(
+          of: find.byIcon(Icons.add), matching: find.byType(InkWell)));
+      await tester.pumpAndSettle();
+      final dd = tester.widget<DropdownButtonFormField<String>>(
+          find.byType(DropdownButtonFormField<String>));
+      expect(dd.initialValue, '');
+      expect(find.byTooltip('设简称'), findsNothing, reason: '没选基金时不显示设简称入口');
+      expect(tester.takeException(), isNull);
+    });
   });
 }
 

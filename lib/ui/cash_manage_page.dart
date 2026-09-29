@@ -498,8 +498,9 @@ class _CashManagePageState extends State<CashManagePage> {
     final rate = TextEditingController();
     final days = TextEditingController(text: '30');
     // 关联基金（可选）：选了就把简称写进备注，现金流水一眼看清。
+    // **默认带出这个账户上次选的那只**（用户 2026-09-29：「每次都要选，设置一次以后就默认」）。
     // **编辑时不提供**：备注里可能早就带着简称，再拼一次会重复。
-    var pickedAsset = '';
+    var pickedAsset = existing == null ? st.cashLinkAssetOf(accountId) : '';
     var date = existing?.date ?? DateTime.now();
     // 老数据里可能有已去掉手工入口的「调整」，编辑时也让它选得中
     final typeOptions = <String>[
@@ -627,22 +628,60 @@ class _CashManagePageState extends State<CashManagePage> {
                   ),
                   if (existing == null) ...[
                     const SizedBox(height: 14),
-                    DropdownButtonFormField<String>(
-                      initialValue: pickedAsset,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: '关联基金（可选，显示简称）',
-                      ),
-                      items: [
-                        const DropdownMenuItem(value: '', child: Text('不关联')),
-                        for (final a in st.assetList)
-                          DropdownMenuItem(
-                            value: a.code,
-                            child: Text(st.displayShortOf(a.code),
-                                overflow: TextOverflow.ellipsis),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: pickedAsset,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: '关联基金（可选，显示简称）',
+                            ),
+                            items: [
+                              const DropdownMenuItem(value: '', child: Text('不关联')),
+                              for (final a in st.assetList)
+                                DropdownMenuItem(
+                                  value: a.code,
+                                  // 主行=简称（没设过就退回全名），行尾带代码：
+                                  // 用户 2026-09-29「而且还没有简称」——他 22 只标的里
+                                  // 只有 3 只设过简称，其余在下拉里是一长串全名，
+                                  // 所以这里同时给代码，并配一个就地设简称的入口
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                            st.displayShortOf(a.code),
+                                            overflow: TextOverflow.ellipsis),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(a.code,
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color: Theme.of(ctx).hintColor)),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                            onChanged: (v) =>
+                                setSheet(() => pickedAsset = v ?? ''),
                           ),
+                        ),
+                        // 就地设简称：设一次，下拉、现金备注、持仓卡都会跟着用
+                        if (pickedAsset.isNotEmpty) ...[
+                          const SizedBox(width: 4),
+                          IconButton(
+                            tooltip: '设简称',
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.edit_outlined, size: 18),
+                            onPressed: () => _editShort(
+                              ctx,
+                              st,
+                              pickedAsset,
+                              () => setSheet(() {}),
+                            ),
+                          ),
+                        ],
                       ],
-                      onChanged: (v) => setSheet(() => pickedAsset = v ?? ''),
                     ),
                   ],
                   const SizedBox(height: 20),
@@ -695,6 +734,8 @@ class _CashManagePageState extends State<CashManagePage> {
                             return n.isEmpty ? s : '$s · $n';
                           }(),
                         ));
+                        // 记住这次选的关联基金：下次开这个账户的充值/提现直接带出来
+                        await st.setCashLinkAsset(accountId, pickedAsset);
                       }
                       if (ctx.mounted) Navigator.of(ctx).pop();
                     },
@@ -711,5 +752,49 @@ class _CashManagePageState extends State<CashManagePage> {
     for (final c in [amount, note, principal, rate, days]) {
       c.dispose();
     }
+  }
+
+  /// 就地设简称（用户 2026-09-29：「而且还没有简称」）
+  ///
+  /// 简称是全项目共用的（现金备注、持仓卡、全部交易页都走 `displayShortOf`），
+  /// 所以在这儿设一次，别处都跟着变简洁。
+  Future<void> _editShort(
+    BuildContext ctx,
+    AppState st,
+    String code,
+    VoidCallback refresh,
+  ) async {
+    final name = st.assetList
+        .where((a) => a.code == code)
+        .map((a) => a.name)
+        .followedBy([code]).first;
+    final c = TextEditingController(text: st.assetShortOf(code));
+    final v = await showDialog<String>(
+      context: ctx,
+      builder: (d) => AlertDialog(
+        title: const Text('设置简称'),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: '简称',
+            hintText: name,
+            helperText: '现金流水备注、持仓卡、交易列表都会用它；留空则恢复全名',
+            helperMaxLines: 2,
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(d), child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(d, c.text),
+              child: const Text('保存')),
+        ],
+      ),
+    );
+    c.dispose();
+    if (v == null) return;
+    await st.setAssetShort(code, v);
+    refresh();
   }
 }

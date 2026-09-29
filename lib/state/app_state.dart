@@ -1582,6 +1582,7 @@ class AppState extends ChangeNotifier {
     unawaited(loadAssetShorts()
         .then((_) => loadCash())
         .then((_) => rebuildCashFromTxns()));
+    unawaited(loadCashLinkAssets());
     unawaited(loadMacroHistory().then((_) => refreshMacro()));
     unawaited(loadBiometric());
     unawaited(loadThemeMode());
@@ -2376,6 +2377,39 @@ class AppState extends ChangeNotifier {
   final Map<String, String> assetShorts = {};
 
   String assetShortOf(String code) => assetShorts[code] ?? '';
+
+  /// 现金「充值 / 提现」上次关联的基金 —— **按账户记**（键 `cashLinkAsset:<账户id>`）
+  ///
+  /// 用户 2026-09-29：「现金充值和提现关联的货币基金每次都要选，设置一次以后就默认」。
+  /// 存 `''` = 明确选过「不关联」（与"从没设过"区分开：没设过时也走不关联）。
+  final Map<int, String> cashLinkAssets = {};
+
+  String cashLinkAssetOf(int accountId) => cashLinkAssets[accountId] ?? '';
+
+  Future<void> loadCashLinkAssets() async {
+    try {
+      final all = await db.allSettings();
+      cashLinkAssets.clear();
+      for (final e in all.entries) {
+        if (!e.key.startsWith('cashLinkAsset:')) continue;
+        final id = int.tryParse(e.key.substring('cashLinkAsset:'.length));
+        if (id == null) continue;
+        cashLinkAssets[id] = e.value;
+      }
+    } catch (_) {
+      // 读不到就当没设过（默认不关联）
+    }
+  }
+
+  Future<void> setCashLinkAsset(int accountId, String code) async {
+    cashLinkAssets[accountId] = code;
+    notifyListeners();
+    try {
+      await db.setSetting('cashLinkAsset:$accountId', code);
+    } catch (_) {
+      // 落盘失败不影响这次记账
+    }
+  }
 
   /// 现金流水的「影子交易」：按 `src_txn_id` 找。
   ///
