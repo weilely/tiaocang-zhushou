@@ -5,10 +5,15 @@ import '../core/format.dart';
 import '../data/models.dart';
 import '../state/app_state.dart';
 import 'widgets/common.dart';
+import 'widgets/segmented_pills.dart';
 import 'widgets/txn_history.dart';
 
-/// 全部交易（跨标的）：**按基金 / 股票分组**，支持批量删除
+/// 全部交易（跨标的）：**按标的 / 按日期** 两种看法，默认按标的且**折叠**，
+/// 抬头与筛选用的词表和现金流水页一致（买入 / 卖出 / 分红 / 定投 / 再投），
+/// 也可以按类型分类看。支持批量删除。
 ///
+/// 用户 2026-09-29 原话：「数据维护中心的全部交易列表默认按标的折叠，提头也和
+/// 现金流水一样，可分类查看，按日期查看。」
 /// 分组顺序按名称（没名称按代码）；组内按日期倒序。进多选后左侧变勾选框，
 /// 底部一条操作栏可以全选 / 删除，删除会连带清掉该笔交易联动生成的现金流水
 /// （和单笔删除同一个入口 `AppState.removeTxn`）。
@@ -23,12 +28,42 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
   bool _selecting = false;
   final Set<int> _selected = {};
 
+  /// 视图：`asset` = 按标的（默认，**默认全折叠**）｜`date` = 按日期（年月折叠）
+  String _view = 'asset';
+
+  /// 类型筛选，词表与现金流水页同一套：全部 / 买入 / 卖出 / 分红 / 定投 / 再投
+  String _kind = 'all';
+
+  /// 按标的视图里已展开的标的（默认一个都不展开）
+  final Set<int> _openGroups = {};
+
+  /// 类型筛选：与现金流水页同一套词表；「定投」是买入里带定投标记的、
+  /// 「再投」是红利再投那种买入（判定都是同一处口径）
+  bool _matchKind(Txn t) => switch (_kind) {
+        'all' => true,
+        'dca' =>
+          t.type == TxnType.buy && !t.isReinvest && t.note.contains('定投'),
+        'reinvest' => t.isReinvest,
+        _ => t.type.name == _kind,
+      };
+
+  static String _kindLabel(String k) => switch (k) {
+        'all' => '全部',
+        'buy' => '买入',
+        'sell' => '卖出',
+        'dividend' => '分红',
+        'dca' => '定投',
+        'reinvest' => '再投',
+        _ => k,
+      };
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final list = state.txns
         .where((t) =>
             state.accountFilter == null || t.accountId == state.accountFilter)
+        .where(_matchKind)
         .toList();
 
     // 买入合计**不含不动现金的那些**（红利再投 / 成本调整）：与资金流卡的
@@ -119,21 +154,85 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
                 ),
               ),
       ),
-      body: list.isEmpty
-          ? const EmptyHint(
-              icon: Icons.receipt_long_outlined,
-              text: '还没有交易记录\n去「持仓」页记一笔',
-            )
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
-              children: [
-                for (final id in ids)
-                  _group(context, state, id, groups[id]!, nameOf(id)),
-              ],
-            ),
+      body: Column(
+        children: [
+          // 选着的时候不显示筛选条：免得选中范围被中途改掉
+          if (!_selecting) _filterBar(context),
+          Expanded(
+            child: list.isEmpty
+                ? EmptyHint(
+                    icon: Icons.receipt_long_outlined,
+                    text: state.txns.isEmpty
+                        ? '还没有交易记录\n去「持仓」页记一笔'
+                        : '这个筛选下没有记录',
+                  )
+                : (_view == 'asset'
+                    ? ListView(
+                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
+                        children: [
+                          for (final id in ids)
+                            _group(context, state, id, groups[id]!, nameOf(id)),
+                        ],
+                      )
+                    // 按日期：年月折叠，标的写在每行副标题里。
+                    // key 跟着筛选走：换类型时重建列表，让"最近一个月"按**筛完的**
+                    // 那批重新展开（否则筛完可能一行都不显示，只看到月份头）
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
+                        child: TxnHistoryList(
+                          key: ValueKey('date-$_kind'),
+                          txns: list,
+                          showAssetName: true,
+                          selectable: _selecting,
+                          selectedIds: _selected,
+                          onToggle: (t) => setState(() {
+                            if (t.id == null) return;
+                            if (!_selected.remove(t.id!)) _selected.add(t.id!);
+                          }),
+                        ),
+                      )),
+          ),
+        ],
+      ),
       bottomNavigationBar: _selecting ? _selectBar(context, state, list) : null,
     );
   }
+
+  /// 筛选条：视图（按标的 / 按日期）+ 类型（全部/买入/卖出/分红/定投/再投）
+  Widget _filterBar(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SegmentedPills<String>(
+              items: const [
+                (value: 'asset', label: '按标的'),
+                (value: 'date', label: '按日期'),
+              ],
+              selected: _view,
+              onChanged: (v) => setState(() => _view = v),
+            ),
+            const SizedBox(height: 6),
+            PillGroup(
+              items: [
+                for (final k in const [
+                  'all',
+                  'buy',
+                  'sell',
+                  'dividend',
+                  'dca',
+                  'reinvest',
+                ])
+                  (
+                    label: _kindLabel(k),
+                    selected: _kind == k,
+                    onTap: () => setState(() => _kind = k),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      );
 
   /// 底部操作栏：全选 / 删除
   Widget _selectBar(BuildContext context, AppState state, List<Txn> all) {
@@ -229,6 +328,8 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
         .fold<double>(0, (a, t) => a + t.amount);
     final groupIds = [for (final t in txns) if (t.id != null) t.id!];
     final allIn = groupIds.isNotEmpty && groupIds.every(_selected.contains);
+    // 默认折叠：只有点开过的标的才展开（用户 2026-09-29 要求）
+    final open = _openGroups.contains(assetId);
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 5),
@@ -249,7 +350,11 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
                           _selected.addAll(groupIds);
                         }
                       })
-                  : null,
+                  : () => setState(() {
+                        if (!_openGroups.remove(assetId)) {
+                          _openGroups.add(assetId);
+                        }
+                      }),
               borderRadius: BorderRadius.circular(10),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
@@ -267,6 +372,14 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
                               ? Theme.of(context).colorScheme.primary
                               : Theme.of(context).hintColor,
                         ),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(right: 2),
+                        child: Icon(
+                            open ? Icons.expand_more : Icons.chevron_right,
+                            size: 18,
+                            color: Theme.of(context).hintColor),
                       ),
                     Expanded(
                       child: Column(
@@ -299,19 +412,20 @@ class _AllTxnsPageState extends State<AllTxnsPage> {
                 ),
               ),
             ),
-            const Divider(height: 4),
-            for (final t in txns)
-              txnTile(
-                context,
-                t,
-                highlightNote: '定投',
-                selectable: _selecting,
-                selected: t.id != null && _selected.contains(t.id),
-                onToggle: () => setState(() {
-                  if (t.id == null) return;
-                  if (!_selected.remove(t.id!)) _selected.add(t.id!);
-                }),
-              ),
+            if (open) ...[
+              const Divider(height: 4),
+              for (final t in txns)
+                txnTile(
+                  context,
+                  t,
+                  selectable: _selecting,
+                  selected: t.id != null && _selected.contains(t.id),
+                  onToggle: () => setState(() {
+                    if (t.id == null) return;
+                    if (!_selected.remove(t.id!)) _selected.add(t.id!);
+                  }),
+                ),
+            ],
           ],
         ),
       ),

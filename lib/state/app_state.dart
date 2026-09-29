@@ -847,15 +847,9 @@ class AppState extends ChangeNotifier {
 
   /// 联动现金流水的**动作词**：定投 / 再投 / 买入 / 卖出 / 分红。
   ///
-  /// 全项目只有这一处（`_cashNoteFor` 与「改简称时重写备注」共用）——
-  /// 用户 2026-09-29：「统一口径」，别再各写一套。
-  String _cashActionFor(Txn t) => switch (t.type) {
-        TxnType.buy => t.isReinvest
-            ? '再投'
-            : (t.note.contains('定投') ? '定投' : '买入'),
-        TxnType.sell => '卖出',
-        TxnType.dividend => '分红',
-      };
+  /// 判定在 `logic/cash_flow.dart` 的 `txnActionWord`（交易记录抬头、编辑页、
+  /// 这里共用一套词）—— 用户 2026-09-29：「统一口径」。
+  String _cashActionFor(Txn t) => txnActionWord(t);
 
   /// 买入/卖出/分红 → 现金流水（买入扣钱、卖出和分红进钱）
   /// 现金流水的备注：标的简称 + 动作词。

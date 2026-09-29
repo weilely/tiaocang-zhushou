@@ -12,6 +12,7 @@ import 'package:invest_tracker/ui/all_txns_page.dart';
 import 'package:invest_tracker/ui/cash_manage_page.dart';
 import 'package:invest_tracker/ui/holdings_page.dart';
 import 'package:invest_tracker/ui/txn_edit_page.dart';
+import 'package:invest_tracker/ui/widgets/segmented_pills.dart';
 import 'package:provider/provider.dart';
 
 /// **真数据布局体检**：不建 APK、不连模拟器，十几秒把最容易挤爆的几个界面
@@ -136,6 +137,57 @@ void main() {
     testWidgets('全部交易页（${back.txns.length} 笔）不溢出', (tester) async {
       await pumpPage(tester, const AllTxnsPage());
       expect(tester.takeException(), isNull);
+    });
+
+    // 用户 2026-09-29：「全部交易列表默认按标的折叠，提头也和现金流水一样，
+    // 可分类查看，按日期查看」
+    testWidgets('全部交易：默认折叠 → 点开看明细 → 切按日期 → 按类型筛', (tester) async {
+      await pumpPage(tester, const AllTxnsPage());
+      expect(tester.takeException(), isNull);
+
+      // ① 默认按标的折叠：一笔明细都不展开
+      expect(find.byType(ListTile), findsNothing, reason: '默认折叠');
+
+      // ② 点第一个标的的头 → 展开出明细，抬头是动作词（不是备注/份额）
+      String nameOf(int id) {
+        final hits = back.assets.where((a) => a.id == id).toList();
+        if (hits.isEmpty) return '未知标的';
+        final a = hits.first;
+        return a.name.isEmpty ? a.code : a.name;
+      }
+
+      final byAsset = <int, List<Txn>>{};
+      for (final t in back.txns) {
+        (byAsset[t.assetId] ??= <Txn>[]).add(t);
+      }
+      final ids = byAsset.keys.toList()
+        ..sort((x, y) => nameOf(x).compareTo(nameOf(y)));
+      await tester.tap(find.text(nameOf(ids.first)).first);
+      await tester.pumpAndSettle();
+      expect(find.byType(ListTile), findsWidgets, reason: '点开后有明细');
+      expect(tester.takeException(), isNull);
+
+      // ③ 切「按日期」：按月折叠（最近一个月默认展开），明细在副标题里
+      await tester.tap(find.text('按日期'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining('月'), findsWidgets, reason: '月份头');
+      expect(find.textContaining(' 份 @ '), findsWidgets,
+          reason: '按日期视图里明细在副标题');
+      expect(find.byType(ListTile), findsWidgets);
+
+      // ④ 按类型筛「再投」：只留红利再投那些行（抬头就是「再投」）
+      final reinvestCount = back.txns.where((t) => t.isReinvest).length;
+      await tester.tap(find.descendant(
+          of: find.byType(PillGroup), matching: find.text('再投')));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining('共 $reinvestCount 笔'), findsOneWidget,
+          reason: '筛选后抬头合计按筛完的算');
+      // 抬头「再投」至少两处：筛选筹码 + 行标题
+      expect(find.text('再投'), findsAtLeastNWidgets(2));
+      expect(find.textContaining('· 定投'), findsNothing,
+          reason: '筛了再投就不该有定投的行');
     });
 
     testWidgets('现金管理页（${back.cashTxns.length} 条流水）不溢出，且「收益」口径正确',

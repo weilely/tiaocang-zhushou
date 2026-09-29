@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/format.dart';
 import '../../data/models.dart';
+import '../../logic/cash_flow.dart';
 import '../../state/app_state.dart';
 import '../txn_edit_page.dart';
 
@@ -13,21 +14,25 @@ import '../txn_edit_page.dart';
 class TxnHistoryList extends StatefulWidget {
   final List<Txn> txns;
 
-  /// 是否显示标的名称（全部交易页需要，详情页不需要）
+  /// 是否显示标的名称（全部交易页的「按日期」视图需要，详情页不需要）
   final bool showAssetName;
 
   /// 是否显示账户名
   final bool showAccountName;
 
-  /// 需要高亮的备注（例如 `定投`）
-  final String? highlightNote;
+  /// 多选（批量删除）用：勾选态 + 点击回调
+  final bool selectable;
+  final Set<int> selectedIds;
+  final void Function(Txn t)? onToggle;
 
   const TxnHistoryList({
     super.key,
     required this.txns,
     this.showAssetName = false,
     this.showAccountName = false,
-    this.highlightNote,
+    this.selectable = false,
+    this.selectedIds = const {},
+    this.onToggle,
   });
 
   @override
@@ -126,7 +131,11 @@ class _TxnHistoryListState extends State<TxnHistoryList> {
             txnTile(
               context,
               t,
-              highlightNote: widget.highlightNote,
+              showAssetName: widget.showAssetName,
+              showAccountName: widget.showAccountName,
+              selectable: widget.selectable,
+              selected: t.id != null && widget.selectedIds.contains(t.id),
+              onToggle: widget.onToggle == null ? null : () => widget.onToggle!(t),
             ),
       ],
     );
@@ -135,6 +144,11 @@ class _TxnHistoryListState extends State<TxnHistoryList> {
 
 /// 单条交易记录（左滑删除、点击编辑）—— 详情页与全部交易页共用
 ///
+/// **抬头用「动作词」**（买入 / 卖出 / 分红 / 定投 / 再投），与现金流水页同一套词
+/// （用户 2026-09-29：「提头也和现金流水一样」）；日期、份额@净值、（按日期视图里的）
+/// 标的、账户、备注都在副标题里。判定只有一处：`logic/cash_flow.dart` 的
+/// `txnActionWord` —— 别在这里另写一套 `if`。
+///
 /// [selectable] 为 true 时进入多选：左侧变勾选框、点击是选中而不是编辑，
 /// 也不再挂左滑删除（避免和批量删除两套手势打架）。
 Widget txnTile(
@@ -142,19 +156,18 @@ Widget txnTile(
   Txn t, {
   bool showAssetName = false,
   bool showAccountName = false,
-  String? highlightNote,
   bool selectable = false,
   bool selected = false,
   VoidCallback? onToggle,
 }) {
   final state = context.read<AppState>();
   final asset = state.assetsById[t.assetId];
+  final assetName = asset == null
+      ? '未知标的'
+      : (asset.name.isEmpty ? asset.code : asset.name);
   final accountName = state.accountsById[t.accountId]?.name ?? '';
-  final isDca = highlightNote != null && t.note.startsWith(highlightNote);
-  // 红利再投：不动现金的那种买入（备注 `红利再投 …` / `再投`）。
-  // 口径直接取 `Txn.isReinvest` —— 编辑页、现金流水页、统计都认同一处，
-  // 别处不再各写一套判断（用户 2026-09-29：「统一口径」）。
-  final isReinvest = t.isReinvest;
+  // 抬头词：买入 / 卖出 / 分红 / 定投 / 再投（唯一判定在 txnActionWord）
+  final word = txnActionWord(t);
 
   final color = switch (t.type) {
     TxnType.buy => const Color(0xFFD93A3A),
@@ -167,6 +180,15 @@ Widget txnTile(
       '${fmtSharesOf(t.shares, isFund: asset?.kind == AssetKind.fund)} 份 @ ${fmtPrice(t.price)}',
     TxnType.dividend => '分红到账',
   };
+
+  // 副标题：日期 · 明细 [· 标的] [· 账户] [· 备注]
+  final sub = [
+    fmtDate(t.date),
+    detail,
+    if (showAssetName) assetName,
+    if (showAccountName && accountName.isNotEmpty) accountName,
+    if (t.note.isNotEmpty) t.note,
+  ].join(' · ');
 
   final tile = ListTile(
     onTap: selectable
@@ -192,7 +214,8 @@ Widget txnTile(
               borderRadius: BorderRadius.circular(10),
             ),
             child: Text(
-              t.type.label.substring(0, 1),
+              // 抬头用动作词首字：买 / 卖 / 分 / 定 / 再
+              word.substring(0, 1),
               style:
                   TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 13),
             ),
@@ -201,41 +224,15 @@ Widget txnTile(
       children: [
         Expanded(
           child: Text(
-            showAssetName
-                ? (asset?.name.isNotEmpty == true
-                    ? asset!.name
-                    : (asset?.code ?? '未知标的'))
-                : '${fmtDate(t.date)} · $detail',
+            // 抬头＝动作词（买入/卖出/分红/定投/再投），与现金流水页一致
+            word,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
         ),
-        if (isDca)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1F6FEB).withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Text('定投',
-                style: TextStyle(fontSize: 10, color: Color(0xFF1F6FEB))),
-          ),
-        // 「再投」：红利再投那笔买入 —— 用户 2026-09-29「再投就是再投」
-        if (isReinvest)
-          Container(
-            margin: EdgeInsets.only(left: isDca ? 4 : 0),
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1F6FEB).withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Text('再投',
-                style: TextStyle(fontSize: 10, color: Color(0xFF1F6FEB))),
-          ),
         // 「待确认」：场外基金当天净值没公布时先记的金额，份额等公布后自动补
         if (t.pending)
           Container(
-            margin: const EdgeInsets.only(left: 4),
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
             decoration: BoxDecoration(
               color: const Color(0xFFB4770A).withValues(alpha: 0.14),
@@ -249,11 +246,9 @@ Widget txnTile(
     subtitle: Padding(
       padding: const EdgeInsets.only(top: 1),
       child: Text(
-        showAssetName
-            ? '${fmtDate(t.date)} · $detail'
-                '${t.note.isNotEmpty ? ' · ${t.note}' : ''}'
-            : '${t.note.isEmpty ? t.type.label : t.note}'
-                '${showAccountName && accountName.isNotEmpty ? ' · $accountName' : ''}',
+        sub,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
       ),
     ),

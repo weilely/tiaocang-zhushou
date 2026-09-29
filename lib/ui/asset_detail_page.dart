@@ -595,7 +595,7 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
   Widget _historyCard(BuildContext context, Position p) {
     return SectionCard(
       title: '交易记录（${p.txns.length} 笔）',
-      child: TxnHistoryList(txns: p.txns, highlightNote: '定投'),
+      child: TxnHistoryList(txns: p.txns),
     );
   }
 }

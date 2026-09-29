@@ -219,6 +219,19 @@ String cashKindLabel(String kind) => switch (kind) {
       _ => CashType.label(kind),
     };
 
+/// 一笔交易的**动作词**：`买入 / 卖出 / 分红 / 定投 / 再投`。
+///
+/// 交易记录列表的抬头、现金流水行、编辑页顶部、现金备注全用这一套词
+/// （用户 2026-09-29：「统一口径」「抬头也和现金流水一样」）—— 只有这一处判定：
+/// 红利再投（`Txn.isReinvest`）叫「再投」、备注含「定投」的买入叫「定投」。
+String txnActionWord(Txn t) => switch (t.type) {
+      TxnType.buy => t.isReinvest
+          ? '再投'
+          : (t.note.contains('定投') ? '定投' : '买入'),
+      TxnType.sell => '卖出',
+      TxnType.dividend => '分红',
+    };
+
 /// 现金**收益**：账户 → [当月, 累计]
 ///
 /// **只算 `income`**（货币基金/国债逆回购的利息）。
