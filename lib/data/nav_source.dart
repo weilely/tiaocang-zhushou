@@ -53,12 +53,61 @@ class NavSource {
   ///
   /// [datalen] 只对指数/股票有效，且新浪**有上限**：实测 `1500` 可用
   /// （回溯约 6 年），`2000` 直接返回空。因此指数基准传 1500，其余保持默认 1000。
+  ///
+  /// **指数另有更长的路**：东财 push2his 日K 能拿到**全量历史**（沪深300 从
+  /// 2005-01-04 起、5281 个交易日，实测 2026-09-29），所以 8 位指数代码**先走东财**、
+  /// 失败再回落新浪。用户 2026-09-29 问「为什么沪深300收益日期从 2020-07-20」
+  /// —— 就是新浪那个 1500 上限造成的，收益线对不上股债利差（2016-08 起）。
   Future<List<NavPoint>> fullHistory(Asset asset, {int datalen = 1000}) async {
     if (asset.kind == AssetKind.fund || asset.kind == AssetKind.etf) {
       final pts = await _pingzhongdata(asset.code);
       if (pts.isNotEmpty) return pts;
     }
+    if (_isIndexCode(asset.code)) {
+      try {
+        final pts = await eastKline(asset);
+        if (pts.isNotEmpty) return pts;
+      } catch (_) {
+        // 东财不通就掉到下面的新浪日K（宁可短，也别没有）
+      }
+    }
     return sinaDaily(asset, datalen: datalen);
+  }
+
+  /// 8 位带市场前缀的指数代码（`sh000300` / `sz399006` / `bj…`）
+  static bool _isIndexCode(String code) =>
+      RegExp(r'^(sh|sz|bj)\d{6}$').hasMatch(code.trim());
+
+  /// 指数 / 带前缀标的的**东财全量日线**（`push2his` 的 kline，`f51=日期 f53=收盘`）
+  ///
+  /// 东财的 secid 前缀：上交所 `1.`、深交所 / 北交所 `0.`。
+  Future<List<NavPoint>> eastKline(Asset asset,
+      {String beg = '20050101'}) async {
+    final m = RegExp(r'^(sh|sz|bj)(\d{6})$').firstMatch(asset.code.trim());
+    if (m == null) return const [];
+    final market = m.group(1) == 'sh' ? '1' : '0';
+    final url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
+        '?secid=$market.${m.group(2)}'
+        '&klt=101&fqt=1&beg=$beg&end=20500101&fields1=f1,f2,f3&fields2=f51,f53';
+    final res = await _raw(url);
+    if (res.statusCode != 200) throw MarketException('HTTP ${res.statusCode}');
+    final body = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true));
+    if (body is! Map) return const [];
+    final data = body['data'];
+    if (data is! Map) return const [];
+    final klines = data['klines'];
+    if (klines is! List) return const [];
+    final out = <NavPoint>[];
+    for (final k in klines) {
+      final parts = '$k'.split(',');
+      if (parts.length < 2) continue;
+      final date = parts[0].trim();
+      final close = double.tryParse(parts[1]);
+      if (date.length != 10 || close == null || close <= 0) continue;
+      out.add(NavPoint(code: asset.code, date: date, nav: close));
+    }
+    out.sort((a, b) => a.date.compareTo(b.date));
+    return out;
   }
 
   /// `pingzhongdata/{code}.js` —— 净值与累计净值两条序列，按时间戳对齐

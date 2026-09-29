@@ -102,6 +102,43 @@ void main() {
       c.set(const ChartWindow(0.2, 0.6));
       expect(n, 1, reason: '同一个窗口重复设置不通知');
     });
+
+    // 用户 2026-09-29：「指数看板里的市场估值在缩放的时候保证右侧日期最新，
+    // 只缩放左侧」—— 右端锚定，最新那天永远留在屏幕右边。
+    group('右端锚定缩放', () {
+      test('ChartWindow.zoomedRight：end 不动，只收左边', () {
+        const w = ChartWindow(0, 1);
+        final z = w.zoomedRight(2);
+        expect(z.end, closeTo(1, 1e-9), reason: '右端 = 最新那天，不能动');
+        expect(z.start, closeTo(0.5, 1e-9));
+        expect(z.span, closeTo(0.5, 1e-9));
+
+        // 再放大一次仍锚右边；缩小也是
+        expect(z.zoomedRight(2).end, closeTo(1, 1e-9));
+        expect(z.zoomedRight(0.5).end, closeTo(1, 1e-9));
+      });
+
+      test('按钮放大/缩小：右端一直是最新，且不会越界', () {
+        final c = ErpChartController();
+        for (var i = 0; i < 5; i++) {
+          c.zoomIn();
+          expect(c.window.end, closeTo(1, 1e-9), reason: '第 $i 次放大');
+          expect(c.window.start, greaterThanOrEqualTo(0));
+        }
+        for (var i = 0; i < 5; i++) {
+          c.zoomOut();
+          expect(c.window.end, closeTo(1, 1e-9), reason: '第 $i 次缩小');
+        }
+        expect(c.isFull, isTrue);
+      });
+
+      test('已经拖到历史里时再放大：仍然保住当前可见的右端', () {
+        const w = ChartWindow(0.2, 0.6);
+        final z = w.zoomedRight(2);
+        expect(z.end, closeTo(0.6, 1e-9), reason: '保住当前右端，不强行拽回最新');
+        expect(z.span, closeTo(0.2, 1e-9));
+      });
+    });
   });
 
   group('ErpChart 渲染', () {

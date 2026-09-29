@@ -302,6 +302,16 @@ class ChartWindow {
     return ChartWindow(s, s + newSpan).clamp();
   }
 
+  /// **右端锚定**缩放：右边（最新那天）不动，只收/放左边。
+  ///
+  /// 用户 2026-09-29：「指数看板里的市场估值在缩放的时候保证右侧日期最新，
+  /// 只缩放左侧」—— 原来按正中缩放，一放大右边的最新日期就滑出屏幕了。
+  ChartWindow zoomedRight(double factor) {
+    if (!factor.isFinite || factor <= 0) return this;
+    final newSpan = (span / factor).clamp(minSpan, 1.0);
+    return ChartWindow(end - newSpan, end).clamp();
+  }
+
   /// 平移：`dx` 是窗口宽度的倍数（正 = 往右看，即看更晚的数据）
   ChartWindow panned(double dx) =>
       ChartWindow(start + dx * span, end + dx * span).clamp();
@@ -341,9 +351,10 @@ class ErpChartController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 以正中为锚放大/缩小（按钮用；手势走 `set` 传自己的锚点）
-  void zoomIn([double factor = 1.6]) => set(_win.zoomed(factor, 0.5));
-  void zoomOut([double factor = 1.6]) => set(_win.zoomed(1 / factor, 0.5));
+  /// 放大 / 缩小：**右端锚定**（最新那天不动，只收放左边）—— 用户 2026-09-29 口径。
+  /// 手势那边同理：只要视图右端已经在最新处，双指缩放也按右端锚定。
+  void zoomIn([double factor = 1.6]) => set(_win.zoomedRight(factor));
+  void zoomOut([double factor = 1.6]) => set(_win.zoomedRight(1 / factor));
   void reset() => set(ChartWindow.full);
 }
 
@@ -452,9 +463,15 @@ class _ErpChartState extends State<ErpChart> {
                     ((d.localFocalPoint.dx - kErpPadL) / plotW).clamp(0.0, 1.0);
               },
               onScaleUpdate: (d) {
-                // 缩放（相对上一次的增量，锚在手指位置）
+                // 缩放（相对上一次的增量）。**右端在最新处时按右端锚定**
+                // （用户 2026-09-29：缩放要保证右侧日期最新，只缩左边）；
+                // 已经拖到历史里去了就按手指落点锚，免得被强行拽回右边。
                 if ((d.scale - _prevScale).abs() > 0.002) {
-                  _ctrl.set(_ctrl.window.zoomed(d.scale / _prevScale, _focal));
+                  final delta = d.scale / _prevScale;
+                  final atLatest = _ctrl.window.end >= 1.0 - 1e-9;
+                  _ctrl.set(atLatest
+                      ? _ctrl.window.zoomedRight(delta)
+                      : _ctrl.window.zoomed(delta, _focal));
                 }
                 // 平移（单指拖动也走这里；手指右移 = 看更早的数据）
                 final dx = d.focalPointDelta.dx / plotW;

@@ -4019,6 +4019,31 @@ class AppState extends ChangeNotifier {
           var latest = await db.latestNavDate(a.code);
           // 指数走新浪日K，条数上限实测 1500（2000 返回空）
           final isIndex = RegExp(r'^(sh|sz|bj)\d{6}$').hasMatch(a.code);
+
+          // 指数的**早年缺口补一次**：老版本只从新浪拿了 1500 条（约 6 年），
+          // 沪深300 因此从 2020-07-20 才起（用户 2026-09-29 问「为什么…从
+          // 2020-07-20，有没有更多的数据源，最好对齐」）→ 东财日K 有全量
+          // （2005 起），这里把已有最早那天之前的补上。幂等：按 code+date upsert。
+          if (isIndex) {
+            final earliest = (await db.navEarliestFor([a.code]))[a.code];
+            if (earliest == null || earliest.date.compareTo('2016-01-01') > 0) {
+              try {
+                final full = await navSource.eastKline(a);
+                final older = [
+                  for (final p in full)
+                    if (earliest == null || p.date.compareTo(earliest.date) < 0)
+                      p,
+                ];
+                if (older.isNotEmpty) {
+                  await db.upsertNavPoints(older);
+                  written += older.length;
+                }
+              } catch (_) {
+                // 补不到就算了，别影响后面的增量更新
+              }
+            }
+          }
+
             final pts = latest == null
                 ? await navSource.fullHistory(a, datalen: isIndex ? 1500 : 1000)
                 : (manual
