@@ -14,7 +14,6 @@ import '../logic/backup.dart';
 import '../logic/macro_allocation.dart';
 import '../state/app_state.dart';
 import 'all_txns_page.dart';
-import 'dividend_check_page.dart';
 import 'update_page.dart';
 import 'widgets/common.dart';
 
@@ -630,27 +629,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       fontSize: 11, color: Theme.of(context).hintColor)),
             ),
           const Divider(height: 16),
-          _groupHeader(context, '分红核对'),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Text(
-              '拿净值与累计净值里的分红/拆分事件，逐个对到你的账本上'
-              '（只诊断、不写数据）',
-              style: TextStyle(
-                  fontSize: 11, color: Theme.of(context).hintColor, height: 1.6),
-            ),
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            leading: const Icon(Icons.rule_folder_outlined, size: 20),
-            title: const Text('分红核对（只诊断）', style: TextStyle(fontSize: 14)),
-            trailing: const Icon(Icons.chevron_right, size: 20),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const DividendCheckPage()),
-            ),
-          ),
-          const Divider(height: 16),
           _groupHeader(context, '基础数据库'),
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
@@ -779,49 +757,70 @@ class _SettingsPageState extends State<SettingsPage> {
   ///
   /// 用户 2026-09-28：「同花顺的 key 用**弹框**输入并保持，**不要直接显示**，容易误填，
   /// **一同备份**」——所以卡片里只显示「已设置 / 未设置」，改 Key 走弹框（打码输入）。
+  ///
+  /// 用户 2026-09-29：「同花顺数据源提示太多了，把提示放到对话框里」——卡片里只留
+  /// 状态 + 按钮，说明收进标题栏右边那个「?」弹框里。
   Widget _hithinkSection(BuildContext context, AppState st) {
-    final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
     final key = st.hithinkApiKey ?? '';
     final has = key.isNotEmpty;
     return CollapsibleSectionCard(
       title: '同花顺数据源（备用）',
       initiallyExpanded: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      trailing: IconButton(
+        tooltip: '这个数据源是干什么的',
+        icon: const Icon(Icons.help_outline, size: 18),
+        onPressed: _hithinkHelp,
+      ),
+      child: Row(
         children: [
-          Text('行情兜底第三路：东财、新浪都取不到时用它补。需填入 API Key（fuyao.aicubes.cn/admin 申请）；留空则不启用，行情照旧走东财/新浪。',
-              style: hint),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Icon(
-                has ? Icons.check_circle_outline : Icons.key_off_outlined,
-                size: 16,
-                color: has
-                    ? const Color(0xFF1A9C5B)
-                    : Theme.of(context).hintColor,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  has ? '已设置（共 ${key.length} 位，不显示内容）' : '未设置',
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ),
-              TextButton.icon(
-                onPressed: () => _editHithinkKey(st),
-                icon: Icon(has ? Icons.edit_outlined : Icons.add, size: 18),
-                label: Text(has ? '修改' : '设置'),
-              ),
-              if (has)
-                IconButton(
-                  tooltip: '清除 Key',
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: () => _clearHithinkKey(st),
-                ),
-            ],
+          Icon(
+            has ? Icons.check_circle_outline : Icons.key_off_outlined,
+            size: 16,
+            color:
+                has ? const Color(0xFF1A9C5B) : Theme.of(context).hintColor,
           ),
-          Text('Key 会一起进备份（备份文件里有明文，别外传）。', style: hint),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              has ? '已设置（共 ${key.length} 位，不显示内容）' : '未设置',
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: () => _editHithinkKey(st),
+            icon: Icon(has ? Icons.edit_outlined : Icons.add, size: 18),
+            label: Text(has ? '修改' : '设置'),
+          ),
+          if (has)
+            IconButton(
+              tooltip: '清除 Key',
+              icon: const Icon(Icons.delete_outline, size: 20),
+              onPressed: () => _clearHithinkKey(st),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 同花顺数据源的说明（原来堆在卡片正文里 → 收进弹框）
+  Future<void> _hithinkHelp() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('同花顺数据源（备用）'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '· 它是行情兜底的第三路：东财、新浪都取不到时用它补。\n\n'
+            '· 需要 API Key（fuyao.aicubes.cn/admin 申请）；留空就不启用，'
+            '行情照旧走东财 / 新浪，功能不受影响。\n\n'
+            '· 填了 Key 还会额外用上：一次拉全 A 股基础数据（约 5,600 只）、'
+            '基金详情（档案 / 重仓股 / 分红 / 赎回费率）。\n\n'
+            '· Key 会一起进备份（备份文件里有明文，别外传）。',
+            style: TextStyle(fontSize: 13, height: 1.7),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
         ],
       ),
     );
@@ -1373,22 +1372,12 @@ class _SettingsPageState extends State<SettingsPage> {
       final dir = await FileStore.exportDir();
       final f = await FileStore.writeCsv(dir, fileName, content);
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text('$title 已导出'),
-          content: SingleChildScrollView(
-            child: SelectableText(
-              '文件路径：\n${f.path}\n\n'
-              '取回电脑：\nadb pull "${f.path}" .\n\n'
-              '（CSV 带 UTF-8 BOM，Excel 直接打开中文不乱码）',
-              style: const TextStyle(fontSize: 12),
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-          ],
-        ),
+      await _exportedDialog(
+        title: '$title 已导出',
+        path: f.path,
+        body: '取回电脑：\nadb pull "${f.path}" .\n\n'
+            '（CSV 带 UTF-8 BOM，Excel 直接打开中文不乱码）',
+        onSaveAs: () => _saveAs(fileName, content),
       );
     } catch (e) {
       _snack('导出失败：$e');
@@ -1397,30 +1386,76 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  /// 导出后的统一提示：路径 + 「另存到…」+ 一句提醒（App 目录会随卸载被删）
+  ///
+  /// 用户 2026-09-29：「备份、CSV 导出目录可以自定义，不然每次卸载应用把备份的
+  /// 数据都删掉了」——App 私有目录 `Android/data/<包名>/` 卸载时会被系统删掉，
+  /// 所以照样写一份（兼容老流程），同时给他一个"存到别处"的出口。
+  Future<void> _exportedDialog({
+    required String title,
+    required String path,
+    required String body,
+    required Future<void> Function() onSaveAs,
+  }) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SelectableText('文件路径：\n$path',
+                  style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 10),
+              Text(body, style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 12),
+              const Text(
+                '⚠ 这个目录在卸载 App 时会被一起删掉。要长期保存，用下面「另存到…」'
+                '自己挑位置（下载 / 网盘都行，不需要任何权限）。',
+                style: TextStyle(fontSize: 11, color: Color(0xFFB4770A)),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await onSaveAs();
+            },
+            child: const Text('另存到…'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 走系统「保存到…」把内容另存一份到用户挑的位置（取消就什么都不做）
+  Future<void> _saveAs(String fileName, String content,
+      {bool bom = false}) async {
+    final where = await FileStore.saveAs(fileName, content, bom: bom);
+    if (!mounted) return;
+    _snack(where == null ? '已取消另存' : '已另存到：$where');
+  }
+
   Future<void> _exportBackup() async {
     final st = context.read<AppState>();
     setState(() => _busy = true);
     try {
       final path = await st.exportBackupToFile();
+      // 读回来只为「另存到…」用 —— 备份只构建这一次（十几 MB，别建两遍）
+      final text = await FileStore.readText(File(path));
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('全局备份已导出'),
-          content: SingleChildScrollView(
-            child: SelectableText(
-              '文件路径：\n$path\n\n'
-              '包含：账户、标的与分类、全部交易流水、现金流水、再平衡目标、\n'
-              '关注列表、定投计划、设置，以及金融基础数据、历史净值与股债利差历史。\n'
-              '（含同花顺 Key，备份文件请自己收好；不含行情缓存，恢复后行情会自动重新抓取）\n\n'
-              '取回电脑：\nadb pull "$path" .',
-              style: const TextStyle(fontSize: 12),
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-          ],
-        ),
+      await _exportedDialog(
+        title: '全局备份已导出',
+        path: path,
+        body: '包含：账户、标的与分类、全部交易流水、现金流水、再平衡目标、\n'
+            '关注列表、定投计划、设置，以及金融基础数据、历史净值与股债利差历史。\n'
+            '（含同花顺 Key，备份文件请自己收好；不含行情缓存，恢复后行情会自动重新抓取）',
+        onSaveAs: () => _saveAs(p.basename(path), text),
       );
     } catch (e) {
       _snack('备份失败：$e');
@@ -1435,57 +1470,68 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _busy = true);
     try {
       final files = await FileStore.listBackups();
+      final dir = await FileStore.importDir();
       if (!mounted) return;
 
-      if (files.isEmpty) {
-        final dir = await FileStore.importDir();
-        if (!mounted) return;
-        await showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('没有找到备份文件'),
-            content: SingleChildScrollView(
-              child: SelectableText(
-                '把备份 JSON 放进下面的目录，再重新点「从备份恢复」：\n\n'
-                '${dir.path}\n\n'
-                '在电脑上执行：\nadb push 完整备份.json "${dir.path}/"',
-                style: const TextStyle(fontSize: 12),
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-            ],
-          ),
-        );
-        return;
-      }
-
-      final picked = await showDialog<File>(
+      final picked = await showDialog<Object>(
         context: context,
         builder: (ctx) => SimpleDialog(
           title: const Text('选择要恢复的备份'),
           children: [
-            for (final f in files)
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(ctx, f),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(p.basename(f.path), style: const TextStyle(fontSize: 14)),
-                    Text(
-                      '${(f.lengthSync() / 1024).toStringAsFixed(1)} KB · '
-                      '${fmtDateTime(f.lastModifiedSync())}',
-                      style: TextStyle(fontSize: 11, color: Theme.of(ctx).hintColor),
-                    ),
-                  ],
-                ),
+            // 不再要求"必须放进 App 目录"：直接开系统文件选择器
+            // （Downloads / 网盘 / 电脑同步目录都行，不需要任何权限）
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, 'pick'),
+              child: const Row(
+                children: [
+                  Icon(Icons.folder_open_outlined, size: 18),
+                  SizedBox(width: 6),
+                  Text('从手机文件里选…', style: TextStyle(fontSize: 14)),
+                ],
               ),
+            ),
+            const Divider(height: 10),
+            if (files.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+                child: Text(
+                  'App 目录里没有备份文件（也可以把文件放进 ${dir.path}）',
+                  style: TextStyle(fontSize: 11, color: Theme.of(ctx).hintColor),
+                ),
+              )
+            else
+              for (final f in files)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(ctx, f),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(p.basename(f.path), style: const TextStyle(fontSize: 14)),
+                      Text(
+                        '${(f.lengthSync() / 1024).toStringAsFixed(1)} KB · '
+                        '${fmtDateTime(f.lastModifiedSync())}',
+                        style:
+                            TextStyle(fontSize: 11, color: Theme.of(ctx).hintColor),
+                      ),
+                    ],
+                  ),
+                ),
           ],
         ),
       );
       if (picked == null || !mounted) return;
 
-      final text = await FileStore.readText(picked);
+      final String text;
+      if (picked is File) {
+        text = await FileStore.readText(picked);
+      } else {
+        final r = await FileStore.pickTextFile(extensions: ['json']);
+        if (r == null) {
+          if (mounted) _snack('没有选文件');
+          return;
+        }
+        text = r.$2;
+      }
       AppBackup preview;
       try {
         preview = AppBackup.decode(text);
@@ -1573,37 +1619,36 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _busy = true);
     try {
       final files = await FileStore.listCsv();
+      final dir = await FileStore.importDir();
       if (!mounted) return;
-      if (files.isEmpty) {
-        final dir = await FileStore.importDir();
-        if (!mounted) return;
-        await showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('没有找到 CSV 文件'),
-            content: SingleChildScrollView(
-              child: SelectableText(
-                '请先把 CSV 放进下面的目录，然后重新点「导入」：\n\n'
-                '${dir.path}\n\n'
-                '在电脑上执行：\nadb push 你的文件.csv "${dir.path}/"\n\n'
-                '也可以先导出一次，再直接导入导出的文件。',
-                style: const TextStyle(fontSize: 12),
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-            ],
-          ),
-        );
-        return;
-      }
 
-      final picked = await showDialog<File>(
+      final picked = await showDialog<Object>(
         context: context,
         builder: (ctx) => SimpleDialog(
           title: const Text('选择要导入的 CSV'),
           children: [
-            for (final f in files)
+            // 同「从备份恢复」：直接开系统文件选择器，不再要求先塞进 App 目录
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, 'pick'),
+              child: const Row(
+                children: [
+                  Icon(Icons.folder_open_outlined, size: 18),
+                  SizedBox(width: 6),
+                  Text('从手机文件里选…', style: TextStyle(fontSize: 14)),
+                ],
+              ),
+            ),
+            const Divider(height: 10),
+            if (files.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+                child: Text(
+                  'App 目录里没有 CSV（也可以把文件放进 ${dir.path}）',
+                  style: TextStyle(fontSize: 11, color: Theme.of(ctx).hintColor),
+                ),
+              )
+            else
+              for (final f in files)
               SimpleDialogOption(
                 onPressed: () => Navigator.pop(ctx, f),
                 child: Column(
@@ -1623,7 +1668,17 @@ class _SettingsPageState extends State<SettingsPage> {
       );
       if (picked == null || !mounted) return;
 
-      final content = await FileStore.readText(picked);
+      final String content;
+      if (picked is File) {
+        content = await FileStore.readText(picked);
+      } else {
+        final r = await FileStore.pickTextFile(extensions: ['csv']);
+        if (r == null) {
+          if (mounted) _snack('没有选文件');
+          return;
+        }
+        content = r.$2;
+      }
       final result = await context.read<AppState>().importTxns(content);
       if (!mounted) return;
 

@@ -11,6 +11,7 @@ import 'package:invest_tracker/state/app_state.dart';
 import 'package:invest_tracker/ui/all_txns_page.dart';
 import 'package:invest_tracker/ui/cash_manage_page.dart';
 import 'package:invest_tracker/ui/holdings_page.dart';
+import 'package:invest_tracker/ui/settings_page.dart';
 import 'package:invest_tracker/ui/txn_edit_page.dart';
 import 'package:invest_tracker/ui/widgets/segmented_pills.dart';
 import 'package:provider/provider.dart';
@@ -220,6 +221,30 @@ void main() {
       final btn = tester.widget<FilledButton>(
           find.widgetWithText(FilledButton, '保存'));
       expect(btn.onPressed, isNull, reason: '没改动不该能保存');
+    });
+
+    // 用户 2026-09-29：「数据中心分红核对也不要了」「同花顺数据源提示太多了，
+    // 把提示放到对话框里」
+    testWidgets('设置页：分红核对入口已去掉、同花顺说明收进弹框', (tester) async {
+      await pumpPage(tester, const SettingsPage());
+      expect(tester.takeException(), isNull, reason: '整页不许溢出');
+
+      // 两条被删掉的入口不该再出现
+      expect(find.textContaining('分红核对'), findsNothing);
+      expect(find.textContaining('补记「再投」'), findsNothing);
+
+      // 同花顺卡片：正文里不再堆说明，改成标题栏的「?」
+      // （页面是懒构建的，先滚到那张卡再点）
+      await tester.scrollUntilVisible(find.text('同花顺数据源（备用）'), 300,
+          scrollable: find.byType(Scrollable).first);
+      await tester.pumpAndSettle();
+      final help = find.byIcon(Icons.help_outline);
+      expect(help, findsWidgets);
+      await tester.tap(help.first);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('行情兜底的第三路'), findsOneWidget,
+          reason: '说明要能在弹框里看到');
+      expect(tester.takeException(), isNull);
     });
   });
 }

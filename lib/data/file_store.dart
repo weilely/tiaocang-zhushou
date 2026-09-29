@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -75,5 +78,65 @@ class FileStore {
   static Future<String> hint() async {
     final b = await _base();
     return b.path;
+  }
+
+  // ---------------- 系统文件对话框（SAF，**不需要任何权限**） ----------------
+
+  /// 用系统的「保存到…」把内容存到**用户自己挑的位置**（Downloads / 网盘 / 电脑同步目录都行），
+  /// 返回落地位置（取消 → null）。
+  ///
+  /// 为什么要它（用户 2026-09-29）：「备份、CSV 导出目录可以自定义，不然每次卸载应用
+  /// 把备份的数据都删掉了」—— App 私有目录（`Android/data/<包名>/`）在**卸载时会被
+  /// 系统一起删掉**，所以导出仍然照写一份（兼容既有流程），同时让他能另存到别处。
+  static Future<String?> saveAs(
+    String fileName,
+    String content, {
+    bool bom = false,
+  }) async {
+    try {
+      final uri = await FilePicker.saveFile(
+        fileName: fileName,
+        bytes: Uint8List.fromList(utf8.encode(bom ? '\uFEFF$content' : content)),
+        mimeType: fileName.toLowerCase().endsWith('.csv')
+            ? 'text/csv'
+            : 'application/json',
+        dialogTitle: '保存到…',
+      );
+      return uri == null ? null : _where(uri);
+    } catch (_) {
+      return null; // 用户取消 / 该机型不支持：调用方按"没另存"处理
+    }
+  }
+
+  /// 用系统文件选择器挑一个文件读回来（恢复备份 / 导入 CSV 用）。
+  /// 返回 `(文件名, 文本)`；取消或读不到 → null。
+  static Future<(String, String)?> pickTextFile({
+    List<String>? extensions,
+  }) async {
+    try {
+      final picked = await FilePicker.pickFiles(
+        dialogTitle: '选择文件',
+        type: extensions == null ? FileType.any : FileType.custom,
+        allowedExtensions: extensions,
+      );
+      if (picked.isEmpty) return null;
+      final f = picked.first;
+      // SAF 选的文件可能没有本地路径（content://）→ 退回 xFile 读
+      final path = f.path;
+      final bytes = path != null
+          ? await File(path).readAsBytes()
+          : await f.xFile.readAsBytes();
+      return (f.name, utf8.decode(bytes, allowMalformed: true));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 展示用：把 `content://com.android.providers…` 换成人看得懂的尾段
+  static String _where(Uri uri) {
+    if (uri.scheme == 'file') return uri.toFilePath();
+    final decoded = Uri.decodeComponent(uri.toString());
+    final i = decoded.lastIndexOf('/');
+    return i < 0 ? decoded : decoded.substring(0, i + 1);
   }
 }
